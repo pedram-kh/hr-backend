@@ -2,7 +2,6 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Str;
@@ -14,7 +13,7 @@ class Employee extends Model
 
     protected $fillable = [
         'uuid', 'email', 'full_name', 'employee_external_id',
-        'convenio_id', 'job_category_id', 'province_id',
+        'convenio_id', 'job_category_id', 'territory_id',
         'work_location', 'employment_type', 'start_date', 'status',
         'profile_last_reviewed_at',
     ];
@@ -43,8 +42,8 @@ class Employee extends Model
         return $this->belongsTo(ConvenioJobCategory::class, 'job_category_id');
     }
 
-    public function province(): BelongsTo
+    public function territory(): BelongsTo
     {
-        return $this->belongsTo(Province::class);
+        return $this->belongsTo(Territory::class);
     }
 }

@@ -9,11 +9,11 @@ class DatabaseSeeder extends Seeder
     public function run(): void
     {
         $this->call([
-            ProvinceSeeder::class,
+            TerritorySeeder::class,
             DocumentTypeSeeder::class,
             TopicSeeder::class,
             RoleSeeder::class,
-            TestUserSeeder::class, // depends on provinces + roles above
+            TestUserSeeder::class, // depends on territories + roles above
         ]);
     }
 }

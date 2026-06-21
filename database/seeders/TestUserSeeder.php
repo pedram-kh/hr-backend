@@ -6,14 +6,14 @@ use App\Models\Admin;
 use App\Models\Convenio;
 use App\Models\ConvenioJobCategory;
 use App\Models\Employee;
-use App\Models\Province;
 use App\Models\Sector;
+use App\Models\Territory;
 use Illuminate\Database\Seeder;
 
 /**
  * One test admin + one test employee (real emails the tester controls, from .env).
  *
- * Review C6 (confirms Q3): employees.convenio_id / province_id are NOT NULL, but
+ * Review C6 (confirms Q3): employees.convenio_id / territory_id are NOT NULL, but
  * the real convenio registry is Sprint 1. So we seed a single sector/convenio/
  * job-category explicitly labelled `DEV FIXTURE — placeholder` purely to satisfy
  * the test employee's FKs. This is a dev fixture, NOT the real registry.
@@ -28,7 +28,7 @@ class TestUserSeeder extends Seeder
         $employeeEmail = strtolower((string) env('SEED_EMPLOYEE_EMAIL', 'employee@example.com'));
 
         // --- Dev fixture vocabulary (clearly labelled) ---
-        $province = Province::where('code', '01')->firstOrFail(); // Álava (seeded)
+        $territory = Territory::where('code', '01')->firstOrFail(); // Álava (seeded)
 
         $sector = Sector::firstOrCreate(
             ['name' => self::FIXTURE_LABEL],
@@ -39,7 +39,7 @@ class TestUserSeeder extends Seeder
             ['numero' => 'DEV-FIXTURE-0001'],
             [
                 'name' => self::FIXTURE_LABEL,
-                'province_id' => $province->id,
+                'territory_id' => $territory->id,
                 'sector_id' => $sector->id,
                 'notes' => 'Dev fixture only — replaced by the real registry import in Sprint 1.',
             ],
@@ -66,7 +66,7 @@ class TestUserSeeder extends Seeder
                 'full_name' => 'Test Employee',
                 'convenio_id' => $convenio->id,
                 'job_category_id' => $jobCategory->id,
-                'province_id' => $province->id,
+                'territory_id' => $territory->id,
                 'work_location' => 'DEV FIXTURE — placeholder location',
                 'employment_type' => 'full_time',
                 'status' => 'active',

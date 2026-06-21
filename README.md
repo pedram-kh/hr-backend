@@ -32,7 +32,10 @@ php artisan key:generate
 php artisan migrate
 php artisan db:seed
 
-# 4) Run the API (host, port 8000)
+# 4) Import the convenio registry (territories / sectors / convenios)
+php artisan registry:import        # reads data/01_listado_convenios.xlsx (idempotent)
+
+# 5) Run the API (host, port 8000)
 php artisan serve --port=8000
 ```
 
@@ -50,11 +53,62 @@ php artisan serve --port=8000
   returns `{ token, token_type, identity }`. Single-use, 10-min TTL, attempt-capped,
   rate-limited per email+IP. The token is a Sanctum bearer token with a ~24h TTL.
 - `GET /me` (requires `Authorization: Bearer <token>`) → identity; for employees,
-  the raw profile facets (convenio, province, job category, employment type). No
+  the raw profile facets (convenio, territory, job category, employment type). No
   computed scope/eligibility this sprint.
 
 Try it locally: request a code, open MailHog at <http://localhost:8025>, copy the
 code, verify it, then call `/me` with the returned token.
+
+## Registry import (Sprint 1)
+
+```bash
+php artisan registry:import [path]
+```
+
+Imports `data/01_listado_convenios.xlsx` (sheet `LABOUR AGREEMENTS`) into the
+controlled vocabulary + registry, parsing **by header name**
+(`NUMERO`, `CONVENIO`, `PROVINCIA`, `HORAS ANUALES`, `HORAS SEMANA`, `NUMERO A3`,
+`COMPLEMENTO IT`). Idempotent (keyed on `numero`). It:
+
+- classifies each territory `level` from the `PROVINCIA` column
+  (`ESTATAL`→national, `ANDALUCIA`→regional, else provincial — Andalucía COEAS
+  resolves to a **regional** territory, code `71`);
+- populates Basque/Spanish territory `aliases` (`Bizkaia`/`Vizcaya`,
+  `Gipuzkoa`/`Guipúzcoa`, `Araba`/`Álava`, plus the sheet's spelling) so the
+  filename parser never false-conflicts;
+- preserves multi-value headline cells (`1742 (1698)`, `39/35`) verbatim in
+  `convenios.notes` (typed numeric columns only for single clean values);
+- supersedes the Sprint 0 DEV FIXTURE rows once a real convenio exists.
+
+> `CONVENIOS 2026.xls` is **not** a registry (it's a free-text human status note,
+> no numbers/structure) and is intentionally **not** imported this sprint.
+
+## Document ingestion (Sprint 1 — admin only)
+
+Admin-only API (Sanctum bearer + admin guard), PDF-only:
+
+- `POST /admin/documents/upload` — multipart `files[]` + `relative_paths[]`
+  (folder upload). For each PDF it hashes the bytes (sha256 idempotency key),
+  stores the original to S3, calls **hr-ai `/extract`** (ADR-0010) for per-page
+  text + page images, then writes `documents` + `document_pages`, the
+  `tag_events` provenance, and any `document_review_tasks`. Non-PDFs (salary
+  `.xlsx`, `.docx`) are **skipped**.
+- `GET /admin/documents` — verification table; filter by
+  `tagging_status`/`territory_id`/`sector_id`/`convenio_id`/`document_type_id`
+  and `conflicts_only`. Flags conflicts and **empty-text** (scanned) PDFs.
+- `GET /admin/documents/{uuid}` — detail: tags, provenance timeline, review
+  tasks (with `reason` + raw unmatched values), source pages.
+- `POST /admin/documents/{uuid}/confirm` — mark `verified`, resolve open tasks.
+- `PATCH /admin/documents/{uuid}/facets/{facet}` — re-assign `convenio` or
+  `document_type` from the controlled vocabulary (writes provenance).
+- `GET /admin/documents/{uuid}/pages/{page}/image` — temporary S3 URL.
+- `GET /admin/vocabulary/{territories|sectors|convenios|document_types}`.
+
+The shared `X-Internal-Token` (`HR_AI_INTERNAL_TOKEN`) guards the hr-backend ↔
+hr-ai call. The deterministic filename parser handles both validity formats
+(`YYYYYYYY` and `YYYY_YYYY`), the `Antiguo` subfolder (→ `historical`), national
+law (`ESTATUTO…` → `national_law`, no numero is not a conflict), and conflict
+detection (territory/sector/convenio disagreements → `under_review`).
 
 ## Mail transport
 

@@ -8,13 +8,17 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class Convenio extends Model
 {
     protected $fillable = [
-        'numero', 'name', 'province_id', 'sector_id',
+        'numero', 'name', 'aliases', 'territory_id', 'sector_id',
         'annual_hours', 'weekly_hours', 'numero_a3', 'it_complement', 'notes',
     ];
 
-    public function province(): BelongsTo
+    protected $casts = [
+        'aliases' => 'array',
+    ];
+
+    public function territory(): BelongsTo
     {
-        return $this->belongsTo(Province::class);
+        return $this->belongsTo(Territory::class);
     }
 
     public function sector(): BelongsTo

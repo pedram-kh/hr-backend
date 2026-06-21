@@ -13,9 +13,9 @@ return [
     |
     */
 
-    'paths' => ['auth/*', 'me', 'api/*'],
+    'paths' => ['auth/*', 'me', 'admin/*', 'api/*'],
 
-    'allowed_methods' => ['GET', 'POST', 'OPTIONS'],
+    'allowed_methods' => ['GET', 'POST', 'PATCH', 'OPTIONS'],
 
     'allowed_origins' => [
         env('FRONTEND_URL', 'http://localhost:5173'),

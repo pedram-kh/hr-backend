@@ -17,7 +17,7 @@ class IdentityPresenter
     public static function present(Employee|Admin $account, string $accountType): array
     {
         if ($account instanceof Employee) {
-            $account->loadMissing(['convenio', 'province', 'jobCategory']);
+            $account->loadMissing(['convenio', 'territory', 'jobCategory']);
 
             return [
                 'account_type' => 'employee',
@@ -32,9 +32,10 @@ class IdentityPresenter
                         'numero' => $account->convenio->numero,
                         'name' => $account->convenio->name,
                     ] : null,
-                    'province' => $account->province ? [
-                        'code' => $account->province->code,
-                        'name' => $account->province->name,
+                    'territory' => $account->territory ? [
+                        'code' => $account->territory->code,
+                        'name' => $account->territory->name,
+                        'level' => $account->territory->level,
                     ] : null,
                     'job_category' => $account->jobCategory ? [
                         'name' => $account->jobCategory->name,

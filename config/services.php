@@ -18,6 +18,12 @@ return [
         'key' => env('POSTMARK_API_KEY'),
     ],
 
+    // The Python document-extraction / RAG service (ADR-0007, ADR-0010).
+    'hr_ai' => [
+        'url' => env('HR_AI_URL', 'http://localhost:8001'),
+        'internal_token' => env('HR_AI_INTERNAL_TOKEN', 'dev-internal-token'),
+    ],
+
     'resend' => [
         'key' => env('RESEND_API_KEY'),
     ],
