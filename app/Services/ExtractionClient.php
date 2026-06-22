@@ -13,6 +13,11 @@ use RuntimeException;
  *  - /embed          re-extract column-aware → de-space → chunk → embed → hr-ai
  *                    WRITES document_chunks directly; hr-backend passes the
  *                    resolved scope (ADR-0007).
+ *  - /synthesise     Sprint 2b-1 (ADR-0015): compose a CITED answer grounded only
+ *                    in the eligible chunks. hr-backend passes the DECRYPTED key
+ *                    in the body (never a header) per call; hr-ai never persists
+ *                    it. hr-backend (not hr-ai) owns the answer-or-escalate
+ *                    decision.
  * hr-backend (this app) remains the only writer of every table except
  * document_chunks.
  */
@@ -113,6 +118,44 @@ class ExtractionClient
 
         if (! $response->successful()) {
             throw new RuntimeException("hr-ai /retrieve failed ({$response->status()}): ".$response->body());
+        }
+
+        return $response->json();
+    }
+
+    /**
+     * Synthesise a cited answer from the eligible chunks (ADR-0015). The
+     * decrypted answer-model key is passed in the BODY (never a header) and used
+     * by hr-ai for this one call only — never persisted there.
+     *
+     * Returns either the synthesis envelope
+     *   { answer, citations, grounding_signal, confidence, authority_used, trace_fragment }
+     * or, on a provider failure, { error: 'provider_error', detail }. hr-backend
+     * treats the latter as an escalation (low_confidence) — it never throws on a
+     * provider failure, so the employee always gets an honest escalation.
+     *
+     * @param  list<array<string,mixed>>  $chunks
+     * @param  array{provider:string,model:string,endpoint:?string}  $providerConfig
+     * @return array<string,mixed>
+     */
+    public function synthesise(string $question, array $chunks, string $decryptedKey, array $providerConfig): array
+    {
+        $response = Http::withHeaders(['X-Internal-Token' => $this->token()])
+            ->timeout(120)
+            ->acceptJson()
+            ->post("{$this->base()}/synthesise", [
+                'question' => $question,
+                'chunks' => $chunks,
+                // Decrypted only in ChatService just before this call; passed in
+                // the body, never logged, never bound beyond the call stack.
+                'provider_api_key' => $decryptedKey,
+                'provider_config' => $providerConfig,
+            ]);
+
+        if (! $response->successful()) {
+            // A non-2xx is an hr-ai/transport failure (not a provider error, which
+            // comes back as a 200 envelope). Surface as an escalatable signal.
+            return ['error' => 'synthesis_unavailable', 'detail' => "hr-ai /synthesise failed ({$response->status()})"];
         }
 
         return $response->json();

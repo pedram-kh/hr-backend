@@ -14,6 +14,7 @@ class DatabaseSeeder extends Seeder
             TopicSeeder::class,
             RoleSeeder::class,
             TestUserSeeder::class, // depends on territories + roles above
+            ChatTestUserSeeder::class, // Sprint 2b-1 chat profiles (after registry import)
         ]);
     }
 }

@@ -13,12 +13,14 @@ return [
     |
     */
 
-    'paths' => ['auth/*', 'me', 'admin/*', 'api/*'],
+    'paths' => ['auth/*', 'me', 'chat/*', 'admin/*', 'api/*'],
 
-    'allowed_methods' => ['GET', 'POST', 'PATCH', 'OPTIONS'],
+    'allowed_methods' => ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
 
     'allowed_origins' => [
         env('FRONTEND_URL', 'http://localhost:5173'),
+        'http://localhost:5173',
+        'http://127.0.0.1:5173',
     ],
 
     'allowed_origins_patterns' => [],

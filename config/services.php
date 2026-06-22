@@ -22,6 +22,14 @@ return [
     'hr_ai' => [
         'url' => env('HR_AI_URL', 'http://localhost:8001'),
         'internal_token' => env('HR_AI_INTERNAL_TOKEN', 'dev-internal-token'),
+
+        // Non-secret answer-model config passed to hr-ai /synthesise (ADR-0015).
+        // The API KEY is NOT here — it is set via the admin screen, encrypted at
+        // rest in answer_model_settings, and passed decrypted per call. These MUST
+        // point at an EU-available model/endpoint (GDPR is deploy-time, deploy.md §1).
+        'answer_provider' => env('HR_AI_ANSWER_PROVIDER', 'claude'),
+        'answer_model' => env('HR_AI_ANSWER_MODEL', 'claude-sonnet-4-5'),
+        'answer_endpoint' => env('HR_AI_ANSWER_ENDPOINT', 'https://api.anthropic.com'),
     ],
 
     'resend' => [

@@ -151,6 +151,50 @@ salary `.xlsx` is assigned a convenio via
 its rows. Salary is relational/SQL, never embedded (ADR-0006); a convenio whose
 salary is PDF-only surfaces as a **coverage gap**, not a blank (ADR-0014).
 
+## Scoped RAG chat — the answer vertical (Sprint 2b-1)
+
+The first employee surface. `hr-backend` resolves scope (deterministic, no LLM),
+owns the **answer-or-escalate decision**, and owns **all** DB writes
+(`chat_sessions`, `chat_messages`, `message_citations`, `message_traces`,
+`escalation_cards`, `answer_model_settings`). `hr-ai` only retrieves + synthesises
+(ADR-0007/0015).
+
+- `POST /chat/message` (employee) — `{ question, session_uuid? }` → a scoped,
+  **cited** answer or an honest **escalation**. The single prose path (no router
+  yet — 2b-2): scope resolve → **`GuardrailService`** (hardcoded baseline; fires
+  *before* any `hr-ai` call) → `/retrieve` (2a) → pre-synthesis floor (Check A) →
+  **`hr-ai /synthesise`** → answer-or-escalate floor → persist (`ChatService`).
+- **Authority precedence** (ADR-0015): `ChatService` orders convenio chunks before
+  `national_law` and labels each with `authority_level`; the synthesis prompt makes
+  the convenio govern where it speaks and the Estatuto the gap-filling baseline. The
+  trace records `authority_used`.
+- **The floor** (`config/hr.php`, named + conservative, Sprint-6-exposable but
+  additive-only): **Check A** `RETRIEVAL_SCORE_FLOOR` (top score) and **Check B**
+  citations-present-and-in-set are load-bearing; **Check C** (`ANSWER_CONFIDENCE_FLOOR`,
+  the model's self-confidence) is a **tiebreaker only** — never a primary gate
+  (LLM self-confidence is poorly calibrated). Answer only when A **and** B pass;
+  else escalate (`low_confidence`), never guess. No/weak-retrieval, salary, and
+  off-domain questions escalate without a router because A/B fail.
+
+### Answer-model key handling (ADR-0015, super_admin)
+
+- `GET /admin/answer-model/status` — `{ configured, masked_key (••••1234), provider,
+  configured_at }`. **Never** returns the raw key.
+- `POST /admin/answer-model` `{ api_key }` — set/rotate; encrypted at rest
+  (`Crypt`, app-key) in `answer_model_settings`, last-4 stored for masking.
+- `DELETE /admin/answer-model/key` — de-configure.
+
+The key is decrypted only in `ChatService` immediately before a `/synthesise`
+call and passed to `hr-ai` in the request **body** (never a header), never logged
+or persisted. The browser never sees it. The non-secret model/endpoint live in
+`config/services.php` (`HR_AI_ANSWER_MODEL` / `HR_AI_ANSWER_ENDPOINT`) and **must**
+target an EU-available endpoint at go-live (deploy.md §1).
+
+> Dev test profiles: `ChatTestUserSeeder` seeds employees bound to real convenios
+> (`test-gipuzkoa@…`, `test-navarra@…`, `test-andalucia@…`, `test-any@…`) — run
+> `registry:import` + `chunks:embed` first. The super_admin for the key screen is
+> `TestUserSeeder` (`admin@…`). Dev-only; never committed corpus/secret data.
+
 ## Mail transport
 
 Selected by `MAIL_MAILER` with no code change:
