@@ -65,6 +65,35 @@ class GuardrailService
     ];
 
     /**
+     * Salary / wage / retribution questions (Correction-02). Salary lives in the
+     * structured `salary_tables` (ADR-0006) and is NEVER embedded as a vector
+     * chunk — embeddings mangle tabular numbers and a salary figure must be exact.
+     * In 2b-1 there is no salary path, and convenio PDFs ingested in 2a contain
+     * wage-table pages that DID get chunked as prose; without this guard a salary
+     * question can retrieve such a chunk and surface a year-misattributed figure
+     * (the adversarial probe Q5 reported 2024 = 1.330,80 € when the real 2024 row
+     * is 1.244,74 €). So salary questions escalate (`salary_not_in_chat`) BEFORE
+     * any hr-ai call. The grounded salary answer (from `salary_tables` via SQL) is
+     * Sprint 2b-2, which supersedes this guard.
+     *
+     * Conservative-by-design and additive: like the sensitive baseline it can only
+     * cause escalation, never a weaker answer. Patterns are deliberately narrow on
+     * the bare verb "paga" (so "¿la empresa me paga el gimnasio?" is NOT a salary
+     * question) but broad on the salary nouns.
+     *
+     * @var list<string>
+     */
+    private const SALARY_PATTERNS = [
+        '/\b(salario|sueldo|n[oó]mina|retribuci[oó]n|remuneraci[oó]n)\b/iu',
+        '/\btablas?\s+salarial(es)?\b/iu',
+        '/\bpagas?\s+extra/iu',
+        // "¿cuánto gano / gana un limpiador / cobro / me pagan / se cobra…?" — the
+        // bare verb "paga" is only matched when preceded by "cuánto", so a benefit
+        // question ("¿me paga el gimnasio?") does not trip it.
+        '/\bcu[aá]nto\s+(gano|gana|gan[aá]is|cobro|cobra|cobr[aá]is|ingreso|ingresa|me\s+pagan?|se\s+(gana|cobra|paga))\b/iu',
+    ];
+
+    /**
      * Check the raw question. Returns the escalation reason + matched rule if the
      * baseline fires, else fired = false.
      *
@@ -84,9 +113,18 @@ class GuardrailService
             }
         }
 
+        // Other-employee data runs BEFORE the salary guard: "¿cuánto gana Pedro?"
+        // is a privacy probe (off_domain / other_employee_data), not a generic
+        // salary question.
         foreach (self::OTHER_EMPLOYEE_PATTERNS as $pattern) {
             if (preg_match($pattern, $question)) {
                 return ['fired' => true, 'reason' => 'off_domain', 'rule' => 'other_employee_data'];
+            }
+        }
+
+        foreach (self::SALARY_PATTERNS as $pattern) {
+            if (preg_match($pattern, $question)) {
+                return ['fired' => true, 'reason' => 'salary_not_in_chat', 'rule' => 'salary_topic'];
             }
         }
 

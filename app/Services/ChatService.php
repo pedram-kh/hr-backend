@@ -37,6 +37,11 @@ class ChatService
     public const ESCALATION_MESSAGE = 'No estoy seguro de la respuesta a esta pregunta, '
         .'así que la estoy pasando a una persona del equipo de Recursos Humanos.';
 
+    /** Salary questions are handled by a person until 2b-1 → 2b-2 (Correction-02). */
+    public const SALARY_ESCALATION_MESSAGE = 'Las preguntas sobre salario, nóminas o '
+        .'tablas salariales las gestiona directamente una persona del equipo de Recursos '
+        .'Humanos, para darte una cifra exacta y actualizada. Te estoy derivando con ella.';
+
     public function __construct(private readonly ExtractionClient $ai, private readonly GuardrailService $guardrail) {}
 
     /**
@@ -85,7 +90,9 @@ class ChatService
                 session: $session,
                 employee: $employee,
                 question: $question,
-                answer: self::ESCALATION_MESSAGE,
+                answer: $guard['reason'] === 'salary_not_in_chat'
+                    ? self::SALARY_ESCALATION_MESSAGE
+                    : self::ESCALATION_MESSAGE,
                 citations: [],
                 trace: $trace,
                 escalate: true,
