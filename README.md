@@ -83,16 +83,20 @@ controlled vocabulary + registry, parsing **by header name**
 > `CONVENIOS 2026.xls` is **not** a registry (it's a free-text human status note,
 > no numbers/structure) and is intentionally **not** imported this sprint.
 
-## Document ingestion (Sprint 1 — admin only)
+## Document ingestion (Sprint 1/2a — admin only)
 
-Admin-only API (Sanctum bearer + admin guard), PDF-only:
+Admin-only API (Sanctum bearer + admin guard). **PDF prose + salary `.xlsx`**
+(ADR-0014); `.doc/.docx` and `.xls` remain out of scope.
 
 - `POST /admin/documents/upload` — multipart `files[]` + `relative_paths[]`
-  (folder upload). For each PDF it hashes the bytes (sha256 idempotency key),
+  (folder upload). For each **PDF** it hashes the bytes (sha256 idempotency key),
   stores the original to S3, calls **hr-ai `/extract`** (ADR-0010) for per-page
   text + page images, then writes `documents` + `document_pages`, the
-  `tag_events` provenance, and any `document_review_tasks`. Non-PDFs (salary
-  `.xlsx`, `.docx`) are **skipped**.
+  `tag_events` provenance, and any `document_review_tasks`. A **salary `.xlsx`**
+  (Sprint 2a) is stored to S3 and typed `salary_tables` with **no** `/extract`
+  call and **no** pages (its rows are imported separately by `salary:import`);
+  because most salary filenames lack a `numero` it lands `under_review` for
+  deliberate convenio assignment (ADR-0014). `.docx`/`.xls` are skipped.
 - `GET /admin/documents` — verification table; filter by
   `tagging_status`/`territory_id`/`sector_id`/`convenio_id`/`document_type_id`
   and `conflicts_only`. Flags conflicts and **empty-text** (scanned) PDFs.
@@ -110,6 +114,43 @@ hr-ai call. The deterministic filename parser handles both validity formats
 law (`ESTATUTO…` → `national_law`, no numero is not a conflict), and conflict
 detection (territory/sector/convenio disagreements → `under_review`).
 
+## Retrieval substrate (Sprint 2a — ingestion → vectors)
+
+`hr-backend` owns scope resolution + all DB writes; `hr-ai` writes only
+`document_chunks` (via a dedicated, scoped `hr_ai` Postgres role created by
+migration `2026_06_22_100001_create_hr_ai_role_and_chunk_indexes` — ADR-0007 at
+the database). New CLI commands (not UI):
+
+```bash
+# Bulk-ingest the province-foldered corpus (reuses the Sprint-1 ingestor;
+# ignores __MACOSX/, CONVENIOS 2026.xls, .doc/.docx). PDFs + salary .xlsx.
+php artisan documents:ingest-folder [path]      # default data/all-files
+
+# Chunk + embed in-scope PROSE docs → document_chunks (hr-ai writes; this app
+# resolves + passes each document's scope). Selection: document_type ∈
+# {convenio_text, national_law, partial_agreement}, retrieval_status ∈
+# {active, historical}, tagging_status ≠ under_review (ADR-0013). Run the hr-ai
+# BGE-M3 sanity test FIRST and eyeball the stress gates before a bulk run.
+php artisan chunks:embed [--document=<uuid>] [--dry-run]
+
+# Import salary from .xlsx (hr-ai /extract-salary returns rows; this app writes
+# salary_tables/_rows + convenio_job_categories). Deliberate, logged, idempotent.
+# Lists pending-convenio docs (ADR-0014, catch 4) and the coverage gaps.
+php artisan salary:import [--document=<uuid>]
+
+# Verification harness: resolved scope + eligible prose chunks (scores + source)
+# + eligible salary rows, for a profile + question + date. Asserts full recall.
+php artisan retrieval:probe --convenio=<numero> --question="..." [--date=YYYY-MM-DD] \
+    [--job-category="..."] [--mode=both|prose|salary] [--include-historical] [--k=8]
+php artisan retrieval:probe --email=<employee-email> --question="..."
+```
+
+The salary→convenio association rides the Sprint-1 tagging path; a numero-less
+salary `.xlsx` is assigned a convenio via
+`PATCH /admin/documents/{uuid}/facets/convenio` before `salary:import` populates
+its rows. Salary is relational/SQL, never embedded (ADR-0006); a convenio whose
+salary is PDF-only surfaces as a **coverage gap**, not a blank (ADR-0014).
+
 ## Mail transport
 
 Selected by `MAIL_MAILER` with no code change:
@@ -122,7 +163,12 @@ Selected by `MAIL_MAILER` with no code change:
 Every table in `hr-docs/architecture/data-model.md` is implemented as a migration
 in `database/migrations`. `document_chunks.embedding` is `vector(1024)` (pgvector,
 BGE-M3) with an HNSW index; that table is migrated here but read/written at runtime
-by `hr-ai` only.
+by `hr-ai` only — through a dedicated, **scoped `hr_ai` Postgres role** (SELECT on
+registry/scope tables + INSERT/UPDATE/DELETE on `document_chunks` only, no DDL),
+created by the Sprint-2a migration `2026_06_22_100001_create_hr_ai_role_and_chunk_indexes`
+(which also adds the `validity_start`/`validity_end` btree indexes). The role
+password comes from `HR_AI_DB_PASSWORD` (dev default `hr_ai_secret`); `hr-ai`'s
+`DATABASE_URL` must use this role.
 
 Enums are implemented as `varchar` + `CHECK` constraints (via Laravel's `enum()`
 column), per the Sprint 0 plan.

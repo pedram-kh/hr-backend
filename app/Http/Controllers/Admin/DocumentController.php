@@ -121,14 +121,18 @@ class DocumentController extends Controller
             $relativePath = $relativePaths[$i] ?? $original;
             $folderLabel = $this->topFolder($relativePath);
 
-            $isPdf = strtolower((string) $file->getClientOriginalExtension()) === 'pdf'
-                || $file->getMimeType() === 'application/pdf';
+            // Sprint 2a accepts PDFs (prose) and salary .xlsx (ADR-0014 xlsx-first).
+            // Other formats (.doc/.docx prose, .xls) remain out of scope.
+            $ext = strtolower((string) $file->getClientOriginalExtension());
+            $isPdf = $ext === 'pdf' || $file->getMimeType() === 'application/pdf';
+            $isXlsx = $ext === 'xlsx'
+                || $file->getMimeType() === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
-            if (! $isPdf) {
+            if (! $isPdf && ! $isXlsx) {
                 $results[] = [
                     'source_filename' => $original,
                     'skipped' => true,
-                    'reason' => 'not a PDF (PDF-only this sprint)',
+                    'reason' => 'unsupported format (PDF prose + salary .xlsx only this sprint)',
                 ];
 
                 continue;

@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Document;
 use App\Models\DocumentPage;
 use App\Models\DocumentReviewTask;
+use App\Models\DocumentType;
 use App\Models\TagEvent;
 use App\Support\DocumentTagger;
 use App\Support\FilenameParser;
@@ -44,9 +45,31 @@ class DocumentIngestor
         $bytes = (string) file_get_contents($tmpPath);
         $hash = hash('sha256', $bytes);
 
+        $ext = strtolower(pathinfo($sourceFilename, PATHINFO_EXTENSION));
+        // ADR-0014 (xlsx-first): any .xlsx ingested this sprint is a salary
+        // document. PDFs follow the Sprint-1 prose path.
+        $isXlsx = $ext === 'xlsx';
+
         $parsed = (new FilenameParser)->parse($sourceFilename, $folderLabel, $relativePath);
         $parsed['source_filename'] = $sourceFilename;
         $tag = (new DocumentTagger($vocab))->tag($parsed);
+
+        if ($isXlsx) {
+            // Force the salary_tables type (the filename may say "Tabla" not
+            // "Tablas"). Convenio/validity still come from the parser; a
+            // numero-less name lands under_review for deliberate admin convenio
+            // assignment (ADR-0014, catch 4) — that is the intended path.
+            $salaryType = DocumentType::where('code', 'salary_tables')->first();
+            if ($salaryType !== null) {
+                $tag['document_type_id'] = $salaryType->id;
+                foreach ($tag['facets'] as &$facet) {
+                    if (($facet['facet'] ?? null) === 'document_type') {
+                        $facet['new_value'] = 'salary_tables';
+                    }
+                }
+                unset($facet);
+            }
+        }
 
         // Idempotency: primary = content hash; fallback = filename + convenio.
         $existing = Document::where('content_hash', $hash)->first()
@@ -55,13 +78,22 @@ class DocumentIngestor
                 ->first();
 
         $uuid = $existing?->uuid ?? (string) Str::uuid();
-        $storageKey = "documents/{$uuid}/original.pdf";
+        $storageKey = "documents/{$uuid}/original.{$ext}";
 
-        Storage::disk('s3')->put($storageKey, $bytes, ['ContentType' => 'application/pdf']);
+        $contentType = $isXlsx
+            ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            : 'application/pdf';
+        Storage::disk('s3')->put($storageKey, $bytes, ['ContentType' => $contentType]);
 
-        $extract = $this->extractor->extract($storageKey, $uuid);
-        $pages = $extract['pages'] ?? [];
-        $emptyText = $pages !== [] && collect($pages)->every(
+        // Salary .xlsx have no prose/page-image citation surface: skip /extract,
+        // write no document_pages. Row extraction is a separate, deliberate step
+        // (salary:import), after any convenio assignment.
+        $pages = [];
+        if (! $isXlsx) {
+            $extract = $this->extractor->extract($storageKey, $uuid);
+            $pages = $extract['pages'] ?? [];
+        }
+        $emptyText = ! $isXlsx && $pages !== [] && collect($pages)->every(
             fn ($p) => trim((string) ($p['text'] ?? '')) === ''
         );
 
