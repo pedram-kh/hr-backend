@@ -439,7 +439,16 @@ class ChatService
             // model. Table-aware. Any ungrounded claim → escalate (resolved §9 B).
             $citedChunksForGround = $this->citedChunksForGrounding($validCitations, $chunks);
             $groundingResult = $this->grounding->check($question, $answer, $citedChunksForGround, $decryptedKey, $providerConfig);
-            $note = $groundingResult['grounded'] ? null : 'ungrounded claim (per-claim entailment gate)';
+            // A truncated grounding check (Correction-04) is a DISTINCT outcome from
+            // a genuine ungrounded claim: it still escalates (conservative floor),
+            // but the trace must not read it as a fabricated claim.
+            if ($groundingResult['grounded']) {
+                $note = null;
+            } elseif (($groundingResult['trace_fragment']['grounding_truncated'] ?? false)) {
+                $note = 'grounding check truncated after retry (escalated)';
+            } else {
+                $note = 'ungrounded claim (per-claim entailment gate)';
+            }
         }
         unset($decryptedKey); // drop the plaintext as soon as all provider calls are done
 
