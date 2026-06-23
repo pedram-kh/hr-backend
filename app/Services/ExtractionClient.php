@@ -160,4 +160,69 @@ class ExtractionClient
 
         return $response->json();
     }
+
+    /**
+     * Classify a question salary | prose | off_domain and (for a compound
+     * question) return decomposed subqueries (Sprint 2b-2, ADR-0016). Uses the
+     * SMALL/FAST router model. The decrypted key is passed in the body per call
+     * (same envelope as synthesise()); hr-ai never persists it.
+     *
+     * Returns the router envelope { label, confidence, subqueries, reason,
+     * trace_fragment } or, on a provider/transport failure, { error: ... } so
+     * the caller (RouterService) can FAIL SAFE to the prose path.
+     *
+     * @param  array{provider:string,model:string,endpoint:?string}  $providerConfig
+     * @return array<string,mixed>
+     */
+    public function route(string $question, string $decryptedKey, array $providerConfig): array
+    {
+        $response = Http::withHeaders(['X-Internal-Token' => $this->token()])
+            ->timeout(60)
+            ->acceptJson()
+            ->post("{$this->base()}/route", [
+                'question' => $question,
+                'provider_api_key' => $decryptedKey,
+                'provider_config' => $providerConfig,
+            ]);
+
+        if (! $response->successful()) {
+            return ['error' => 'router_unavailable', 'detail' => "hr-ai /route failed ({$response->status()})"];
+        }
+
+        return $response->json();
+    }
+
+    /**
+     * Per-claim entailment grounding of a prose answer against its CITED chunks
+     * (Sprint 2b-2 §5) — the REAL grounding gate. Uses the CAPABLE answer model
+     * (entailment is subtle; never the cheap router model). The decrypted key is
+     * passed in the body per call; hr-ai never persists it.
+     *
+     * Returns { grounded, claims, ungrounded, trace_fragment } or, on a
+     * provider/transport failure, { error: ... } so the caller escalates
+     * (low_confidence) — never surfaces an unverified answer.
+     *
+     * @param  list<array{chunk_id:int,content:string,authority_level:?string,is_tabular:bool}>  $chunks
+     * @param  array{provider:string,model:string,endpoint:?string}  $providerConfig
+     * @return array<string,mixed>
+     */
+    public function ground(string $question, string $answer, array $chunks, string $decryptedKey, array $providerConfig): array
+    {
+        $response = Http::withHeaders(['X-Internal-Token' => $this->token()])
+            ->timeout(120)
+            ->acceptJson()
+            ->post("{$this->base()}/ground", [
+                'question' => $question,
+                'answer' => $answer,
+                'chunks' => $chunks,
+                'provider_api_key' => $decryptedKey,
+                'provider_config' => $providerConfig,
+            ]);
+
+        if (! $response->successful()) {
+            return ['error' => 'grounding_unavailable', 'detail' => "hr-ai /ground failed ({$response->status()})"];
+        }
+
+        return $response->json();
+    }
 }

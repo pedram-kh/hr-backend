@@ -151,30 +151,45 @@ salary `.xlsx` is assigned a convenio via
 its rows. Salary is relational/SQL, never embedded (ADR-0006); a convenio whose
 salary is PDF-only surfaces as a **coverage gap**, not a blank (ADR-0014).
 
-## Scoped RAG chat — the answer vertical (Sprint 2b-1)
+## Scoped RAG chat — the answer vertical (Sprint 2b-1, completed in 2b-2)
 
 The first employee surface. `hr-backend` resolves scope (deterministic, no LLM),
 owns the **answer-or-escalate decision**, and owns **all** DB writes
 (`chat_sessions`, `chat_messages`, `message_citations`, `message_traces`,
-`escalation_cards`, `answer_model_settings`). `hr-ai` only retrieves + synthesises
-(ADR-0007/0015).
+`escalation_cards`, `answer_model_settings`). `hr-ai` only routes, retrieves,
+synthesises, and grounds (ADR-0007/0015/0016).
 
-- `POST /chat/message` (employee) — `{ question, session_uuid? }` → a scoped,
-  **cited** answer or an honest **escalation**. The single prose path (no router
-  yet — 2b-2): scope resolve → **`GuardrailService`** (hardcoded baseline; fires
-  *before* any `hr-ai` call) → `/retrieve` (2a) → pre-synthesis floor (Check A) →
-  **`hr-ai /synthesise`** → answer-or-escalate floor → persist (`ChatService`).
+- `POST /chat/message` (employee) — `{ question, session_uuid?,
+  selected_job_category_id? }` → a scoped **cited** answer, a **salary** answer, a
+  single-turn **category pick**, or an honest **escalation**. The full path
+  (`ChatService`): scope resolve → **`GuardrailService`** (hardcoded baseline;
+  fires *before* the router and any `hr-ai` call) → **`RouterService`** (ADR-0016)
+  → branch:
+  - **salary** → **`SalaryAnswerService`** (SQL over `salary_tables` /
+    `salary_table_rows`, exact + year-aligned per ADR-0006): category from profile
+    or a **constrained single-turn pick** (`needs_category`, FK-validated,
+    unverified, shown "según tu indicación"); coverage gap → escalate
+    `salary_coverage_gap`. Skips synthesis/grounding (SQL-grounded by construction).
+  - **prose** → recall-hardened `/retrieve` (sub-query union + national-law pass) →
+    pre-synthesis floor (Check A) → **`hr-ai /synthesise`** → Check B → figure-guard
+    pre-check → **`GroundingService` (`hr-ai /ground`)** per-claim entailment gate →
+    answer-or-escalate.
+  - **off_domain** → escalate `off_domain`.
+- **Router** (`RouterService`, ADR-0016): a deterministic salary pre-classifier
+  (the patterns moved out of `GuardrailService`) short-circuits obvious salary with
+  no LLM call; otherwise `/route` (small `HR_AI_ROUTER_MODEL`). **Fail-safe**: low
+  confidence (`HR_ROUTER_CONFIDENCE_FLOOR`) / error / no key → the safe prose path.
+  The decision lands in `trace.router_decision`.
 - **Authority precedence** (ADR-0015): `ChatService` orders convenio chunks before
   `national_law` and labels each with `authority_level`; the synthesis prompt makes
   the convenio govern where it speaks and the Estatuto the gap-filling baseline. The
   trace records `authority_used`.
-- **The floor** (`config/hr.php`, named + conservative, Sprint-6-exposable but
-  additive-only): **Check A** `RETRIEVAL_SCORE_FLOOR` (top score) and **Check B**
-  citations-present-and-in-set are load-bearing; **Check C** (`ANSWER_CONFIDENCE_FLOOR`,
-  the model's self-confidence) is a **tiebreaker only** — never a primary gate
-  (LLM self-confidence is poorly calibrated). Answer only when A **and** B pass;
-  else escalate (`low_confidence`), never guess. No/weak-retrieval, salary, and
-  off-domain questions escalate without a router because A/B fail.
+- **The gate** (`config/hr.php`, named + conservative, Sprint-6-exposable but
+  additive-only): prose answers must pass **Check A** `RETRIEVAL_SCORE_FLOOR` ∧
+  **Check B** citations-present-and-in-set ∧ the **figure-guard pre-check** ∧ the
+  **per-claim entailment** check (`/ground`, the real gate — demotes 2b-1's
+  figure-guard to a pre-check). **Check C** (`ANSWER_CONFIDENCE_FLOOR`) is a
+  **tiebreaker only**. Any failure → escalate (`low_confidence`), never guess.
 
 ### Answer-model key handling (ADR-0015, super_admin)
 
@@ -184,16 +199,20 @@ owns the **answer-or-escalate decision**, and owns **all** DB writes
   (`Crypt`, app-key) in `answer_model_settings`, last-4 stored for masking.
 - `DELETE /admin/answer-model/key` — de-configure.
 
-The key is decrypted only in `ChatService` immediately before a `/synthesise`
-call and passed to `hr-ai` in the request **body** (never a header), never logged
-or persisted. The browser never sees it. The non-secret model/endpoint live in
-`config/services.php` (`HR_AI_ANSWER_MODEL` / `HR_AI_ANSWER_ENDPOINT`) and **must**
-target an EU-available endpoint at go-live (deploy.md §1).
+The key is decrypted only in `ChatService` for the turn and passed to `hr-ai` in
+the request **body** (never a header) for `/route`, `/synthesise`, and `/ground`,
+never logged or persisted. The browser never sees it. The non-secret
+model/endpoints live in `config/services.php` (`HR_AI_ANSWER_MODEL` /
+`HR_AI_ANSWER_ENDPOINT`, and `HR_AI_ROUTER_MODEL` / `HR_AI_ROUTER_ENDPOINT` — the
+router endpoint defaults to the answer endpoint) and **must** target an
+EU-available endpoint at go-live (deploy.md §1).
 
 > Dev test profiles: `ChatTestUserSeeder` seeds employees bound to real convenios
-> (`test-gipuzkoa@…`, `test-navarra@…`, `test-andalucia@…`, `test-any@…`) — run
-> `registry:import` + `chunks:embed` first. The super_admin for the key screen is
-> `TestUserSeeder` (`admin@…`). Dev-only; never committed corpus/secret data.
+> (`test-gipuzkoa@…` salary coverage-gap, `test-navarra@…` prose gold tests,
+> `test-andalucia@…` salary-answerable with a salaried category,
+> `test-andalucia-nocat@…` the constrained category pick, `test-any@…`) — run
+> `registry:import` + `chunks:embed` + `salary:import` first. The super_admin for
+> the key screen is `TestUserSeeder` (`admin@…`). Dev-only; never committed data.
 
 ## Mail transport
 

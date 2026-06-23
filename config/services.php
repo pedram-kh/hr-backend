@@ -30,6 +30,14 @@ return [
         'answer_provider' => env('HR_AI_ANSWER_PROVIDER', 'claude'),
         'answer_model' => env('HR_AI_ANSWER_MODEL', 'claude-sonnet-4-5'),
         'answer_endpoint' => env('HR_AI_ANSWER_ENDPOINT', 'https://api.anthropic.com'),
+
+        // The question router (Sprint 2b-2, ADR-0016) — a SMALL/FAST model reusing
+        // the SAME key path (the key is owned by hr-backend, passed decrypted per
+        // call). NON-SECRET. The endpoint defaults to the answer endpoint; if a
+        // distinct router endpoint is set it MUST still be EU (deploy.md §1). The
+        // per-claim grounding check (§5) uses ANSWER_MODEL, not this.
+        'router_model' => env('HR_AI_ROUTER_MODEL', 'claude-haiku-4-5'),
+        'router_endpoint' => env('HR_AI_ROUTER_ENDPOINT', env('HR_AI_ANSWER_ENDPOINT', 'https://api.anthropic.com')),
     ],
 
     'resend' => [
