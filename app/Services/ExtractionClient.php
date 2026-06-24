@@ -124,6 +124,31 @@ class ExtractionClient
     }
 
     /**
+     * Sandbox retrieval over ONE document's chunks (Sprint 3 Knowledge Center).
+     * Read-only and additive — distinct from {@see retrieve()} so the employee
+     * answer-loop primitive is untouched.
+     *
+     * @return array<string,mixed> { chunks: [...] }
+     */
+    public function sandboxRetrieve(string $query, int $documentId, int $k = 8): array
+    {
+        $response = Http::withHeaders(['X-Internal-Token' => $this->token()])
+            ->timeout(180)
+            ->acceptJson()
+            ->post("{$this->base()}/sandbox-retrieve", [
+                'query' => $query,
+                'document_id' => $documentId,
+                'k' => $k,
+            ]);
+
+        if (! $response->successful()) {
+            throw new RuntimeException("hr-ai /sandbox-retrieve failed ({$response->status()}): ".$response->body());
+        }
+
+        return $response->json();
+    }
+
+    /**
      * Synthesise a cited answer from the eligible chunks (ADR-0015). The
      * decrypted answer-model key is passed in the BODY (never a header) and used
      * by hr-ai for this one call only — never persisted there.

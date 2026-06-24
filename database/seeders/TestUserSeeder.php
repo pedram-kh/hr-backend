@@ -50,13 +50,33 @@ class TestUserSeeder extends Seeder
             ['group_code' => null],
         );
 
-        // --- Test admin ---
+        // --- Test admin (super_admin) ---
         $admin = Admin::updateOrCreate(
             ['email' => $adminEmail],
             ['full_name' => 'Test Admin', 'status' => 'active'],
         );
         if (! $admin->hasRole('super_admin')) {
             $admin->assignRole('super_admin');
+        }
+
+        // --- Sprint 3: a knowledge_editor and a read-only auditor (env-driven), so
+        // the Knowledge-Center role gating is testable eyes-on (can-edit vs not).
+        $editorEmail = strtolower((string) env('SEED_EDITOR_EMAIL', 'editor@example.com'));
+        $editor = Admin::updateOrCreate(
+            ['email' => $editorEmail],
+            ['full_name' => 'Test Knowledge Editor', 'status' => 'active'],
+        );
+        if (! $editor->hasRole('knowledge_editor')) {
+            $editor->assignRole('knowledge_editor');
+        }
+
+        $auditorEmail = strtolower((string) env('SEED_AUDITOR_EMAIL', 'auditor@example.com'));
+        $auditor = Admin::updateOrCreate(
+            ['email' => $auditorEmail],
+            ['full_name' => 'Test Auditor', 'status' => 'active'],
+        );
+        if (! $auditor->hasRole('auditor')) {
+            $auditor->assignRole('auditor');
         }
 
         // --- Test employee ---

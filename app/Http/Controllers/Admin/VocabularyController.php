@@ -7,6 +7,7 @@ use App\Models\Convenio;
 use App\Models\DocumentType;
 use App\Models\Sector;
 use App\Models\Territory;
+use App\Models\Topic;
 use Illuminate\Http\JsonResponse;
 
 /**
@@ -24,6 +25,10 @@ class VocabularyController extends Controller
                 ->orderBy('numero')
                 ->get(['id', 'numero', 'name', 'territory_id', 'sector_id']),
             'document_types' => DocumentType::orderBy('name')->get(['id', 'code', 'name']),
+            // Only APPROVED topics are pickable — the UI tags into existing
+            // vocabulary, it never creates/approves topics (ADR-0011; that stays
+            // in the deliberate path, Sprint 7).
+            'topics' => Topic::where('status', 'approved')->orderBy('name')->get(['id', 'name']),
             default => null,
         };
 

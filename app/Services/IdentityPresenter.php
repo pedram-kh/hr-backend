@@ -52,6 +52,11 @@ class IdentityPresenter
             'full_name' => $account->full_name,
             'status' => $account->status,
             'roles' => $account->getRoleNames()->values(),
+            // Sprint 3: surface the granular abilities the UI gates on (edit
+            // affordances are hidden/disabled without knowledge.edit).
+            'abilities' => [
+                'knowledge.edit' => $account->can('knowledge.edit'),
+            ],
         ];
     }
 }

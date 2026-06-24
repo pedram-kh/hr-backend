@@ -5,9 +5,12 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Convenio;
 use App\Models\Document;
+use App\Models\DocumentTopic;
 use App\Models\DocumentType;
 use App\Models\TagEvent;
+use App\Models\Topic;
 use App\Services\DocumentIngestor;
+use App\Support\KnowledgeMap;
 use App\Support\VocabularyResolver;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -61,7 +64,12 @@ class DocumentController extends Controller
 
     public function show(string $uuid): JsonResponse
     {
-        $document = Document::with(['convenio.territory', 'convenio.sector', 'documentType', 'pages', 'reviewTasks'])
+        $document = Document::with([
+            'convenio.territory', 'convenio.sector', 'documentType', 'pages', 'reviewTasks',
+            'predecessor:id,uuid,title,validity_start,validity_end,retrieval_status',
+            'successors:id,uuid,title,validity_start,validity_end,retrieval_status,predecessor_document_id',
+            'topics',
+        ])
             ->where('uuid', $uuid)
             ->firstOrFail();
 
@@ -83,6 +91,22 @@ class DocumentController extends Controller
             'tagging_status' => $document->tagging_status,
             'tagging_confidence' => $document->tagging_confidence,
             'tags' => $this->tags($document),
+            'topics' => $document->topics->map(fn ($t) => [
+                'id' => $t->id,
+                'name' => $t->name,
+                'source' => $t->pivot->source,
+                'confidence' => $t->pivot->confidence !== null ? (float) $t->pivot->confidence : null,
+                'verified_by' => $t->pivot->verified_by,
+                'verified_at' => $t->pivot->verified_at,
+            ]),
+            'lineage' => [
+                'predecessor' => $document->predecessor ? $this->lineageRef($document->predecessor) : null,
+                'successors' => $document->successors->map(fn ($d) => $this->lineageRef($d))->values(),
+            ],
+            'chunk_health' => KnowledgeMap::chunkHealth($document->id),
+            // Scope-rides-on-convenio limitation (data-model): a non-national doc
+            // with no convenio cannot carry scope — flagged, never silently mis-scoped.
+            'is_unscoped' => $document->convenio_id === null && $document->authority_level !== 'national_law',
             'pages' => $document->pages->map(fn ($p) => [
                 'page_number' => $p->page_number,
                 'text' => $p->text,
@@ -98,6 +122,18 @@ class DocumentController extends Controller
             ]),
             'provenance' => $events,
         ]);
+    }
+
+    /** @return array<string,mixed> a compact reference to a lineage-linked document. */
+    private function lineageRef(Document $d): array
+    {
+        return [
+            'uuid' => $d->uuid,
+            'title' => $d->title,
+            'validity_start' => $d->validity_start?->toDateString(),
+            'validity_end' => $d->validity_end?->toDateString(),
+            'retrieval_status' => $d->retrieval_status,
+        ];
     }
 
     /**
@@ -195,9 +231,22 @@ class DocumentController extends Controller
         if (! in_array($facet, self::REASSIGNABLE, true)) {
             return response()->json(['message' => "Facet '{$facet}' is not re-assignable. Allowed: ".implode(', ', self::REASSIGNABLE)], 422);
         }
-        $data = $request->validate(['value_id' => ['required', 'integer']]);
+        $data = $request->validate([
+            'value_id' => ['required', 'integer'],
+            'confirm_scope_change' => ['sometimes', 'boolean'],
+        ]);
         $document = Document::where('uuid', $uuid)->firstOrFail();
         $adminId = $request->user()->id;
+
+        // A convenio reassign changes the document's (derived) territory + sector,
+        // i.e. which employees get it as an answer — scope-affecting (spec D). It
+        // must be explicitly confirmed. A document_type retype is not scope-affecting.
+        if ($facet === 'convenio' && ! $request->boolean('confirm_scope_change')) {
+            return response()->json([
+                'message' => 'This changes which employees receive this document as an answer. Re-send with confirm_scope_change=true to apply.',
+                'scope_affecting' => true,
+            ], 409);
+        }
 
         [$column, $model, $display] = match ($facet) {
             'convenio' => ['convenio_id', Convenio::class, 'numero'],
@@ -244,6 +293,197 @@ class DocumentController extends Controller
         $url = Storage::disk('s3')->temporaryUrl($pageRow->image_path, now()->addMinutes(10));
 
         return response()->json(['url' => $url]);
+    }
+
+    /**
+     * Pre-signed (temporary) URL for the ORIGINAL source file (the real-document
+     * viewer, spec C). Same S3 mechanism as {@see pageImage()} — the browser
+     * fetches the bytes directly from S3; they never proxy through hr-backend.
+     */
+    public function source(string $uuid): JsonResponse
+    {
+        $document = Document::where('uuid', $uuid)->firstOrFail();
+
+        if (! $document->storage_path) {
+            return response()->json(['message' => 'No source file for this document.'], 404);
+        }
+
+        $url = Storage::disk('s3')->temporaryUrl($document->storage_path, now()->addMinutes(10));
+        $ext = strtolower(pathinfo((string) $document->storage_path, PATHINFO_EXTENSION));
+
+        return response()->json([
+            'url' => $url,
+            'content_type' => $ext === 'pdf' ? 'application/pdf' : null,
+            'filename' => $document->source_filename,
+        ]);
+    }
+
+    /**
+     * Bounded edit of the lifecycle facets (spec D): validity_start/_end,
+     * retrieval_status, tagging_status. FK-backed facets (convenio/document_type)
+     * use {@see reassignFacet()}; topics use {@see addTopic()}/{@see removeTopic()}.
+     * Territory/sector are NOT editable (derived from the convenio).
+     *
+     * Each changed field is written to `documents` AND appended as a `human`
+     * (admin_manual) tag_events row (old→new, actor_id) — append-only, never an
+     * UPDATE/DELETE of history. A scope-affecting change (retrieval_status flip or
+     * validity edit — both move the eligibility window) requires
+     * `confirm_scope_change=true`, else 409.
+     */
+    public function updateLifecycle(Request $request, string $uuid): JsonResponse
+    {
+        $data = $request->validate([
+            'validity_start' => ['sometimes', 'nullable', 'date'],
+            'validity_end' => ['sometimes', 'nullable', 'date'],
+            'retrieval_status' => ['sometimes', 'in:draft,active,historical'],
+            'tagging_status' => ['sometimes', 'in:auto_proposed,under_review,verified'],
+            'confirm_scope_change' => ['sometimes', 'boolean'],
+        ]);
+
+        $document = Document::where('uuid', $uuid)->firstOrFail();
+        $adminId = $request->user()->id;
+
+        // Determine the changed fields (only those actually present and different).
+        $changes = []; // facet => [old, new, column]
+        if ($request->has('retrieval_status') && $data['retrieval_status'] !== $document->retrieval_status) {
+            $changes['retrieval_status'] = [$document->retrieval_status, $data['retrieval_status'], 'retrieval_status'];
+        }
+        if ($request->has('tagging_status') && $data['tagging_status'] !== $document->tagging_status) {
+            $changes['tagging_status'] = [$document->tagging_status, $data['tagging_status'], 'tagging_status'];
+        }
+        $newStart = $request->has('validity_start') ? ($data['validity_start'] ?? null) : $document->validity_start?->toDateString();
+        $newEnd = $request->has('validity_end') ? ($data['validity_end'] ?? null) : $document->validity_end?->toDateString();
+        $validityChanged = ($request->has('validity_start') || $request->has('validity_end'))
+            && ("{$newStart}..{$newEnd}" !== "{$document->validity_start?->toDateString()}..{$document->validity_end?->toDateString()}");
+
+        if (empty($changes) && ! $validityChanged) {
+            return response()->json(['status' => 'ok', 'note' => 'no change']);
+        }
+
+        // Scope-affecting: a retrieval_status flip or any validity edit moves the
+        // eligibility window (who gets this as an answer). tagging_status alone does not.
+        $scopeAffecting = isset($changes['retrieval_status']) || $validityChanged;
+        if ($scopeAffecting && ! $request->boolean('confirm_scope_change')) {
+            return response()->json([
+                'message' => 'This changes which employees receive this document as an answer. Re-send with confirm_scope_change=true to apply.',
+                'scope_affecting' => true,
+            ], 409);
+        }
+
+        DB::transaction(function () use ($document, $changes, $validityChanged, $newStart, $newEnd, $adminId) {
+            foreach ($changes as $facet => [$old, $new]) {
+                $document->{$facet} = $new;
+                TagEvent::create([
+                    'entity_type' => 'document',
+                    'entity_id' => $document->id,
+                    'facet' => $facet,
+                    'old_value' => $old,
+                    'new_value' => $new,
+                    'source' => 'admin_manual',
+                    'actor_id' => $adminId,
+                    'confidence' => null,
+                    'note' => 'edited by admin',
+                ]);
+            }
+
+            if ($validityChanged) {
+                $oldVal = "{$document->validity_start?->toDateString()}..{$document->validity_end?->toDateString()}";
+                $document->validity_start = $newStart;
+                $document->validity_end = $newEnd;
+                TagEvent::create([
+                    'entity_type' => 'document',
+                    'entity_id' => $document->id,
+                    'facet' => 'validity',
+                    'old_value' => $oldVal,
+                    'new_value' => "{$newStart}..{$newEnd}",
+                    'source' => 'admin_manual',
+                    'actor_id' => $adminId,
+                    'confidence' => null,
+                    'note' => 'validity edited by admin',
+                ]);
+            }
+
+            $document->save();
+        });
+
+        return response()->json(['status' => 'ok']);
+    }
+
+    /**
+     * Tag the document with an existing APPROVED topic (FK picker — never free
+     * text, never vocabulary creation). Writes the document_topics row
+     * (source=admin_manual, verified by this admin) AND appends a `topic`
+     * tag_events row. This is the FIRST writer of document_topics (Sprint 3);
+     * AI-proposed topics arrive in Sprint 7.
+     */
+    public function addTopic(Request $request, string $uuid): JsonResponse
+    {
+        $data = $request->validate(['topic_id' => ['required', 'integer']]);
+        $document = Document::where('uuid', $uuid)->firstOrFail();
+        $adminId = $request->user()->id;
+
+        $topic = Topic::where('id', $data['topic_id'])->where('status', 'approved')->first();
+        if ($topic === null) {
+            return response()->json(['message' => 'Topic not found in the approved vocabulary.'], 422);
+        }
+        if ($document->topics()->where('topics.id', $topic->id)->exists()) {
+            return response()->json(['message' => 'Topic already applied.'], 422);
+        }
+
+        DB::transaction(function () use ($document, $topic, $adminId) {
+            DocumentTopic::create([
+                'document_id' => $document->id,
+                'topic_id' => $topic->id,
+                'source' => 'admin_manual',
+                'confidence' => null,
+                'verified_by' => $adminId,
+                'verified_at' => now(),
+            ]);
+
+            TagEvent::create([
+                'entity_type' => 'document',
+                'entity_id' => $document->id,
+                'facet' => 'topic',
+                'old_value' => null,
+                'new_value' => $topic->name,
+                'source' => 'admin_manual',
+                'actor_id' => $adminId,
+                'confidence' => null,
+                'note' => 'topic added by admin',
+            ]);
+        });
+
+        return response()->json(['status' => 'ok']);
+    }
+
+    /** Remove a topic tag; appends a `topic` provenance row (old→null). Append-only. */
+    public function removeTopic(Request $request, string $uuid, int $topicId): JsonResponse
+    {
+        $document = Document::where('uuid', $uuid)->firstOrFail();
+        $adminId = $request->user()->id;
+
+        $topic = Topic::find($topicId);
+        if ($topic === null || ! $document->topics()->where('topics.id', $topicId)->exists()) {
+            return response()->json(['message' => 'Topic is not applied to this document.'], 422);
+        }
+
+        DB::transaction(function () use ($document, $topic, $topicId, $adminId) {
+            DocumentTopic::where('document_id', $document->id)->where('topic_id', $topicId)->delete();
+
+            TagEvent::create([
+                'entity_type' => 'document',
+                'entity_id' => $document->id,
+                'facet' => 'topic',
+                'old_value' => $topic->name,
+                'new_value' => null,
+                'source' => 'admin_manual',
+                'actor_id' => $adminId,
+                'confidence' => null,
+                'note' => 'topic removed by admin',
+            ]);
+        });
+
+        return response()->json(['status' => 'ok']);
     }
 
     private function listRow(Document $d): array
