@@ -3,8 +3,10 @@
 namespace App\Http\Controllers;
 
 use App\Models\Admin;
+use App\Models\ChatSession;
 use App\Models\Employee;
 use App\Services\ChatService;
+use App\Services\ConversationPresenter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -41,5 +43,34 @@ class ChatController extends Controller
         );
 
         return response()->json($result);
+    }
+
+    /**
+     * Load the caller's OWN most-recent chat session, ordered messages included
+     * (Sprint 4, Q-D). This is how the employee sees a human (hr_agent) reply
+     * land in the chat — the screen hydrates on mount and polls. SELF-SCOPED:
+     * the session is resolved from the authenticated employee only (never a
+     * caller-supplied id), and a human reply is attributed as "Recursos Humanos"
+     * with no admin PII. There is NO session list/picker (that is Sprint 5).
+     */
+    public function session(Request $request, ConversationPresenter $presenter): JsonResponse
+    {
+        $account = $request->user();
+        if ($account instanceof Admin || ! $account instanceof Employee) {
+            return response()->json(['message' => 'Chat is for employees.'], 403);
+        }
+
+        $session = ChatSession::where('employee_id', $account->id)
+            ->orderByDesc('last_activity_at')
+            ->first();
+
+        if ($session === null) {
+            return response()->json(['session_uuid' => null, 'messages' => []]);
+        }
+
+        return response()->json([
+            'session_uuid' => $session->uuid,
+            'messages' => $presenter->present($session, ConversationPresenter::AUDIENCE_EMPLOYEE),
+        ]);
     }
 }

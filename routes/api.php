@@ -3,6 +3,7 @@
 use App\Http\Controllers\Admin\AnswerModelController;
 use App\Http\Controllers\Admin\CoverageGapController;
 use App\Http\Controllers\Admin\DocumentController;
+use App\Http\Controllers\Admin\EscalationController;
 use App\Http\Controllers\Admin\HierarchyController;
 use App\Http\Controllers\Admin\SandboxController;
 use App\Http\Controllers\Admin\VocabularyController;
@@ -30,6 +31,12 @@ Route::get('/me', [MeController::class, 'show'])
 | escalation. Employee-only (the controller rejects admins).
 */
 Route::post('/chat/message', [ChatController::class, 'message'])
+    ->middleware('auth:sanctum');
+
+// Sprint 4 (Q-D): load the caller's own most-recent session so the employee
+// sees a human (hr_agent) reply land in the chat (hydrate on mount + poll).
+// Self-scoped; employee-only. No session list/picker (that is Sprint 5).
+Route::get('/chat/session', [ChatController::class, 'session'])
     ->middleware('auth:sanctum');
 
 /*
@@ -70,4 +77,20 @@ Route::middleware(['auth:sanctum', 'admin'])->prefix('admin')->group(function ()
     Route::get('/answer-model/status', [AnswerModelController::class, 'status']);
     Route::post('/answer-model', [AnswerModelController::class, 'store']);
     Route::delete('/answer-model/key', [AnswerModelController::class, 'destroy']);
+
+    /*
+    | Sprint 4 — Escalation board + the flywheel. READS (board list + card
+    | detail incl. the card-scoped conversation + trace) are open to any admin
+    | (an auditor browses read-only). WRITES (assign/move/reply/resolve/publish)
+    | are gated by the escalation.work ability (super_admin + hr_agent). Every
+    | write is audited to escalation_events; the no-override rule is enforced at
+    | publish (block/re-escalate), never advisory.
+    */
+    Route::get('/escalations', [EscalationController::class, 'index']);
+    Route::get('/escalations/{uuid}', [EscalationController::class, 'show']);
+    Route::middleware('ability:escalation.work')->group(function () {
+        Route::patch('/escalations/{uuid}', [EscalationController::class, 'update']);
+        Route::post('/escalations/{uuid}/reply', [EscalationController::class, 'reply']);
+        Route::post('/escalations/{uuid}/resolve', [EscalationController::class, 'resolve']);
+    });
 });

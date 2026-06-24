@@ -7,12 +7,15 @@ use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * Gate a route on a spatie permission (Sprint 3). Used as `ability:knowledge.edit`
- * on the Knowledge-Center WRITE routes only — reads stay open to any admin.
+ * Gate a route on a spatie permission. Used as `ability:knowledge.edit` on the
+ * Knowledge-Center WRITE routes (Sprint 3) and `ability:escalation.work` on the
+ * escalation-board WRITE routes (Sprint 4) — reads stay open to any admin.
  *
- * The `knowledge.edit` ability is granted to super_admin + knowledge_editor and
- * denied to auditor + hr_agent (RoleSeeder). spatie registers permissions with
- * the Gate, so `$admin->can('knowledge.edit')` reflects the role grant.
+ *  - `knowledge.edit`  : super_admin + knowledge_editor (deny auditor + hr_agent)
+ *  - `escalation.work` : super_admin + hr_agent       (deny auditor + knowledge_editor)
+ *
+ * spatie registers permissions with the Gate, so `$admin->can($ability)`
+ * reflects the role grant (RoleSeeder).
  */
 class EnsureCan
 {
@@ -21,7 +24,7 @@ class EnsureCan
         $user = $request->user();
         if ($user === null || ! method_exists($user, 'can') || ! $user->can($ability)) {
             return response()->json([
-                'message' => 'You do not have permission to edit knowledge labels.',
+                'message' => 'You do not have permission to perform this action.',
             ], 403);
         }
 

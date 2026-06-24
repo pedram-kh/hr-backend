@@ -79,6 +79,18 @@ class TestUserSeeder extends Seeder
             $auditor->assignRole('auditor');
         }
 
+        // --- Sprint 4: an hr_agent (the intended escalation-board worker), so the
+        // board's assign/move/reply/resolve + the escalation.work gate are
+        // testable eyes-on. Full directory/role management is still Sprint 5.
+        $hrAgentEmail = strtolower((string) env('SEED_HR_AGENT_EMAIL', 'agent@example.com'));
+        $hrAgent = Admin::updateOrCreate(
+            ['email' => $hrAgentEmail],
+            ['full_name' => 'Test HR Agent', 'status' => 'active'],
+        );
+        if (! $hrAgent->hasRole('hr_agent')) {
+            $hrAgent->assignRole('hr_agent');
+        }
+
         // --- Test employee ---
         Employee::updateOrCreate(
             ['email' => $employeeEmail],

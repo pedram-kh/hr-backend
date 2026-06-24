@@ -47,15 +47,20 @@ class IdentityPresenter
 
         return [
             'account_type' => 'admin',
+            // The numeric id is surfaced so the escalation board can self-assign
+            // ("assign to me") without a directory (the directory is Sprint 5).
+            'id' => $account->id,
             'uuid' => $account->uuid,
             'email' => $account->email,
             'full_name' => $account->full_name,
             'status' => $account->status,
             'roles' => $account->getRoleNames()->values(),
-            // Sprint 3: surface the granular abilities the UI gates on (edit
-            // affordances are hidden/disabled without knowledge.edit).
+            // Sprint 3/4: surface the granular abilities the UI gates on (edit
+            // affordances and the escalation board are hidden/disabled without
+            // the matching ability).
             'abilities' => [
                 'knowledge.edit' => $account->can('knowledge.edit'),
+                'escalation.work' => $account->can('escalation.work'),
             ],
         ];
     }

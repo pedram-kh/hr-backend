@@ -10,12 +10,18 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 class ChatMessage extends Model
 {
     protected $fillable = [
-        'session_id', 'role', 'content',
+        'session_id', 'role', 'content', 'author_admin_id',
     ];
 
     public function session(): BelongsTo
     {
         return $this->belongsTo(ChatSession::class, 'session_id');
+    }
+
+    /** The admin who authored an `hr_agent` (human) reply; null for bot/employee turns (Sprint 4). */
+    public function author(): BelongsTo
+    {
+        return $this->belongsTo(Admin::class, 'author_admin_id');
     }
 
     public function citations(): HasMany

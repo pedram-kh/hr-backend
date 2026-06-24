@@ -7,6 +7,7 @@ use App\Models\Convenio;
 use App\Models\Document;
 use App\Models\DocumentTopic;
 use App\Models\DocumentType;
+use App\Models\EscalationResolution;
 use App\Models\TagEvent;
 use App\Models\Topic;
 use App\Services\DocumentIngestor;
@@ -121,7 +122,38 @@ class DocumentController extends Controller
                 'raw_unmatched_values' => $t->raw_unmatched_values,
             ]),
             'provenance' => $events,
+            // Sprint 4: when this document is a published internal_hr_ruling, the
+            // escalation it was created from (badge + "created from escalation #N
+            // by [agent]" + a back-link to the card in the Knowledge Center).
+            'ruling' => $this->rulingProvenance($document),
         ]);
+    }
+
+    /**
+     * The escalation a published internal_hr_ruling was created from, if any
+     * (Sprint 4 flywheel). Null for every other document.
+     *
+     * @return array<string,mixed>|null
+     */
+    private function rulingProvenance(Document $document): ?array
+    {
+        if ($document->authority_level !== 'internal_hr_ruling') {
+            return null;
+        }
+
+        $resolution = EscalationResolution::with(['card:id,uuid', 'resolver:id,full_name'])
+            ->where('converted_to_document_id', $document->id)
+            ->first();
+
+        if ($resolution === null) {
+            return null;
+        }
+
+        return [
+            'escalation_uuid' => $resolution->card?->uuid,
+            'escalation_id' => $resolution->card_id,
+            'agent' => $resolution->resolver?->full_name,
+        ];
     }
 
     /** @return array<string,mixed> a compact reference to a lineage-linked document. */

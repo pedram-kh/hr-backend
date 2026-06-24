@@ -27,7 +27,11 @@ class ChunksEmbed extends Command
 
     protected $description = 'Chunk + embed in-scope prose documents into document_chunks (hr-ai writes; hr-backend passes scope).';
 
-    private const IN_SCOPE_TYPES = ['convenio_text', 'national_law', 'partial_agreement'];
+    // Sprint 4: `internal_hr_ruling` joins the prose-embed set so a published
+    // resolution-article becomes retrievable through the SAME path (Q-A "A1").
+    // It is prose (a generated PDF, RulingPublisher) and, like a convenio, must
+    // be active + tagging_status ≠ under_review to be selected.
+    private const IN_SCOPE_TYPES = ['convenio_text', 'national_law', 'partial_agreement', 'internal_hr_ruling'];
 
     public function handle(ExtractionClient $client): int
     {

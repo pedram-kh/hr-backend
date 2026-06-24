@@ -214,6 +214,59 @@ EU-available endpoint at go-live (deploy.md §1).
 > `registry:import` + `chunks:embed` + `salary:import` first. The super_admin for
 > the key screen is `TestUserSeeder` (`admin@…`). Dev-only; never committed data.
 
+## Escalation board + the flywheel (Sprint 4)
+
+`hr-backend` owns every write; `EscalationController` is the board API. **Reads** are
+open to any admin (auditor included); **writes** require the new **`escalation.work`**
+ability (super_admin + hr_agent). Every status move / assignment / reply / resolution
+/ blocked-publish is appended to **`escalation_events`** (append-only audit).
+
+- `GET /admin/escalations` — list cards by `status` / `reason` / `assignee` (`mine`),
+  grouped for the Kanban columns.
+- `GET /admin/escalations/{uuid}` — card detail: the **card-scoped** conversation
+  (`card.chat_session_id` only — no caller-supplied session/employee param; that
+  keying *is* the access guard this sprint) + the escalating turn's trace + the event
+  log. **No** full-history browser (Sprint 5).
+- `PATCH /admin/escalations/{uuid}` — assign + status move (server-validated against
+  the legal-transition map; audited).
+- `POST /admin/escalations/{uuid}/reply` — write a human **`hr_agent`** message into
+  the employee's session (no trace, no citations; audited `replied`).
+- `POST /admin/escalations/{uuid}/resolve` — `{ resolution_text, convert?, topic_id?,
+  confirm_scope_change? }`. Writes the **`escalation_resolutions`** row, then on
+  `convert`: the **scope-confirm 409** gate (reuse the Sprint-3 bounded-edit confirm)
+  → the **no-silent-override conflict 409** gate (conservative scope+topic block; an
+  active `official_convenio` sharing the ruling's topic blocks publish, falling back
+  to scope-only with no topic). On block → nothing published, `publish_blocked` event,
+  a `document_review_tasks` `type='conflict'`, card back to **In Progress**. On pass →
+  ruling published `active`, A1 render+embed, card **Resolved** (`resolved_at`).
+
+Employee side of the two-way surface:
+
+- `GET /chat/session` (employee-auth, **self-scoped** to the caller's own most-recent
+  session) — ordered messages incl. `hr_agent` ones, attributed as **"Recursos
+  Humanos"** (never the admin's name/email). The chat UI hydrates on mount + polls.
+
+### A1 — publishing a ruling into the existing retrieval path (hr-ai untouched)
+
+`RulingPublisher` renders the agent's `resolution_text` to a clean, deterministic PDF
+(`RulingPdf` — single column, no header/footer, WinAnsi encoding, widened word-spacing,
+no end-of-line hyphenation, engineered so the 2a de-spacing/furniture/two-column
+heuristics cannot mangle it), stores it to S3 (`storage_path`), then runs the **same**
+`/extract` + `chunks:embed --document={uuid}` path every prose doc uses.
+`internal_hr_ruling` was added to **`ChunksEmbed::IN_SCOPE_TYPES`** (a code change, not a
+migration). Publish verifies the round-trip is **lossless** (embedded chunk text ==
+typed text, whitespace-normalised); `hr-ai` is **not** modified.
+
+### Additive migrations (Sprint 4)
+
+1. `chat_messages.role += 'hr_agent'` (introspect-drop-readd CHECK idiom) + nullable
+   `author_admin_id` FK → `admins`.
+2. `escalation_events` (append-only card activity log).
+
+> Dev seed: `TestUserSeeder` seeds an `hr_agent` test user
+> (`SEED_HR_AGENT_EMAIL`, default `agent@example.com`) with the `escalation.work`
+> ability; `RoleSeeder` grants `escalation.work` to `super_admin` + `hr_agent`.
+
 ## Mail transport
 
 Selected by `MAIL_MAILER` with no code change:

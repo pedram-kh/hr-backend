@@ -32,6 +32,15 @@ class RoleSeeder extends Seeder
         $roles['super_admin']->givePermissionTo($knowledgeEdit);
         $roles['knowledge_editor']->givePermissionTo($knowledgeEdit);
 
+        // Sprint-4 ability: work the escalation board — assign/move cards, reply
+        // to the employee, resolve, and publish a ruling (spec A–D). Granted to
+        // super_admin + hr_agent; DENIED to knowledge_editor (no chat access) and
+        // auditor (read-only — auditor may still BROWSE the board, which is a read,
+        // but cannot act). Reads stay open to any admin (mirrors Sprint 3).
+        $escalationWork = Permission::findOrCreate('escalation.work', 'web');
+        $roles['super_admin']->givePermissionTo($escalationWork);
+        $roles['hr_agent']->givePermissionTo($escalationWork);
+
         app(PermissionRegistrar::class)->forgetCachedPermissions();
     }
 }
