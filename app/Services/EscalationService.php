@@ -228,10 +228,12 @@ class EscalationService
             return $doc;
         });
 
-        // The no-override fence (Q-B): a conservative scope+topic block. With a
-        // topic → block on an active official_convenio sharing that topic; with
-        // NO topic → scope-only block (any active official_convenio in scope) —
-        // it OVER-blocks, the safe failure direction (a false block routes to a
+        // The no-override fence (Q-B; Correction-01): a conservative, FAIL-CLOSED
+        // scope+topic block. With a topic → block an active official_convenio that
+        // shares that topic OR that has no topic tags at all (the topic is additive
+        // to the scope block, never a replacement). With NO topic → scope-only
+        // block (any active official_convenio in scope). It OVER-blocks toward
+        // human review, the safe failure direction (a false block routes to a
         // human; a false "no conflict" is the exact harm we refuse).
         $conflicts = $this->detectConflicts($convenioId, $topicId);
         if ($conflicts->isNotEmpty()) {
@@ -248,9 +250,15 @@ class EscalationService
                     ],
                 );
 
-                $note = $topicId !== null
-                    ? 'official convenio governs this topic in the asker\'s scope — internal ruling cannot override it'
-                    : 'no topic assigned — scope-only conflict fence blocked publish (an official convenio is active in scope)';
+                // Accurate reason: a true same-topic conflict vs. a scope-level
+                // block on an untagged-but-governing convenio (Correction-01).
+                if ($topicId === null) {
+                    $note = 'no topic assigned — scope-only conflict fence blocked publish (an official convenio is active in scope)';
+                } elseif (DocumentTopic::whereIn('document_id', $conflicts->pluck('id'))->where('topic_id', $topicId)->exists()) {
+                    $note = 'official convenio governs this topic in the asker\'s scope — internal ruling cannot override it';
+                } else {
+                    $note = 'an active official convenio governs this scope (untagged for this topic) — internal ruling cannot override it (topic-additive fail-closed block, Correction-01)';
+                }
                 $this->log($card, 'publish_blocked', null, $conflicts->pluck('uuid')->implode(','), $actor, $note);
 
                 // Route to a human: the card returns to in_progress (NOT resolved).
@@ -303,8 +311,17 @@ class EscalationService
     }
 
     /**
-     * The no-override conflict query (Q-B). Active official_convenio docs in the
-     * asker's convenio scope; narrowed to the assigned topic when present.
+     * The no-override conflict query (Q-B; Sprint-5 Correction-01). Active
+     * official_convenio docs in the asker's convenio scope. The topic is
+     * **additive, not a replacement** for the scope block: when a topic is
+     * assigned we block a convenio doc that shares that topic **OR that carries
+     * no topic tags at all** — so an untagged-but-governing convenio still blocks
+     * (the topic lens is sparsely populated; the convenio side is almost never
+     * tagged). This is **fail-closed**: a missing tag can never make a governing
+     * convenio drop out of the check and let the ruling publish on top of it.
+     * Once topics are richly tagged (Sprint 7) the topic genuinely narrows the
+     * block to real same-topic conflicts; a convenio tagged on a *different*
+     * topic correctly does NOT block. The no-topic path is the scope-only block.
      *
      * @return Collection<int, Document>
      */
@@ -316,7 +333,12 @@ class EscalationService
             ->where('retrieval_status', 'active')
             ->when(
                 $topicId !== null,
-                fn ($q) => $q->whereHas('topics', fn ($t) => $t->where('topics.id', $topicId)),
+                fn ($q) => $q->where(function ($w) use ($topicId) {
+                    // Shares the ruling's topic, OR has no topic tags at all
+                    // (untagged-but-governing convenio → still blocks; fail-closed).
+                    $w->whereHas('topics', fn ($t) => $t->where('topics.id', $topicId))
+                        ->orWhereDoesntHave('topics');
+                }),
             )
             ->get(['id', 'uuid', 'title']);
     }
