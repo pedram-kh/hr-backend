@@ -166,6 +166,10 @@ class EscalationService
                     'document_type_id' => $rulingType->id,
                     'validity_start' => now()->toDateString(),
                     'validity_end' => null,
+                    // storage_path is NOT NULL; the artifact is only rendered at
+                    // publish (RulingPublisher overwrites this with the real S3
+                    // key). A draft that never publishes simply has no artifact.
+                    'storage_path' => '',
                     'retrieval_status' => 'draft', // flipped to active ONLY after a clean publish
                     'authority_level' => 'internal_hr_ruling',
                     'language' => 'es',
