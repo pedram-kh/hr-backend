@@ -202,6 +202,17 @@ class DocumentIngestor
             return $document;
         });
 
+        // Sprint 7a (auto-propose-on-ingest, §7.2): an `unresolved` document is
+        // LLM-eligible (ADR-0011). Dispatch the AI tagging proposal as a QUEUED
+        // job AFTER the transaction commits — it must not block or fail ingest.
+        // The doc is already safely under_review (the embedding gate keeps it
+        // unretrievable); the queue self-populates and a human verifies. A
+        // `conflict` is human-adjudicated (the AI may suggest but never on the
+        // conflict path here), so only `unresolved` auto-triggers.
+        if (($tag['review']['reason'] ?? null) === 'unresolved') {
+            \App\Jobs\ProposeDocumentTags::dispatch($document->id);
+        }
+
         return [
             'document_uuid' => $document->uuid,
             'title' => $document->title,

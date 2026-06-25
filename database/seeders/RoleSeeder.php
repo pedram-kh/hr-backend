@@ -69,6 +69,16 @@ class RoleSeeder extends Seeder
         $guardrailsManage = Permission::findOrCreate('guardrails.manage', 'web');
         $roles['super_admin']->givePermissionTo($guardrailsManage);
 
+        // Sprint-7a ability (ADR-0011/0020). Kept in lockstep with
+        // 2026_06_26_100002_seed_vocabulary_approve_permission (the data migration
+        // that lands it on already-migrated databases); both are idempotent.
+        //  - vocabulary.approve : APPROVE a vocabulary proposal into the controlled
+        //    vocabulary (fold into aliases / create a new value) — super_admin ONLY
+        //    (the most-guarded write; the AI never approves). A super_admin may
+        //    propose-and-approve in one action. PROPOSING rides knowledge.edit.
+        $vocabularyApprove = Permission::findOrCreate('vocabulary.approve', 'web');
+        $roles['super_admin']->givePermissionTo($vocabularyApprove);
+
         app(PermissionRegistrar::class)->forgetCachedPermissions();
     }
 }

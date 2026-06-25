@@ -35,7 +35,10 @@ class DocumentController extends Controller
             ->selectRaw('(select count(*) from document_pages dp where dp.document_id = documents.id) as pages_total')
             ->selectRaw("(select count(*) from document_pages dp where dp.document_id = documents.id and length(btrim(coalesce(dp.text, ''))) > 0) as pages_with_text")
             ->selectRaw("exists(select 1 from document_review_tasks t where t.document_id = documents.id and t.status = 'open' and t.reason = 'conflict') as has_open_conflict")
-            ->selectRaw("exists(select 1 from document_review_tasks t where t.document_id = documents.id and t.status = 'open') as has_open_review");
+            ->selectRaw("exists(select 1 from document_review_tasks t where t.document_id = documents.id and t.status = 'open') as has_open_review")
+            // Sprint 7a: an unverified-AI proposal exists on this doc (drives the
+            // fuchsia --provenance-ai marker — unverified-AI ONLY).
+            ->selectRaw("exists(select 1 from tag_events te where te.entity_type = 'document' and te.entity_id = documents.id and te.source = 'ai_agent') as has_ai_proposal");
 
         if ($request->filled('tagging_status')) {
             $query->where('tagging_status', $request->string('tagging_status'));
@@ -56,7 +59,17 @@ class DocumentController extends Controller
             $query->whereHas('reviewTasks', fn ($q) => $q->where('status', 'open')->where('reason', 'conflict'));
         }
 
-        $documents = $query->orderByDesc('id')->paginate(50);
+        // Sprint 7a review queue: surface the lowest-confidence AI proposals
+        // first (the ones most needing a human). Nulls last, then by id.
+        if ($request->string('sort')->toString() === 'confidence') {
+            $query->orderByRaw('tagging_confidence is null')
+                ->orderBy('tagging_confidence')
+                ->orderByDesc('id');
+        } else {
+            $query->orderByDesc('id');
+        }
+
+        $documents = $query->paginate(50);
 
         $documents->getCollection()->transform(fn (Document $d) => $this->listRow($d));
 
@@ -91,6 +104,11 @@ class DocumentController extends Controller
             'authority_level' => $document->authority_level,
             'tagging_status' => $document->tagging_status,
             'tagging_confidence' => $document->tagging_confidence,
+            // Fuchsia marker (Sprint 7a): unverified-AI ONLY. True when an ai_agent
+            // proposal exists and the doc is still under_review. On verify this
+            // flips to false (the AI origin remains only as the timeline dot).
+            'is_ai_proposed' => $document->tagging_status === 'under_review'
+                && $events->contains(fn ($e) => $e->source === 'ai_agent'),
             'tags' => $this->tags($document),
             'topics' => $document->topics->map(fn ($t) => [
                 'id' => $t->id,
@@ -255,6 +273,28 @@ class DocumentController extends Controller
         });
 
         return response()->json(['status' => 'ok', 'tagging_status' => 'verified']);
+    }
+
+    /**
+     * Manual "re-suggest" (Sprint 7a, §7.2): re-run the AI tagging proposal for a
+     * document. The default trigger is automatic on ingest (a queued job); this
+     * is the admin-initiated equivalent. Only meaningful while a doc is still
+     * under_review (the proposal is inert — it never touches an answerable doc).
+     * Gated by knowledge.edit. Dispatches the same ProposeDocumentTags job.
+     */
+    public function resuggest(Request $request, string $uuid): JsonResponse
+    {
+        $document = Document::where('uuid', $uuid)->firstOrFail();
+
+        if ($document->tagging_status !== 'under_review') {
+            return response()->json([
+                'message' => 'Re-suggest applies only to a document still under review (an AI proposal is inert and never re-tags an already-verified document).',
+            ], 422);
+        }
+
+        \App\Jobs\ProposeDocumentTags::dispatch($document->id);
+
+        return response()->json(['status' => 'ok', 'note' => 'AI tagging proposal queued.']);
     }
 
     /** Re-assign a single facet from controlled vocabulary; writes provenance. */
@@ -532,8 +572,12 @@ class DocumentController extends Controller
             'retrieval_status' => $d->retrieval_status,
             'authority_level' => $d->authority_level,
             'tagging_status' => $d->tagging_status,
+            'tagging_confidence' => $d->tagging_confidence !== null ? (float) $d->tagging_confidence : null,
             'has_open_conflict' => (bool) $d->has_open_conflict,
             'has_open_review' => (bool) $d->has_open_review,
+            // Fuchsia marker (Sprint 7a): unverified-AI ONLY — an ai_agent proposal
+            // exists AND the doc has not been verified yet.
+            'is_ai_proposed' => (bool) $d->has_ai_proposal && $d->tagging_status === 'under_review',
             'empty_text' => ((int) $d->pages_total) > 0 && ((int) $d->pages_with_text) === 0,
         ];
     }

@@ -9,8 +9,10 @@ use App\Http\Controllers\Admin\EscalationController;
 use App\Http\Controllers\Admin\GuardrailsController;
 use App\Http\Controllers\Admin\HierarchyController;
 use App\Http\Controllers\Admin\HistoryController;
+use App\Http\Controllers\Admin\ReviewQueueController;
 use App\Http\Controllers\Admin\SandboxController;
 use App\Http\Controllers\Admin\VocabularyController;
+use App\Http\Controllers\Admin\VocabularyProposalController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\MeController;
@@ -119,6 +121,34 @@ Route::middleware(['auth:sanctum', 'admin', 'active'])->prefix('admin')->group(f
         Route::patch('/documents/{uuid}', [DocumentController::class, 'updateLifecycle']);
         Route::post('/documents/{uuid}/topics', [DocumentController::class, 'addTopic']);
         Route::delete('/documents/{uuid}/topics/{topicId}', [DocumentController::class, 'removeTopic']);
+    });
+
+    /*
+    | Sprint 7a — Messy-tail document intelligence (ADR-0011/0020). READS are
+    | open to any admin (browse the AI review/expiry/proposal queues). WRITES
+    | are gated: the AI re-suggest + the propose-vocabulary + the succession
+    | handoff need knowledge.edit; APPROVING a vocabulary proposal into the
+    | controlled vocabulary needs vocabulary.approve (super_admin). The AI itself
+    | only proposes (the queued ProposeDocumentTags job); it never hits a route.
+    */
+    // Expiry queue (read) + the proposed-vocabulary list (read).
+    Route::get('/review/expiry', [ReviewQueueController::class, 'expiry']);
+    Route::get('/vocabulary-proposals', [VocabularyProposalController::class, 'index']);
+    Route::get('/vocabulary-proposals/suggest', [VocabularyProposalController::class, 'suggest']);
+
+    // knowledge.edit writes: re-run AI tagging, propose vocabulary, confirm a
+    // succession handoff (the predecessor_document_id write).
+    Route::middleware('ability:knowledge.edit')->group(function () {
+        Route::post('/documents/{uuid}/resuggest', [DocumentController::class, 'resuggest']);
+        Route::post('/vocabulary-proposals', [VocabularyProposalController::class, 'store']);
+        Route::post('/review/expiry/{taskId}/resolve', [ReviewQueueController::class, 'resolveExpiry']);
+    });
+
+    // vocabulary.approve writes (super_admin): approve/reject a proposal into the
+    // controlled vocabulary (fold into aliases / create a new value).
+    Route::middleware('ability:vocabulary.approve')->group(function () {
+        Route::post('/vocabulary-proposals/{id}/approve', [VocabularyProposalController::class, 'approve']);
+        Route::post('/vocabulary-proposals/{id}/reject', [VocabularyProposalController::class, 'reject']);
     });
 
     // Answer-model key handling (Sprint 2b-1, ADR-0015). super_admin enforced in

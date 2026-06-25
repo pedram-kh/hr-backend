@@ -250,4 +250,40 @@ class ExtractionClient
 
         return $response->json();
     }
+
+    /**
+     * Propose document-level facets for an unresolved document (Sprint 7a,
+     * ADR-0011/0020). hr-ai READS the page text hr-backend already holds and
+     * RETURNS proposed facets + confidence bound to the CLOSED candidate
+     * vocabulary — it writes nothing, never migrates. The decrypted answer-model
+     * key is passed in the body per call (same envelope as synthesise()).
+     *
+     * Returns { facets, topics, raw_unmatched_values, overall_confidence,
+     * trace_fragment } or, on a provider/transport failure, { error: ... } so the
+     * caller (TagProposalService) leaves the doc in the human queue — a tagging
+     * failure never blocks ingest nor surfaces an answerable doc.
+     *
+     * @param  array<string,mixed>  $candidateVocabulary
+     * @param  array{provider:string,model:string,endpoint:?string}  $providerConfig
+     * @return array<string,mixed>
+     */
+    public function proposeTags(int $documentId, string $pageText, array $candidateVocabulary, string $decryptedKey, array $providerConfig): array
+    {
+        $response = Http::withHeaders(['X-Internal-Token' => $this->token()])
+            ->timeout(120)
+            ->acceptJson()
+            ->post("{$this->base()}/propose-tags", [
+                'document_id' => $documentId,
+                'page_text' => $pageText,
+                'candidate_vocabulary' => $candidateVocabulary,
+                'provider_api_key' => $decryptedKey,
+                'provider_config' => $providerConfig,
+            ]);
+
+        if (! $response->successful()) {
+            return ['error' => 'propose_unavailable', 'detail' => "hr-ai /propose-tags failed ({$response->status()})"];
+        }
+
+        return $response->json();
+    }
 }

@@ -65,6 +65,10 @@ class IdentityPresenter
                 'history.view_all' => $account->can('history.view_all'),
                 'directory.manage' => $account->can('directory.manage'),
                 'admin.manage' => $account->can('admin.manage'),
+                'guardrails.manage' => $account->can('guardrails.manage'),
+                // Sprint 7a (ADR-0011/0020): approve a vocabulary proposal into the
+                // controlled vocabulary — super_admin only (the most-guarded write).
+                'vocabulary.approve' => $account->can('vocabulary.approve'),
             ],
         ];
     }

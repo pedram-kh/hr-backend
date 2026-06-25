@@ -417,6 +417,61 @@ answer still escalates with a benign tone set; convert-by-reason is restrict-onl
 (`sensitive_topic` never; adding it is a no-op); and the ability matrix (auditor
 read-only, super_admin write, others 403). `php artisan test`.
 
+## Messy-tail document intelligence (Sprint 7a, ADR-0020)
+
+The LLM tagging tier + propose-new-vocabulary + the expiry/lineage write-side —
+all **AI proposes → human confirms**, no answer-loop change.
+
+- **Auto-tagging (queued).** A `reason = unresolved` ingest dispatches
+  `ProposeDocumentTags` (after the DB commit, never blocking ingest — the same
+  background posture as embed). The job calls `ExtractionClient::proposeTags()` →
+  hr-ai `POST /propose-tags`; `TagProposalService` persists the result as
+  `ai_agent` `tag_events` + **unverified** `ai_agent` `document_topics` +
+  `tagging_confidence`, and merges variant hints into the task's
+  `raw_unmatched_values`. A manual `POST /admin/documents/{uuid}/resuggest`
+  re-runs it (`knowledge.edit`).
+- **The two safety invariants (enforced + tested).** (1) the AI leaves
+  `tagging_status = under_review` — never `auto_proposed`/`verified` — so the
+  embedding gate (`tagging_status != under_review`) keeps the doc unretrievable
+  (0 chunks) until a human verifies via the unchanged Sprint-3 `confirm()`; (2)
+  the AI writes **only** `ai_agent` provenance, never the authoritative scope FKs
+  (`convenio_id`/`document_type_id`/validity/`retrieval_status`).
+- **Propose-new-vocabulary.** `VocabularyProposalService` + controller: propose
+  (`knowledge.edit`) / approve · reject (`vocabulary.approve`, super_admin may
+  propose-and-approve). Variant→alias is the default (deterministic
+  similarity, no model dependency); creating a new value is deliberate; convenios
+  are registry-only. Approval writes the alias/new value with provenance and
+  resolves the originating doc's `raw_unmatched_value`.
+- **Expiry queue + lineage write-side.** `php artisan reviews:scan-expiry
+  [--days=90] [--dry-run]` materializes `expiry` `document_review_tasks` for
+  active prose within 90 days of `validity_end` (or already past, incl. the
+  Sprint-3 `date_expired_active` staleness docs). The succession handoff
+  (`POST /admin/review/expiry/{taskId}/resolve`) writes `predecessor_document_id`
+  on human confirmation — **same-convenio candidates only, never auto-retire**.
+  (AI *suggestion* of succession candidates is deferred to Sprint 7d.)
+
+### Additive migrations (Sprint 7a)
+
+1. `create_vocabulary_proposals_table` (the propose→approve record).
+2. `seed_vocabulary_approve_permission` (idempotent data migration; `RoleSeeder`
+   grants `vocabulary.approve` to `super_admin` in lockstep).
+
+No migration for the `ai_agent` `tag_events` lane (enum value existed),
+`predecessor_document_id` (column existed — 7a adds the writer), or the `expiry`
+task type (enum existed — 7a adds the writer). No hr-ai migration (ADR-0007).
+
+### Tests (the acceptance proof)
+
+`tests/Feature/Sprint7aTagProposalInvariantTest.php` proves both invariants by
+hitting the service/endpoints directly: after the AI proposes, the doc is still
+`under_review` with **0 `document_chunks`** (genuinely unretrievable) and its
+scope FKs are **unchanged** from their pre-proposal state; a human verify flips it
+to embeddable. Plus: `knowledge_editor` can propose but not approve vocabulary;
+`super_admin` propose-and-approve writes a new sector; variant→alias is offered
+and folds into the existing value; a confirmed succession writes
+`predecessor_document_id` (same-convenio) and never auto-retires; a cross-convenio
+succession is rejected. `php artisan test`.
+
 ## Mail transport
 
 Selected by `MAIL_MAILER` with no code change:
