@@ -18,6 +18,9 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'admin' => \App\Http\Middleware\EnsureAdmin::class,
             'ability' => \App\Http\Middleware\EnsureCan::class,
+            // Deactivation removes access immediately (ADR-0018): an inactive
+            // admin/employee is refused on every authenticated request.
+            'active' => \App\Http\Middleware\EnsureActiveAccount::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

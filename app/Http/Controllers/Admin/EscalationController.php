@@ -94,18 +94,30 @@ class EscalationController extends Controller
      * session's messages) + the escalation trace + the activity log. The
      * conversation is keyed to card.chat_session_id (the access guard).
      */
-    public function show(string $uuid): JsonResponse
+    public function show(string $uuid, Request $request): JsonResponse
     {
         $card = $this->find($uuid);
         $card->load(['employee:id,uuid,full_name,convenio_id', 'employee.convenio:id,numero,name', 'assignedTo:id,full_name', 'topic:id,name', 'sourceMessage:id,content', 'resolution', 'events.actor:id,full_name']);
 
-        $conversation = $card->session !== null
+        // Sprint-5 tightening (ADR-0018 §4.4): the conversation PAYLOAD requires
+        // `escalation.work` OR `history.view_all`. This denies a knowledge_editor
+        // (neither) any chat access — including here — WITHOUT loosening the
+        // hr_agent boundary (hr_agent has escalation.work and still sees only this
+        // card's session, keyed to card.chat_session_id, unchanged). The card
+        // meta/board listing stays broadly readable; only the messages are gated.
+        $actor = $request->user();
+        $canSeeConversation = $actor !== null
+            && method_exists($actor, 'can')
+            && ($actor->can('escalation.work') || $actor->can('history.view_all'));
+
+        $conversation = ($canSeeConversation && $card->session !== null)
             ? $this->presenter->present($card->session, ConversationPresenter::AUDIENCE_ADMIN)
             : [];
 
         return response()->json([
             'card' => $this->cardSummary($card),
             'conversation' => $conversation,
+            'conversation_restricted' => ! $canSeeConversation,
             'resolution' => $card->resolution !== null ? [
                 'resolution_text' => $card->resolution->resolution_text,
                 'converted_to_document_id' => $card->resolution->converted_to_document_id,

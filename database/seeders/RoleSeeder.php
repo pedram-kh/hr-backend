@@ -41,6 +41,23 @@ class RoleSeeder extends Seeder
         $roles['super_admin']->givePermissionTo($escalationWork);
         $roles['hr_agent']->givePermissionTo($escalationWork);
 
+        // Sprint-5 abilities (ADR-0018 + resolved open questions). Kept in lockstep
+        // with 2026_06_25_100002_seed_sprint5_permissions (the data migration that
+        // lands these on already-migrated databases); both are idempotent.
+        //  - history.view_all : the gated full-history browser/search — super_admin
+        //    + auditor ONLY (a deliberately-granted oversight ability, distinct from
+        //    escalation.work; an hr_agent stays card-scoped, knowledge_editor none).
+        //  - directory.manage : employee directory CRUD/CSV + reads — super_admin +
+        //    hr_agent (agents do day-to-day "transferred province" corrections, ADR-0004).
+        //  - admin.manage     : admin accounts + role assignment — super_admin ONLY.
+        $historyViewAll = Permission::findOrCreate('history.view_all', 'web');
+        $directoryManage = Permission::findOrCreate('directory.manage', 'web');
+        $adminManage = Permission::findOrCreate('admin.manage', 'web');
+
+        $roles['super_admin']->givePermissionTo($historyViewAll, $directoryManage, $adminManage);
+        $roles['auditor']->givePermissionTo($historyViewAll);
+        $roles['hr_agent']->givePermissionTo($directoryManage);
+
         app(PermissionRegistrar::class)->forgetCachedPermissions();
     }
 }

@@ -122,11 +122,13 @@ class AuthController extends Controller
      */
     private function resolveAccount(string $email): array
     {
-        if ($employee = Employee::where('email', $email)->first()) {
+        // Inactive accounts cannot log in (ADR-0018): a deactivated admin OR
+        // employee is treated as not-registered, so no code is ever sent.
+        if ($employee = Employee::where('email', $email)->where('status', 'active')->first()) {
             return [$employee, 'employee'];
         }
 
-        if ($admin = Admin::where('email', $email)->first()) {
+        if ($admin = Admin::where('email', $email)->where('status', 'active')->first()) {
             return [$admin, 'admin'];
         }
 
@@ -135,8 +137,10 @@ class AuthController extends Controller
 
     private function findAccount(string $email, string $accountType): Employee|Admin|null
     {
+        // Same active-status gate at verification: a code that pre-dates a
+        // deactivation cannot be redeemed into a token.
         return $accountType === 'admin'
-            ? Admin::where('email', $email)->first()
-            : Employee::where('email', $email)->first();
+            ? Admin::where('email', $email)->where('status', 'active')->first()
+            : Employee::where('email', $email)->where('status', 'active')->first();
     }
 }

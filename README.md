@@ -267,6 +267,93 @@ typed text, whitespace-normalised); `hr-ai` is **not** modified.
 > (`SEED_HR_AGENT_EMAIL`, default `agent@example.com`) with the `escalation.work`
 > ability; `RoleSeeder` grants `escalation.work` to `super_admin` + `hr_agent`.
 
+## User & directory management + role-scoped history (Sprint 5, ADR-0018)
+
+`hr-backend` owns every write; the directory, admin/role management, and the
+full-history browser are all **server-enforced** by ability (`EnsureCan`) — the
+UI only hides, the server is the boundary.
+
+**Employee directory** — behind **`directory.manage`** (super_admin + hr_agent;
+reads included). FK pickers into existing vocabulary only (ADR-0011). Every
+change writes `employee_audit_log` (one row per field, same transaction —
+`EmployeeAuditLogger`).
+
+- `GET /admin/employees` — search (`q`) / filter (`convenio_id`, `territory_id`,
+  `sector_id`, `status`), paginated.
+- `GET /admin/employees/{uuid}` — detail + the audit-log timeline.
+- `POST /admin/employees` — create (writes a `*`=`created` baseline audit).
+- `PATCH /admin/employees/{uuid}` — edit. Changing `email` returns **409
+  `email_change_confirmation_required`** unless `confirm_email_change=true`
+  (email is the login key). Editing does **not** bump `profile_last_reviewed_at`.
+- `POST /admin/employees/{uuid}/mark-reviewed` — explicit review attestation.
+- `POST /admin/employees/import/validate` — CSV **dry run**: a per-row pass/fail
+  report, writes nothing.
+- `POST /admin/employees/import` — CSV **apply**: imports the valid rows, each in
+  its own transaction with its audit (not whole-file-atomic; bad rows reported,
+  never dropped). Headers (by name): `email`, `full_name`, `convenio_numero`
+  (required); `territory_code`, `job_category`, `employment_type`,
+  `work_location`, `employee_external_id`, `start_date` (optional).
+- `GET /admin/job-categories?convenio_id=` — convenio-scoped category picker.
+
+**Admin & role management** — behind **`admin.manage`** (super_admin only — the
+most privileged action, it can grant `history.view_all`).
+
+- `GET /admin/admins` — list admins (roles + abilities) + the assignable roles.
+- `POST /admin/admins` — create (with optional roles).
+- `PATCH /admin/admins/{uuid}` — edit name/status; **deactivation revokes the
+  admin's Sanctum tokens**.
+- `PUT /admin/admins/{uuid}/roles` — assign the four roles (spatie `syncRoles`).
+
+**Status enforcement** — both OTP paths refuse an inactive account (admin *or*
+employee), and `EnsureActiveAccount` (alias `active`, on `/me`, `/chat/*`, and
+`/admin/*`) refuses any authenticated request from an inactive account. So a
+deactivated employee can't chat, and a deactivated admin loses access at once.
+
+**Full-history browser + search** — behind **`history.view_all`** (super_admin +
+auditor only). Read-only over existing chat data. EVERY access writes
+`conversation_access_log` (incl. super_admin — no role is exempt).
+
+- `GET /admin/history/conversations` — list/filter all sessions
+  (`employee_uuid`, `convenio_id`, `territory_id`, `from`/`to` on
+  `last_activity_at`, `reason`, `outcome=answered|escalated`).
+- `GET /admin/history/conversations/{sessionUuid}` — open a conversation (writes
+  a `conversation_view` row).
+- `GET /admin/history/employees/{employeeUuid}` — one employee's sessions.
+- `GET /admin/history/search?q=` — content search; brief snippets (writes one
+  `history_search` row, not per-employee).
+
+The **Sprint-4 card-scoped boundary is unchanged** (keyed to
+`card.chat_session_id`). Sprint 5 tightens only the `knowledge_editor` read:
+`GET /admin/escalations/{uuid}` now withholds the **conversation payload** unless
+the caller holds `escalation.work` OR `history.view_all` (`conversation_restricted`
+in the response).
+
+### Ability → role (spatie, seeded idempotently)
+
+`RoleSeeder` and the data migration `2026_06_25_100002_seed_sprint5_permissions`
+are kept in lockstep (so prod `migrate` and a fresh seed both land the abilities):
+`directory.manage` → super_admin + hr_agent; `history.view_all` → super_admin +
+auditor; `admin.manage` → super_admin.
+
+### Additive migrations (Sprint 5)
+
+1. `conversation_access_log` (append-only — who viewed whose conversation, when).
+2. `seed_sprint5_permissions` (idempotent data migration for the three abilities).
+
+No `employees`/`admins` column changes (confirmed — the schema already had every
+field).
+
+### Tests (the acceptance proof)
+
+`tests/Feature/Sprint5AccessMatrixTest.php` proves the access matrix server-side
+by hitting endpoints directly: hr_agent → 403 on every `history.view_all`
+endpoint but 200 on its own card; knowledge_editor → 403 on all conversation
+reads (incl. the tightened card payload); auditor + super_admin → 200 on history
+with a `conversation_access_log` row written (incl. super_admin's own read); a
+deactivated admin → refused. Run against a Postgres test DB (the schema is
+Postgres-specific — pgvector/enums), configured in `phpunit.xml`
+(`hr_platform_test`); `php artisan test`.
+
 ## Mail transport
 
 Selected by `MAIL_MAILER` with no code change:

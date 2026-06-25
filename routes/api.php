@@ -1,10 +1,13 @@
 <?php
 
+use App\Http\Controllers\Admin\AdminController;
 use App\Http\Controllers\Admin\AnswerModelController;
 use App\Http\Controllers\Admin\CoverageGapController;
 use App\Http\Controllers\Admin\DocumentController;
+use App\Http\Controllers\Admin\EmployeeDirectoryController;
 use App\Http\Controllers\Admin\EscalationController;
 use App\Http\Controllers\Admin\HierarchyController;
+use App\Http\Controllers\Admin\HistoryController;
 use App\Http\Controllers\Admin\SandboxController;
 use App\Http\Controllers\Admin\VocabularyController;
 use App\Http\Controllers\AuthController;
@@ -24,32 +27,77 @@ Route::post('/auth/verify-code', [AuthController::class, 'verifyCode'])
     ->middleware('throttle:otp-verify');
 
 Route::get('/me', [MeController::class, 'show'])
-    ->middleware('auth:sanctum');
+    ->middleware(['auth:sanctum', 'active']);
 
 /*
 | Employee chat (Sprint 2b-1). One prose turn → scoped, cited answer or honest
-| escalation. Employee-only (the controller rejects admins).
+| escalation. Employee-only (the controller rejects admins). The `active` gate
+| means a deactivated employee can't chat (ADR-0018).
 */
 Route::post('/chat/message', [ChatController::class, 'message'])
-    ->middleware('auth:sanctum');
+    ->middleware(['auth:sanctum', 'active']);
 
 // Sprint 4 (Q-D): load the caller's own most-recent session so the employee
 // sees a human (hr_agent) reply land in the chat (hydrate on mount + poll).
 // Self-scoped; employee-only. No session list/picker (that is Sprint 5).
 Route::get('/chat/session', [ChatController::class, 'session'])
-    ->middleware('auth:sanctum');
+    ->middleware(['auth:sanctum', 'active']);
 
 /*
 | Admin knowledge-management API (Sprint 1). Admin-only (Sanctum + admin guard).
 | Documents ingestion, the verification table/detail, and tag confirm/re-assign.
 */
-Route::middleware(['auth:sanctum', 'admin'])->prefix('admin')->group(function () {
+Route::middleware(['auth:sanctum', 'admin', 'active'])->prefix('admin')->group(function () {
     Route::get('/documents', [DocumentController::class, 'index']);
     Route::post('/documents/upload', [DocumentController::class, 'upload']);
     Route::get('/documents/{uuid}', [DocumentController::class, 'show']);
     Route::post('/documents/{uuid}/confirm', [DocumentController::class, 'confirm']);
     Route::get('/documents/{uuid}/pages/{page}/image', [DocumentController::class, 'pageImage']);
     Route::get('/vocabulary/{type}', [VocabularyController::class, 'index']);
+    // Convenio-scoped job categories for the directory FK picker (Sprint 5).
+    Route::get('/job-categories', [VocabularyController::class, 'jobCategories']);
+
+    /*
+    | Sprint 5 — Employee directory (ADR-0004). CRUD + search/filter + CSV
+    | bootstrap. Behind directory.manage (super_admin + hr_agent), reads
+    | included (directory PII). EVERY change writes employee_audit_log; editing
+    | email requires confirm_email_change (409). FK pickers into existing
+    | vocabulary only.
+    */
+    Route::middleware('ability:directory.manage')->group(function () {
+        Route::get('/employees', [EmployeeDirectoryController::class, 'index']);
+        Route::post('/employees', [EmployeeDirectoryController::class, 'store']);
+        Route::get('/employees/{uuid}', [EmployeeDirectoryController::class, 'show']);
+        Route::patch('/employees/{uuid}', [EmployeeDirectoryController::class, 'update']);
+        Route::post('/employees/{uuid}/mark-reviewed', [EmployeeDirectoryController::class, 'markReviewed']);
+        Route::post('/employees/import/validate', [EmployeeDirectoryController::class, 'importValidate']);
+        Route::post('/employees/import', [EmployeeDirectoryController::class, 'import']);
+    });
+
+    /*
+    | Sprint 5 — Admin & role management. Behind admin.manage (super_admin ONLY):
+    | creating an admin / granting history.view_all is the most privileged action
+    | (ADR-0018). Roles via spatie syncRoles; deactivation revokes tokens.
+    */
+    Route::middleware('ability:admin.manage')->group(function () {
+        Route::get('/admins', [AdminController::class, 'index']);
+        Route::post('/admins', [AdminController::class, 'store']);
+        Route::patch('/admins/{uuid}', [AdminController::class, 'update']);
+        Route::put('/admins/{uuid}/roles', [AdminController::class, 'syncRoles']);
+    });
+
+    /*
+    | Sprint 5 — The gated full-History browser + search (ADR-0018). Behind
+    | history.view_all (super_admin + auditor ONLY). The SERVER is the boundary:
+    | an hr_agent / knowledge_editor hitting these directly 403s. EVERY
+    | conversation access writes conversation_access_log (incl. super_admin).
+    */
+    Route::middleware('ability:history.view_all')->group(function () {
+        Route::get('/history/conversations', [HistoryController::class, 'index']);
+        Route::get('/history/conversations/{sessionUuid}', [HistoryController::class, 'show']);
+        Route::get('/history/employees/{employeeUuid}', [HistoryController::class, 'employee']);
+        Route::get('/history/search', [HistoryController::class, 'search']);
+    });
 
     /*
     | Sprint 3 — Knowledge Center. READS are open to any admin (an auditor

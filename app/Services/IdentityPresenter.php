@@ -55,12 +55,16 @@ class IdentityPresenter
             'full_name' => $account->full_name,
             'status' => $account->status,
             'roles' => $account->getRoleNames()->values(),
-            // Sprint 3/4: surface the granular abilities the UI gates on (edit
-            // affordances and the escalation board are hidden/disabled without
-            // the matching ability).
+            // Sprint 3/4/5: surface the granular abilities the UI gates on. The
+            // UI only HIDES on these — the server enforces them on every endpoint
+            // (ADR-0018). history.view_all gates the full-history browser/search;
+            // directory.manage the employee directory; admin.manage admin/role mgmt.
             'abilities' => [
                 'knowledge.edit' => $account->can('knowledge.edit'),
                 'escalation.work' => $account->can('escalation.work'),
+                'history.view_all' => $account->can('history.view_all'),
+                'directory.manage' => $account->can('directory.manage'),
+                'admin.manage' => $account->can('admin.manage'),
             ],
         ];
     }
