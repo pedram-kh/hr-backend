@@ -51,7 +51,10 @@ class RouterService
         '/\bcu[aá]nto\s+(gano|gana|gan[aá]is|cobro|cobra|cobr[aá]is|ingreso|ingresa|me\s+pagan?|se\s+(gana|cobra|paga))\b/iu',
     ];
 
-    public function __construct(private readonly ExtractionClient $ai) {}
+    public function __construct(
+        private readonly ExtractionClient $ai,
+        private readonly GuardrailPolicy $policy,
+    ) {}
 
     /**
      * Classify one (already guardrail-cleared) question.
@@ -132,7 +135,11 @@ class RouterService
             fn ($s) => trim((string) $s),
             (array) ($resp['subqueries'] ?? [])
         ), fn ($s) => $s !== ''));
-        $floor = (float) config('hr.router_confidence_floor', 0.50);
+        // Effective router floor = max(hardcoded floor, admin override) via
+        // GuardrailPolicy (Sprint 6, ADR-0019, secondary knob). Raising it pushes
+        // more of the uncertain middle to the safe prose path; it can never drop
+        // below config('hr.router_confidence_floor').
+        $floor = $this->policy->routerFloor();
 
         // Uncertain → FAIL SAFE to prose (never a confident misroute). A confident
         // off_domain or salary is trusted; the uncertain middle defaults to prose.

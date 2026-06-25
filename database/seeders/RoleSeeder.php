@@ -58,6 +58,17 @@ class RoleSeeder extends Seeder
         $roles['auditor']->givePermissionTo($historyViewAll);
         $roles['hr_agent']->givePermissionTo($directoryManage);
 
+        // Sprint-6 ability (ADR-0019). Kept in lockstep with
+        // 2026_06_25_110004_seed_guardrails_manage_permission (the data migration
+        // that lands it on already-migrated databases); both are idempotent.
+        //  - guardrails.manage : WRITE the admin guardrail layer (thresholds,
+        //    blocked topics, off-domain, tone, convert-by-reason) — super_admin
+        //    ONLY (the most safety-sensitive surface, beside admin.manage). READS
+        //    are open to any admin; auditor reads read-only; hr_agent / KE get no
+        //    write. The hardcoded GuardrailService baseline is never editable.
+        $guardrailsManage = Permission::findOrCreate('guardrails.manage', 'web');
+        $roles['super_admin']->givePermissionTo($guardrailsManage);
+
         app(PermissionRegistrar::class)->forgetCachedPermissions();
     }
 }

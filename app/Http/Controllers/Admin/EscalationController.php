@@ -237,6 +237,21 @@ class EscalationController extends Controller
             return response()->json(['code' => $e->getMessage(), 'message' => 'No se pudo resolver la tarjeta.'], 422);
         }
 
+        // Convert-by-reason policy (Sprint 6, ADR-0019, restrict-only). The card's
+        // escalation reason is not in the effective convert-by-reason allow-set
+        // (e.g. a sensitive_topic card, which can never be converted). Nothing is
+        // published; the card is untouched.
+        if (($result['outcome'] ?? null) === 'convert_blocked') {
+            return response()->json([
+                'code' => 'convert_blocked',
+                'message' => 'Esta escalación no puede convertirse en conocimiento por su motivo ('
+                    .($result['reason'] ?? '—').'). La política de guardarraíles restringe qué motivos '
+                    .'son convertibles; un tema sensible nunca puede publicarse como respuesta.',
+                'reason' => $result['reason'] ?? null,
+                'allowed_reasons' => $result['allowed'] ?? [],
+            ], 409);
+        }
+
         if (($result['outcome'] ?? null) === 'publish_blocked') {
             return response()->json([
                 'code' => 'publish_blocked',

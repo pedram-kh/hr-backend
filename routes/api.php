@@ -6,6 +6,7 @@ use App\Http\Controllers\Admin\CoverageGapController;
 use App\Http\Controllers\Admin\DocumentController;
 use App\Http\Controllers\Admin\EmployeeDirectoryController;
 use App\Http\Controllers\Admin\EscalationController;
+use App\Http\Controllers\Admin\GuardrailsController;
 use App\Http\Controllers\Admin\HierarchyController;
 use App\Http\Controllers\Admin\HistoryController;
 use App\Http\Controllers\Admin\SandboxController;
@@ -140,5 +141,21 @@ Route::middleware(['auth:sanctum', 'admin', 'active'])->prefix('admin')->group(f
         Route::patch('/escalations/{uuid}', [EscalationController::class, 'update']);
         Route::post('/escalations/{uuid}/reply', [EscalationController::class, 'reply']);
         Route::post('/escalations/{uuid}/resolve', [EscalationController::class, 'resolve']);
+    });
+
+    /*
+    | Sprint 6 — Guardrails configuration (ADR-0019). The admin layer ON TOP of
+    | the hardcoded GuardrailService baseline. READ is open to any admin (auditor
+    | browses read-only — oversight). WRITES are gated by guardrails.manage
+    | (super_admin ONLY — the most safety-sensitive surface). The SERVER is the
+    | boundary: a below-floor threshold is rejected (422, not clamped); the
+    | baseline patterns are code, never editable; every change is audited to
+    | guardrail_config_events. Additive / raise-only / stricter_of(baseline, admin).
+    */
+    Route::get('/guardrails', [GuardrailsController::class, 'index']);
+    Route::middleware('ability:guardrails.manage')->group(function () {
+        Route::post('/guardrails', [GuardrailsController::class, 'store']);
+        Route::post('/guardrails/blocked-topics', [GuardrailsController::class, 'addBlockedTopic']);
+        Route::delete('/guardrails/blocked-topics/{id}', [GuardrailsController::class, 'disableBlockedTopic']);
     });
 });

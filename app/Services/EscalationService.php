@@ -35,7 +35,10 @@ class EscalationService
         'closed' => ['in_progress'],
     ];
 
-    public function __construct(private readonly RulingPublisher $publisher) {}
+    public function __construct(
+        private readonly RulingPublisher $publisher,
+        private readonly GuardrailPolicy $policy,
+    ) {}
 
     /**
      * Assign and/or move a card. Either field may be provided. Returns the fresh
@@ -136,6 +139,19 @@ class EscalationService
 
                 return ['outcome' => 'resolved', 'card' => $card->fresh(), 'document' => null, 'publish' => null, 'resolution' => $resolution];
             });
+        }
+
+        // --- Convert-by-reason policy (Sprint 6, ADR-0019, restrict-only) -------
+        // The effective allow-set is INTERSECTION(hardcoded baseline, admin). A
+        // reason the policy disallows cannot be converted into an answerable
+        // ruling — notably `sensitive_topic`, which is NEVER in the baseline set
+        // (a sensitive resolution must not become a published, retrievable
+        // answer). Admins can only RESTRICT further, never loosen. Audited +
+        // surfaced as a 409 by the controller; the card is untouched.
+        if (! $this->policy->canConvertReason($card->reason)) {
+            $this->log($card, 'convert_blocked', $card->reason, null, $actor, 'convert blocked by guardrails policy — reason not in the convert-by-reason allow-set');
+
+            return ['outcome' => 'convert_blocked', 'reason' => $card->reason, 'allowed' => $this->policy->convertAllowedReasons()];
         }
 
         // --- Convert → Save as knowledge ---------------------------------------

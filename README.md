@@ -354,6 +354,69 @@ deactivated admin → refused. Run against a Postgres test DB (the schema is
 Postgres-specific — pgvector/enums), configured in `phpunit.xml`
 (`hr_platform_test`); `php artisan test`.
 
+## Guardrails configuration (Sprint 6, ADR-0019)
+
+The admin layer **on top of** the hardcoded `GuardrailService` baseline + the
+`config/hr.php` floors — **additive, raise-only, server-enforced**. The baseline
+stays code (uneditable); the admin layer is data that can only *tighten*. The
+engine reads `stricter_of(baseline, admin)` from one read-model, **`GuardrailPolicy`**
+(cached, busted on every write) — `ChatService` / `RouterService` /
+`EscalationService` receive the already-combined value, never the raw admin one.
+
+**Five knobs** (all additive):
+- **Thresholds** — `retrieval_score_floor` (Check A), `answer_confidence_floor`
+  (Check C, the *tiebreaker*), `router_confidence_floor` (secondary): each
+  `max(hardcoded floor, admin)`. A below-floor write is **rejected (422), not
+  clamped** (`StoreGuardrailConfigRequest` + `floorViolation`).
+- **Blocked topics / off-domain** — an **add-only union** over the baseline,
+  checked at the **same pre-router point** (so an admin-blocked question never
+  reaches hr-ai), matched as a normalized, accent-insensitive, **word-boundary
+  literal** — never raw regex.
+- **Off-domain message** — display copy only; changes no gate.
+- **Tone** — injected into a **synthesis-local** string only (never into the
+  question used for `/ground`, the router, or Check B). Structurally cannot bypass
+  a gate; a write-time sanitizer also rejects override phrasing.
+- **Convert-by-reason** — an **intersection** with a hardcoded baseline allow-set
+  (restrict-only); `sensitive_topic` is never convertible.
+
+**Endpoints** — read open to any admin (auditor read-only); writes gated by the
+new **`guardrails.manage`** ability (`super_admin` only):
+- `GET /admin/guardrails` — full console state (each knob's admin value + inline
+  hardcoded floor + effective value, the add-only lists, the convert policy, the
+  change history, `can_manage`).
+- `POST /admin/guardrails` — write the scalar config (thresholds, off-domain
+  message, tone, convert-by-reason). Below-floor → **422** `threshold_below_floor`;
+  tone override phrasing → **422** `tone_override_rejected`.
+- `POST /admin/guardrails/blocked-topics` `{ pattern, kind }` — add a trigger.
+- `DELETE /admin/guardrails/blocked-topics/{id}` — soft-disable (never hard delete).
+
+Every accepted change is appended to **`guardrail_config_events`** (who, when,
+from→to); a rejected below-floor write writes **no** row.
+
+### Additive migrations (Sprint 6)
+
+1. `guardrail_config` (single global row — typed thresholds + message + tone +
+   convert allow-set).
+2. `guardrail_blocked_topics` (admin add-only blocked-topic / off-domain list).
+3. `guardrail_config_events` (append-only audit).
+4. `seed_guardrails_manage_permission` (idempotent data migration; `RoleSeeder`
+   grants `guardrails.manage` to `super_admin` in lockstep).
+
+No `config/hr.php` change (floors stay the floor-of-the-floor), no hr-ai migration,
+no new hr-ai endpoint (tone rides the existing `/synthesise` question argument).
+
+### Tests (the acceptance proof)
+
+`tests/Feature/Sprint6GuardrailInvariantTest.php` proves the raise-only invariant
+server-side by hitting endpoints directly: below-floor POST → 422 (rejected, not
+clamped, no write, no audit row); a raised floor flips a previously-answered
+question to an escalation (before/after trace); an admin blocked topic escalates
+while the baseline still fires first; tone is **synthesis-local** and `/ground`
+receives the **raw** question; a hostile-tone phrase is rejected and an ungrounded
+answer still escalates with a benign tone set; convert-by-reason is restrict-only
+(`sensitive_topic` never; adding it is a no-op); and the ability matrix (auditor
+read-only, super_admin write, others 403). `php artisan test`.
+
 ## Mail transport
 
 Selected by `MAIL_MAILER` with no code change:

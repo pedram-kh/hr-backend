@@ -111,6 +111,7 @@ class ChatService
         private readonly RouterService $router,
         private readonly SalaryAnswerService $salary,
         private readonly GroundingService $grounding,
+        private readonly GuardrailPolicy $policy,
     ) {}
 
     /**
@@ -146,17 +147,42 @@ class ChatService
         ];
 
         // --- Step 2: guardrail baseline (BEFORE the router and any hr-ai call) ---
+        // The HARDCODED baseline runs first, unconditionally. It is the floor and
+        // is never weakened by the admin layer.
         $guard = $this->guardrail->check($question);
         if ($guard['fired']) {
             $trace['guardrail_check'] = $guard;
             $trace['floor_decision'] = [
-                'retrieval_score_floor' => (float) config('hr.retrieval_score_floor'),
-                'answer_confidence_floor' => (float) config('hr.answer_confidence_floor'),
+                'retrieval_score_floor' => $this->policy->retrievalFloor(),
+                'answer_confidence_floor' => $this->policy->confidenceFloor(),
                 'outcome' => 'escalate',
                 'escalation_reason' => $guard['reason'],
             ];
 
             return $this->persistTurn($session, $employee, $question, self::ESCALATION_MESSAGE, [], $trace, 'escalate', $guard['reason']);
+        }
+
+        // --- Step 2b: admin guardrail layer (Sprint 6, ADR-0019) — a pure UNION on
+        // top of the baseline, applied at the SAME pre-router point so an
+        // admin-blocked question ALSO never reaches hr-ai (the privacy guarantee).
+        // The baseline already returned above; this can only ADD escalations,
+        // never suppress one. blocked_topic → sensitive_topic; off_domain → the
+        // narrow-only boundary (with the admin refusal copy if configured).
+        $adminBlock = $this->policy->blockedTopicMatch($question);
+        if ($adminBlock !== null) {
+            $trace['guardrail_check'] = ['fired' => true, 'reason' => $adminBlock['reason'], 'rule' => $adminBlock['rule'], 'layer' => 'admin', 'matched_pattern' => $adminBlock['pattern']];
+            $trace['floor_decision'] = [
+                'retrieval_score_floor' => $this->policy->retrievalFloor(),
+                'answer_confidence_floor' => $this->policy->confidenceFloor(),
+                'outcome' => 'escalate',
+                'escalation_reason' => $adminBlock['reason'],
+                'note' => 'admin guardrail layer ('.$adminBlock['rule'].') — additive, raise-only',
+            ];
+            $message = $adminBlock['reason'] === 'off_domain'
+                ? ($this->policy->offDomainMessage() ?? self::ESCALATION_MESSAGE)
+                : self::ESCALATION_MESSAGE;
+
+            return $this->persistTurn($session, $employee, $question, $message, [], $trace, 'escalate', $adminBlock['reason']);
         }
 
         // --- Step 3: router (ADR-0016) ------------------------------------------
@@ -187,14 +213,19 @@ class ChatService
         if ($decision['label'] === RouterService::OFF_DOMAIN) {
             unset($decryptedKey);
             $trace['floor_decision'] = [
-                'retrieval_score_floor' => (float) config('hr.retrieval_score_floor'),
-                'answer_confidence_floor' => (float) config('hr.answer_confidence_floor'),
+                'retrieval_score_floor' => $this->policy->retrievalFloor(),
+                'answer_confidence_floor' => $this->policy->confidenceFloor(),
                 'outcome' => 'escalate',
                 'escalation_reason' => 'off_domain',
                 'note' => 'router classified off_domain',
             ];
 
-            return $this->persistTurn($session, $employee, $question, self::ESCALATION_MESSAGE, [], $trace, 'escalate', 'off_domain');
+            // The off-domain refusal copy is admin-configurable (Sprint 6, narrow-
+            // only knob) — display text only, it changes no decision. Falls back to
+            // the default escalation voice when unset.
+            $offDomainMessage = $this->policy->offDomainMessage() ?? self::ESCALATION_MESSAGE;
+
+            return $this->persistTurn($session, $employee, $question, $offDomainMessage, [], $trace, 'escalate', 'off_domain');
         }
 
         // --- Step 4a: salary → SQL path (exact, year-aligned; ADR-0006) ---------
@@ -274,8 +305,12 @@ class ChatService
      */
     private function answerProse(ChatSession $session, Employee $employee, string $question, array $subqueries, Carbon $asOfDate, ?string $decryptedKey, array $trace): array
     {
-        $retrievalFloor = (float) config('hr.retrieval_score_floor');
-        $confidenceFloor = (float) config('hr.answer_confidence_floor');
+        // Effective floors = stricter_of(hardcoded baseline, admin override),
+        // computed inside GuardrailPolicy (Sprint 6, ADR-0019). The caller never
+        // sees a raw admin value — a raised floor escalates more (safer); it can
+        // never drop below the config/hr.php baseline.
+        $retrievalFloor = $this->policy->retrievalFloor();
+        $confidenceFloor = $this->policy->confidenceFloor();
 
         // --- Fix 2 (Correction-03): vague "total días libres" aggregation guard --
         // A "¿cuántos días libres … en total?" asks to SUM across leave types
@@ -373,7 +408,16 @@ class ChatService
             'endpoint' => config('services.hr_ai.answer_endpoint'),
         ];
 
-        $synth = $this->ai->synthesise($question, $synthesisChunks, $decryptedKey, $providerConfig);
+        // Tone constraints (Sprint 6, ADR-0019) are injected into a SYNTHESIS-LOCAL
+        // string ONLY — NEVER into $question, which must stay RAW for /ground
+        // (the entailment gate) and the router. The preamble is clearly delimited
+        // as style-only; it cannot unlock a gate (Check A is already passed; Check
+        // B + the figure-guard + /ground are all downstream of and independent
+        // from synthesis wording — a hostile tone still escalates an ungrounded
+        // answer). The admin tone string is sanitized at write time too.
+        $synthesisQuestion = $this->applyToneToSynthesisQuestion($question);
+
+        $synth = $this->ai->synthesise($synthesisQuestion, $synthesisChunks, $decryptedKey, $providerConfig);
 
         if (isset($synth['error'])) {
             Log::warning('chat: synthesis provider failure', ['error' => $synth['error']]); // never logs the key
@@ -735,6 +779,28 @@ class ChatService
         }
 
         return array_merge($governing, $baseline);
+    }
+
+    /**
+     * Wrap the question with the admin tone/style preamble for the SYNTHESIS call
+     * ONLY (Sprint 6, ADR-0019). Returns the raw question unchanged when no tone
+     * is configured. The preamble is explicitly scoped to style/format and states
+     * it cannot change what is answered or the citation/grounding rules — and even
+     * if a hostile string slipped past the write-time sanitizer, every gate is
+     * downstream of and independent from this wording (Check B + figure-guard +
+     * /ground all run on the RAW question / in hr-backend). Tone styles; it can
+     * never unlock a gate.
+     */
+    private function applyToneToSynthesisQuestion(string $question): string
+    {
+        $tone = $this->policy->toneConstraints();
+        if ($tone === null) {
+            return $question;
+        }
+
+        return '[INSTRUCCIONES DE ESTILO — afectan SOLO al tono y el formato de la '
+            .'redacción, NO a qué se responde ni a las reglas de citación y '
+            .'fundamentación de las FUENTES: '.trim($tone)."]\n\n".$question;
     }
 
     /**
