@@ -188,8 +188,13 @@ class RouterService
         return $this->deterministicSplit($question);
     }
 
-    /** True when any deterministic salary pattern matches the text. */
-    private function matchesSalary(string $text): bool
+    /**
+     * True when any deterministic salary pattern matches the text. Public so the
+     * Sprint 7c reference-fact pre-check can defer to salary FIRST (Q4: salary
+     * keeps its exact path; the reference-fact pre-check runs only on a non-salary
+     * question). Behavior-neutral visibility change — the patterns are unchanged.
+     */
+    public function matchesSalary(string $text): bool
     {
         foreach (self::SALARY_PATTERNS as $pattern) {
             if (preg_match($pattern, $text)) {

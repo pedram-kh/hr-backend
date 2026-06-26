@@ -10,6 +10,8 @@ use App\Models\Employee;
 use App\Models\EscalationCard;
 use App\Models\MessageCitation;
 use App\Models\MessageTrace;
+use App\Models\ReferenceFact;
+use App\Support\TopicLexicon;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -71,37 +73,6 @@ class ChatService
      */
     private const COMPOUND_CAP_PER_SUBQUERY = 2;
 
-    /**
-     * Precedence re-rank topic lexicon (Correction-03, Fix 1). Two chunks "cover
-     * the same topic" when both contain an anchor term of the same topic; a
-     * convenio chunk on a topic is then promoted above the national_law (Estatuto)
-     * chunk on that same topic, so the convenio's governing figure displaces the
-     * baseline. When the convenio is genuinely silent on a topic (no convenio
-     * chunk carries its anchor — e.g. trabajo a distancia in many convenios) there
-     * is nothing to promote, so the national_law chunk is left untouched to fill
-     * the gap. Anchors are matched accent-insensitively on lowercased text.
-     *
-     * @var array<string, list<string>>
-     */
-    private const TOPIC_ANCHORS = [
-        'vacaciones' => ['vacaciones', 'vacacional', 'periodo vacacional'],
-        'jornada' => ['jornada', 'horas anuales', 'computo anual', 'horario de trabajo'],
-        'permisos' => ['permiso', 'permisos', 'licencia', 'licencias', 'dias de asuntos propios', 'asuntos propios'],
-        'excedencia' => ['excedencia', 'excedencias'],
-        'periodo_prueba' => ['periodo de prueba', 'período de prueba'],
-        'trabajo_distancia' => ['trabajo a distancia', 'teletrabajo'],
-        'horas_extra' => ['horas extraordinarias', 'horas extra'],
-        'preaviso' => ['preaviso'],
-        'lactancia' => ['lactancia'],
-        'maternidad' => ['maternidad', 'paternidad', 'nacimiento', 'adopcion'],
-        'descanso' => ['descanso semanal', 'descanso diario', 'dias de descanso'],
-        'festivos' => ['festivos', 'dias festivos', 'fiestas laborales'],
-        'movilidad' => ['movilidad geografica', 'traslado', 'desplazamiento'],
-        'antiguedad' => ['antiguedad', 'trienios', 'quinquenios'],
-        'despido' => ['despido', 'extincion del contrato', 'finiquito'],
-        'ascensos' => ['ascensos', 'promocion', 'clasificacion profesional'],
-    ];
-
     /** Tiny margin used to lift a governing convenio chunk just above the baseline it competes with. */
     private const PRECEDENCE_EPSILON = 0.0001;
 
@@ -112,6 +83,8 @@ class ChatService
         private readonly SalaryAnswerService $salary,
         private readonly GroundingService $grounding,
         private readonly GuardrailPolicy $policy,
+        private readonly ReferenceFactRouter $referenceFactRouter,
+        private readonly ReferenceFactAnswerService $referenceFactAnswer,
     ) {}
 
     /**
@@ -183,6 +156,21 @@ class ChatService
                 : self::ESCALATION_MESSAGE;
 
             return $this->persistTurn($session, $employee, $question, $message, [], $trace, 'escalate', $adminBlock['reason']);
+        }
+
+        // --- Step 2c: reference-fact pre-check (Sprint 7c Phase 1, ADR-0023) ----
+        // Deterministic, NO LLM. Runs in the salary-pre-classifier layer, on a
+        // NON-salary question only (Q4: salary keeps its exact path). It adds the
+        // reference-fact route ONLY when a VERIFIED, in-scope, in-validity,
+        // topic-matching fact exists; otherwise it FALLS THROUGH to the existing
+        // router → prose/salary path (byte-for-byte unchanged — the golden-trace
+        // gate). Mirrors the salary routed path: exact value, chunk_id=null
+        // citation, authority_used=structured_reference, SKIP /ground.
+        if (! $this->router->matchesSalary($question)) {
+            $refDetection = $this->referenceFactRouter->detectTopic($employee, $question, $asOfDate);
+            if ($refDetection !== null) {
+                return $this->answerReferenceFact($session, $employee, $question, $refDetection, $asOfDate, $trace);
+            }
         }
 
         // --- Step 3: router (ADR-0016) ------------------------------------------
@@ -292,6 +280,62 @@ class ChatService
 
         // --- Step 4b: prose path -------------------------------------------------
         return $this->answerProse($session, $employee, $question, $decision['subqueries'], $asOfDate, $decryptedKey, $trace);
+    }
+
+    /**
+     * The reference-fact answer path (Sprint 7c Phase 1, ADR-0023) — the salary
+     * sibling. Quotes the EXACT verified fact, cites the source doc with
+     * `chunk_id = null` at `structured_reference`, records the `reference_fact`
+     * trace block + `floor_decision.path = "reference_fact"`, and SKIPS /ground
+     * (a quoted verified value — nothing generated to entail). Only a `verified`
+     * fact answers; a coverage gap escalates `reference_fact_coverage_gap`. No
+     * Check A/B (structured-grounded, exactly like salary's `path:"salary_sql"`).
+     *
+     * @param  array{topic_id:int, topic_name:string, matched_topic_names:list<string>}  $detection
+     * @param  array<string,mixed>  $trace
+     * @return array<string,mixed>
+     */
+    private function answerReferenceFact(ChatSession $session, Employee $employee, string $question, array $detection, Carbon $asOfDate, array $trace): array
+    {
+        // The deterministic pre-check short-circuits the LLM router (parallels the
+        // deterministic_salary source); record it for the audit trail.
+        $trace['router_decision'] = [
+            'label' => 'reference_fact',
+            'confidence' => 1.0,
+            'source' => 'deterministic_reference_fact',
+            'subqueries' => [],
+            'model' => null,
+            'note' => 'matched deterministic reference-fact pre-check (topic: '.$detection['topic_name'].')',
+            'cross_path' => false,
+            'trace_fragment' => ['matched_topic_names' => $detection['matched_topic_names']],
+        ];
+
+        $result = $this->referenceFactAnswer->answer($employee, $detection['topic_id'], $asOfDate);
+        $trace['reference_fact'] = $result['reference_fact'];
+
+        if ($result['outcome'] === ReferenceFactAnswerService::OUTCOME_ANSWER) {
+            $trace['floor_decision'] = [
+                'path' => 'reference_fact',
+                'outcome' => 'answer',
+                'escalation_reason' => null,
+                'authority_used' => [ReferenceFact::AUTHORITY_LEVEL],
+                'note' => 'exact verified reference fact (fact_id '.($result['reference_fact']['fact_id'] ?? '?').') — quoted value, /ground skipped',
+            ];
+
+            return $this->persistTurn($session, $employee, $question, $result['answer'], $result['citations'], $trace, 'answer', null);
+        }
+
+        // No usable VERIFIED in-scope in-validity fact → escalate (only verified
+        // answers; never quote an unverified/out-of-validity/guessed-group fact).
+        $trace['floor_decision'] = [
+            'path' => 'reference_fact',
+            'outcome' => 'escalate',
+            'escalation_reason' => $result['escalation_reason'],
+            'authority_used' => [ReferenceFact::AUTHORITY_LEVEL],
+            'note' => $result['reference_fact']['note'] ?? 'reference fact coverage gap',
+        ];
+
+        return $this->persistTurn($session, $employee, $question, $result['answer'], [], $trace, 'escalate', $result['escalation_reason']);
     }
 
     /**
@@ -687,24 +731,14 @@ class ChatService
 
     /**
      * The set of HR topics a chunk covers, by anchor-term presence (Correction-03).
-     * Accent-insensitive, lowercased. Returns a map topic => true.
+     * Delegates to the shared {@see TopicLexicon} (relocated in 7c — the same
+     * lexicon the reference-fact pre-check reuses; behavior unchanged).
      *
      * @return array<string, true>
      */
     private function chunkTopics(string $content): array
     {
-        $hay = $this->stripAccents(mb_strtolower($content));
-        $topics = [];
-        foreach (self::TOPIC_ANCHORS as $topic => $anchors) {
-            foreach ($anchors as $anchor) {
-                if (str_contains($hay, $this->stripAccents($anchor))) {
-                    $topics[$topic] = true;
-                    break;
-                }
-            }
-        }
-
-        return $topics;
+        return TopicLexicon::matchTopicKeys($content);
     }
 
     /**
