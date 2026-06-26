@@ -195,8 +195,14 @@ class DocumentController extends Controller
         $request->validate([
             'files' => ['required', 'array', 'min:1'],
             'files.*' => ['file'],
+            // Sprint 7b-1 (ADR-0021): mark this batch as a Structured Reference
+            // SOURCE upload. The deliberate routing tag (Invariant 2) — a
+            // reference_source .docx/.xlsx is read for content + feeds the manual
+            // fact path; it is NEVER salary and NEVER embedded.
+            'as_reference' => ['sometimes', 'boolean'],
         ]);
 
+        $asReference = $request->boolean('as_reference');
         $relativePaths = (array) $request->input('relative_paths', []);
         $adminId = $request->user()->id;
         $vocab = new VocabularyResolver; // one resolver per batch (caches vocab)
@@ -207,18 +213,23 @@ class DocumentController extends Controller
             $relativePath = $relativePaths[$i] ?? $original;
             $folderLabel = $this->topFolder($relativePath);
 
-            // Sprint 2a accepts PDFs (prose) and salary .xlsx (ADR-0014 xlsx-first).
-            // Other formats (.doc/.docx prose, .xls) remain out of scope.
+            // Default path (Sprint 2a): PDFs (prose) + salary .xlsx (ADR-0014).
+            // Reference path (Sprint 7b-1): non-salary .docx/.xlsx → reference_source.
             $ext = strtolower((string) $file->getClientOriginalExtension());
             $isPdf = $ext === 'pdf' || $file->getMimeType() === 'application/pdf';
             $isXlsx = $ext === 'xlsx'
                 || $file->getMimeType() === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+            $isDocx = $ext === 'docx'
+                || $file->getMimeType() === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
-            if (! $isPdf && ! $isXlsx) {
+            $accepted = $asReference ? ($isDocx || $isXlsx) : ($isPdf || $isXlsx);
+            if (! $accepted) {
                 $results[] = [
                     'source_filename' => $original,
                     'skipped' => true,
-                    'reason' => 'unsupported format (PDF prose + salary .xlsx only this sprint)',
+                    'reason' => $asReference
+                        ? 'reference source must be a .docx or .xlsx'
+                        : 'unsupported format (PDF prose + salary .xlsx only this sprint)',
                 ];
 
                 continue;
@@ -232,6 +243,7 @@ class DocumentController extends Controller
                     $relativePath,
                     $adminId,
                     $vocab,
+                    $asReference,
                 );
             } catch (\Throwable $e) {
                 $results[] = [

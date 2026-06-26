@@ -108,6 +108,28 @@ Admin-only API (Sanctum bearer + admin guard). **PDF prose + salary `.xlsx`**
 - `GET /admin/documents/{uuid}/pages/{page}/image` — temporary S3 URL.
 - `GET /admin/vocabulary/{territories|sectors|convenios|document_types}`.
 
+**Structured Reference Knowledge (Sprint 7b-1, ADR-0021) — the manual path.** A
+third knowledge class: non-vectorized scoped `reference_facts`, generalizing the
+salary pattern. Reads open to any admin; **writes gated by `knowledge.edit`**.
+- `POST /admin/documents/upload` with `as_reference=1` — ingest a non-salary
+  `.docx`/`.xlsx` as a **`reference_source`** document (the deliberate routing
+  tag): reads content via hr-ai `/read-structured`, stores display
+  `document_pages`, **never embeds**, **never** touches the salary path.
+- `GET /admin/reference-facts` · `GET /admin/reference-facts/{uuid}` — list / card
+  (value, raw_values, derived scope, source link + locator, topic, validity, the
+  authority lock, the append-only provenance timeline).
+- `GET /admin/reference-facts/sources` · `GET /admin/reference-sources/{uuid}/content`
+  — the reference-source picker + its extracted content (for manual fact entry).
+- `POST /admin/reference-facts` — create a scoped fact → lands `needs_review`
+  (`knowledge.edit`). **INVARIANT 1**: `authority_level` accepted as
+  `structured_reference` only — anything higher is **422** (and the column can't
+  store it). Territory/sector are derived (prohibited from the request).
+- `PATCH /admin/reference-facts/{uuid}` — bounded edit; a scope-affecting change
+  (convenio/job_category/validity) needs `confirm_scope_change` else **409**.
+- `POST /admin/reference-facts/{uuid}/verify` — `needs_review → verified` (the
+  ADR-0020 spine; `knowledge.edit`, server-gated). *Carried gap: the document
+  `confirm` route above is NOT yet server-gated — see `sprint-07b-1/review.md`.*
+
 The shared `X-Internal-Token` (`HR_AI_INTERNAL_TOKEN`) guards the hr-backend ↔
 hr-ai call. The deterministic filename parser handles both validity formats
 (`YYYYYYYY` and `YYYY_YYYY`), the `Antiguo` subfolder (→ `historical`), national

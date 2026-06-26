@@ -77,6 +77,36 @@ class ExtractionClient
     }
 
     /**
+     * Read a NON-salary .docx/.xlsx → structured per-section/per-sheet content
+     * (Sprint 7b-1, ADR-0021). hr-ai READS and RETURNS only — it writes no DB
+     * rows and never migrates (ADR-0007). hr-backend persists the content as
+     * display `document_pages` (never `document_chunks` — queried-not-embedded,
+     * ADR-0006). A content-extraction utility: it does NOT segment or assign
+     * scope (that is 7b-2). A salary .xlsx is never sent here — it is routed to
+     * extractSalary() by its document_type tag (Invariant 2).
+     *
+     * @param  'docx'|'xlsx'  $format
+     * @return array{format:string, pages:list<array{page_number:int,label:string,text:string,locator:string}>}
+     */
+    public function readStructured(string $storageKey, string $documentUuid, string $format): array
+    {
+        $response = Http::withHeaders(['X-Internal-Token' => $this->token()])
+            ->timeout(180)
+            ->acceptJson()
+            ->post("{$this->base()}/read-structured", [
+                'storage_key' => $storageKey,
+                'document_uuid' => $documentUuid,
+                'format' => $format,
+            ]);
+
+        if (! $response->successful()) {
+            throw new RuntimeException("hr-ai /read-structured failed ({$response->status()}): ".$response->body());
+        }
+
+        return $response->json();
+    }
+
+    /**
      * Trigger chunk+embed for one document. hr-ai writes document_chunks directly
      * with the denormalized scope columns from $scope (resolved here, ADR-0007).
      *

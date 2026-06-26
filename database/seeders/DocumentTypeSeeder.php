@@ -20,6 +20,11 @@ class DocumentTypeSeeder extends Seeder
             ['code' => 'summary', 'name' => 'Resumen'],
             ['code' => 'national_law', 'name' => 'Estatuto / Ley nacional'],
             ['code' => 'internal_hr_ruling', 'name' => 'Resolución interna de RRHH'],
+            // Sprint 7b-1 (ADR-0021): the explicit routing signal for a non-salary
+            // .docx/.xlsx that feeds Structured Reference Knowledge. Tagging a
+            // source `reference_source` is what keeps it OFF the salary path
+            // (salary:import filters document_type = salary_tables) — Invariant 2.
+            ['code' => 'reference_source', 'name' => 'Fuente de referencia estructurada'],
             ['code' => 'other', 'name' => 'Otro'],
         ];
 

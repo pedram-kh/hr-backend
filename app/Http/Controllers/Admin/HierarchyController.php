@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Document;
+use App\Models\ReferenceFact;
 use App\Models\Sector;
 use App\Models\Territory;
 use App\Models\Topic;
@@ -11,6 +12,7 @@ use App\Support\KnowledgeMap;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 /**
  * The lens-hierarchy read API (ADR-0001). The hierarchy is computed FROM facets
@@ -24,6 +26,13 @@ use Illuminate\Support\Facades\DB;
  *   topic:     `tp:{id}`                                    →  leaf docs (empty today)
  *
  * Coverage-gap flags (spec §3) are overlaid onto nodes from {@see KnowledgeMap}.
+ *
+ * Sprint 7b-1 (ADR-0021): Structured Reference FACTS appear as distinct,
+ * badged LEAVES (`fact:{uuid}`, `knowledge_type = reference_fact`) under their
+ * convenio-derived scope (territory→sector, sector→territory, topic), beside the
+ * document leaves. They are scoped via the convenio exactly like documents, so
+ * they slot into the SAME lens grammar — they also count toward the branch
+ * counts so a scope with only facts still draws.
  */
 class HierarchyController extends Controller
 {
@@ -71,6 +80,7 @@ class HierarchyController extends Controller
                 return $this->leaves(
                     Document::query()->whereHas('convenio', fn ($q) => $q->where('territory_id', $territoryId)->where('sector_id', $sectorId)),
                     $leafGapByDocId,
+                    $this->factLeafNodes($territoryId, $sectorId, null),
                 );
             }
             if ($parent === 't:national_law') {
@@ -94,6 +104,7 @@ class HierarchyController extends Controller
                 return $this->leaves(
                     Document::query()->whereHas('convenio', fn ($q) => $q->where('sector_id', $sectorId)->where('territory_id', $territoryId)),
                     $leafGapByDocId,
+                    $this->factLeafNodes($territoryId, $sectorId, null),
                 );
             }
             $sectorId = (int) substr($parent, 2);
@@ -108,12 +119,13 @@ class HierarchyController extends Controller
             return $this->leaves(Document::query()->where('retrieval_status', $status), $leafGapByDocId);
         }
 
-        // topic: tp:{id} → leaf docs via document_topics
+        // topic: tp:{id} → leaf docs via document_topics + reference facts on the topic
         $topicId = (int) substr($parent, 3);
 
         return $this->leaves(
             Document::query()->whereHas('topics', fn ($q) => $q->where('topics.id', $topicId)),
             $leafGapByDocId,
+            $this->factLeafNodes(null, null, $topicId),
         );
     }
 
@@ -122,11 +134,18 @@ class HierarchyController extends Controller
     /** @param list<int> $expiredConvenioIds */
     private function territoryRoots(array $expiredConvenioIds): array
     {
-        $counts = DB::table('documents as d')
-            ->join('convenios as c', 'c.id', '=', 'd.convenio_id')
-            ->select('c.territory_id', DB::raw('count(*) as cnt'))
-            ->groupBy('c.territory_id')
-            ->pluck('cnt', 'territory_id');
+        $counts = $this->mergeCounts(
+            DB::table('documents as d')
+                ->join('convenios as c', 'c.id', '=', 'd.convenio_id')
+                ->select('c.territory_id', DB::raw('count(*) as cnt'))
+                ->groupBy('c.territory_id')
+                ->pluck('cnt', 'territory_id'),
+            DB::table('reference_facts as rf')
+                ->join('convenios as c', 'c.id', '=', 'rf.convenio_id')
+                ->select('c.territory_id', DB::raw('count(*) as cnt'))
+                ->groupBy('c.territory_id')
+                ->pluck('cnt', 'territory_id'),
+        );
 
         $expiredByTerritory = DB::table('convenios')
             ->whereIn('id', $expiredConvenioIds ?: [0])
@@ -166,11 +185,18 @@ class HierarchyController extends Controller
 
     private function sectorRoots(): array
     {
-        $counts = DB::table('documents as d')
-            ->join('convenios as c', 'c.id', '=', 'd.convenio_id')
-            ->select('c.sector_id', DB::raw('count(*) as cnt'))
-            ->groupBy('c.sector_id')
-            ->pluck('cnt', 'sector_id');
+        $counts = $this->mergeCounts(
+            DB::table('documents as d')
+                ->join('convenios as c', 'c.id', '=', 'd.convenio_id')
+                ->select('c.sector_id', DB::raw('count(*) as cnt'))
+                ->groupBy('c.sector_id')
+                ->pluck('cnt', 'sector_id'),
+            DB::table('reference_facts as rf')
+                ->join('convenios as c', 'c.id', '=', 'rf.convenio_id')
+                ->select('c.sector_id', DB::raw('count(*) as cnt'))
+                ->groupBy('c.sector_id')
+                ->pluck('cnt', 'sector_id'),
+        );
 
         $nodes = [];
         foreach (Sector::orderBy('name')->get() as $s) {
@@ -203,9 +229,15 @@ class HierarchyController extends Controller
 
     private function topicRoots(): array
     {
-        $counts = DB::table('document_topics')
-            ->select('topic_id', DB::raw('count(*) as cnt'))
-            ->groupBy('topic_id')->pluck('cnt', 'topic_id');
+        $counts = $this->mergeCounts(
+            DB::table('document_topics')
+                ->select('topic_id', DB::raw('count(*) as cnt'))
+                ->groupBy('topic_id')->pluck('cnt', 'topic_id'),
+            DB::table('reference_facts')
+                ->whereNotNull('topic_id')
+                ->select('topic_id', DB::raw('count(*) as cnt'))
+                ->groupBy('topic_id')->pluck('cnt', 'topic_id'),
+        );
 
         $nodes = [];
         foreach (Topic::where('status', 'approved')->orderBy('name')->get() as $tp) {
@@ -222,58 +254,95 @@ class HierarchyController extends Controller
         return $nodes;
     }
 
+    /**
+     * Sum two pluck maps (keyed by the same id) into one — lets a scope that has
+     * only reference facts (no documents) still draw a branch.
+     *
+     * @return \Illuminate\Support\Collection<int,int>
+     */
+    private function mergeCounts(\Illuminate\Support\Collection $a, \Illuminate\Support\Collection $b): \Illuminate\Support\Collection
+    {
+        $merged = $a->map(fn ($v) => (int) $v);
+        foreach ($b as $key => $cnt) {
+            $merged[$key] = ($merged[$key] ?? 0) + (int) $cnt;
+        }
+
+        return $merged;
+    }
+
     // ---- level-2 groups -----------------------------------------------------
 
     /** @param list<int> $expiredConvenioIds */
     private function sectorsUnderTerritory(int $territoryId, array $expiredConvenioIds): array
     {
-        $rows = DB::table('documents as d')
-            ->join('convenios as c', 'c.id', '=', 'd.convenio_id')
-            ->join('sectors as s', 's.id', '=', 'c.sector_id')
-            ->where('c.territory_id', $territoryId)
-            ->select('s.id', 's.name', DB::raw('count(*) as cnt'),
-                DB::raw('bool_or(c.id = any(array['.(implode(',', array_map('intval', $expiredConvenioIds)) ?: 'null').'])) as has_gap'))
-            ->groupBy('s.id', 's.name')->orderBy('s.name')->get();
+        $expiredArr = 'array['.(implode(',', array_map('intval', $expiredConvenioIds)) ?: 'null').']';
 
-        return $rows->map(fn ($r) => [
-            'key' => "t:{$territoryId}|s:{$r->id}",
-            'label' => $r->name,
+        $docRows = DB::table('documents as d')
+            ->join('convenios as c', 'c.id', '=', 'd.convenio_id')
+            ->where('c.territory_id', $territoryId)
+            ->select('c.sector_id', DB::raw('count(*) as cnt'),
+                DB::raw("bool_or(c.id = any({$expiredArr})) as has_gap"))
+            ->groupBy('c.sector_id')->get()->keyBy('sector_id');
+
+        $factRows = DB::table('reference_facts as rf')
+            ->join('convenios as c', 'c.id', '=', 'rf.convenio_id')
+            ->where('c.territory_id', $territoryId)
+            ->select('c.sector_id', DB::raw('count(*) as cnt'))
+            ->groupBy('c.sector_id')->get()->keyBy('sector_id');
+
+        $sectorIds = $docRows->keys()->merge($factRows->keys())->unique();
+
+        return Sector::whereIn('id', $sectorIds)->orderBy('name')->get()->map(fn ($s) => [
+            'key' => "t:{$territoryId}|s:{$s->id}",
+            'label' => $s->name,
             'meta' => null,
-            'count' => (int) $r->cnt,
+            'count' => (int) ($docRows[$s->id]->cnt ?? 0) + (int) ($factRows[$s->id]->cnt ?? 0),
             'child_kind' => 'leaf-parent',
-            'gap_kind' => $r->has_gap ? 'expired_no_successor' : null,
-        ])->all();
+            'gap_kind' => ($docRows[$s->id]->has_gap ?? false) ? 'expired_no_successor' : null,
+        ])->values()->all();
     }
 
     /** @param list<int> $expiredConvenioIds */
     private function territoriesUnderSector(int $sectorId, array $expiredConvenioIds): array
     {
-        $rows = DB::table('documents as d')
-            ->join('convenios as c', 'c.id', '=', 'd.convenio_id')
-            ->join('territories as t', 't.id', '=', 'c.territory_id')
-            ->where('c.sector_id', $sectorId)
-            ->select('t.id', 't.name', DB::raw('count(*) as cnt'),
-                DB::raw('bool_or(c.id = any(array['.(implode(',', array_map('intval', $expiredConvenioIds)) ?: 'null').'])) as has_gap'))
-            ->groupBy('t.id', 't.name')->orderBy('t.name')->get();
+        $expiredArr = 'array['.(implode(',', array_map('intval', $expiredConvenioIds)) ?: 'null').']';
 
-        return $rows->map(fn ($r) => [
-            'key' => "s:{$sectorId}|t:{$r->id}",
-            'label' => $r->name,
+        $docRows = DB::table('documents as d')
+            ->join('convenios as c', 'c.id', '=', 'd.convenio_id')
+            ->where('c.sector_id', $sectorId)
+            ->select('c.territory_id', DB::raw('count(*) as cnt'),
+                DB::raw("bool_or(c.id = any({$expiredArr})) as has_gap"))
+            ->groupBy('c.territory_id')->get()->keyBy('territory_id');
+
+        $factRows = DB::table('reference_facts as rf')
+            ->join('convenios as c', 'c.id', '=', 'rf.convenio_id')
+            ->where('c.sector_id', $sectorId)
+            ->select('c.territory_id', DB::raw('count(*) as cnt'))
+            ->groupBy('c.territory_id')->get()->keyBy('territory_id');
+
+        $territoryIds = $docRows->keys()->merge($factRows->keys())->unique();
+
+        return Territory::whereIn('id', $territoryIds)->orderBy('name')->get()->map(fn ($t) => [
+            'key' => "s:{$sectorId}|t:{$t->id}",
+            'label' => $t->name,
             'meta' => null,
-            'count' => (int) $r->cnt,
+            'count' => (int) ($docRows[$t->id]->cnt ?? 0) + (int) ($factRows[$t->id]->cnt ?? 0),
             'child_kind' => 'leaf-parent',
-            'gap_kind' => $r->has_gap ? 'expired_no_successor' : null,
-        ])->all();
+            'gap_kind' => ($docRows[$t->id]->has_gap ?? false) ? 'expired_no_successor' : null,
+        ])->values()->all();
     }
 
     // ---- leaves -------------------------------------------------------------
 
     /**
-     * Map a document query to leaf nodes (the card-openable tier).
+     * Map a document query to leaf nodes (the card-openable tier). Sprint 7b-1:
+     * `$factNodes` are the distinct reference-fact leaves under the same scope —
+     * appended after the documents so both knowledge types show on one branch.
      *
      * @param  array<int,string>  $leafGapByDocId
+     * @param  list<array<string,mixed>>  $factNodes
      */
-    private function leaves(\Illuminate\Database\Eloquent\Builder $query, array $leafGapByDocId): JsonResponse
+    private function leaves(\Illuminate\Database\Eloquent\Builder $query, array $leafGapByDocId, array $factNodes = []): JsonResponse
     {
         $docs = $query->with(['documentType:id,code,name'])
             ->orderByDesc('id')
@@ -283,6 +352,7 @@ class HierarchyController extends Controller
             'key' => "doc:{$d->uuid}",
             'label' => $d->title,
             'child_kind' => 'leaf',
+            'knowledge_type' => 'document',
             'doc_uuid' => $d->uuid,
             'document_type' => $d->documentType?->code,
             'retrieval_status' => $d->retrieval_status,
@@ -293,7 +363,52 @@ class HierarchyController extends Controller
             'gap_kind' => $leafGapByDocId[$d->id] ?? null,
         ])->all();
 
-        return response()->json(['nodes' => $nodes]);
+        return response()->json(['nodes' => array_merge($nodes, $factNodes)]);
+    }
+
+    /**
+     * The distinct reference-fact leaves under a scope (Sprint 7b-1, ADR-0021).
+     * Scoped via the convenio (territory/sector) and/or topic — exactly the
+     * document grammar. `knowledge_type = reference_fact` is the badge signal;
+     * `is_ai_proposed` is always false in 7b-1 (no ai_agent writer — fuchsia is
+     * reserved for 7b-2).
+     *
+     * @return list<array<string,mixed>>
+     */
+    private function factLeafNodes(?int $territoryId, ?int $sectorId, ?int $topicId): array
+    {
+        $query = ReferenceFact::query()->with(['convenio:id,numero', 'topic:id,name'])->orderByDesc('id');
+
+        if ($territoryId !== null || $sectorId !== null) {
+            $query->whereHas('convenio', function ($c) use ($territoryId, $sectorId) {
+                if ($territoryId !== null) {
+                    $c->where('territory_id', $territoryId);
+                }
+                if ($sectorId !== null) {
+                    $c->where('sector_id', $sectorId);
+                }
+            });
+        }
+        if ($topicId !== null) {
+            $query->where('topic_id', $topicId);
+        }
+
+        return $query->get()->map(fn (ReferenceFact $f) => [
+            'key' => "fact:{$f->uuid}",
+            'label' => Str::limit($f->value, 80),
+            'child_kind' => 'leaf',
+            'knowledge_type' => 'reference_fact',
+            'fact_uuid' => $f->uuid,
+            'status' => $f->status,
+            'source' => $f->source,
+            'authority_level' => $f->authority_level,
+            'topic' => $f->topic?->name,
+            'validity_start' => $f->validity_start?->toDateString(),
+            'validity_end' => $f->validity_end?->toDateString(),
+            // unverified-AI fuchsia is 7b-2 only; a manual fact is never fuchsia.
+            'is_ai_proposed' => $f->source === 'ai_agent' && $f->status === 'needs_review',
+            'gap_kind' => null,
+        ])->all();
     }
 
     /**

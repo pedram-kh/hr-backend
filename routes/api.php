@@ -9,6 +9,7 @@ use App\Http\Controllers\Admin\EscalationController;
 use App\Http\Controllers\Admin\GuardrailsController;
 use App\Http\Controllers\Admin\HierarchyController;
 use App\Http\Controllers\Admin\HistoryController;
+use App\Http\Controllers\Admin\ReferenceFactController;
 use App\Http\Controllers\Admin\ReviewQueueController;
 use App\Http\Controllers\Admin\SandboxController;
 use App\Http\Controllers\Admin\VocabularyController;
@@ -149,6 +150,26 @@ Route::middleware(['auth:sanctum', 'admin', 'active'])->prefix('admin')->group(f
     Route::middleware('ability:vocabulary.approve')->group(function () {
         Route::post('/vocabulary-proposals/{id}/approve', [VocabularyProposalController::class, 'approve']);
         Route::post('/vocabulary-proposals/{id}/reject', [VocabularyProposalController::class, 'reject']);
+    });
+
+    /*
+    | Sprint 7b-1 — Structured Reference Knowledge (ADR-0021). A NEW non-vectorized
+    | scoped-fact type with the MANUAL create/verify path (no AI — the ai_agent
+    | lane lights in 7b-2; no answering — that is 7c). READS are open to any admin
+    | (auditor browses the facts + the reference-source content). WRITES (create,
+    | edit, verify) are gated by knowledge.edit — reads open, writes gated, the
+    | Sprint-3 posture. `sources`/`content` precede `{uuid}` so the literal path
+    | wins. The verify route is SERVER-gated (knowledge.edit) by design — note the
+    | carried document-confirm-route gap in review.md.
+    */
+    Route::get('/reference-facts', [ReferenceFactController::class, 'index']);
+    Route::get('/reference-facts/sources', [ReferenceFactController::class, 'sources']);
+    Route::get('/reference-facts/{uuid}', [ReferenceFactController::class, 'show']);
+    Route::get('/reference-sources/{uuid}/content', [ReferenceFactController::class, 'sourceContent']);
+    Route::middleware('ability:knowledge.edit')->group(function () {
+        Route::post('/reference-facts', [ReferenceFactController::class, 'store']);
+        Route::patch('/reference-facts/{uuid}', [ReferenceFactController::class, 'update']);
+        Route::post('/reference-facts/{uuid}/verify', [ReferenceFactController::class, 'verify']);
     });
 
     // Answer-model key handling (Sprint 2b-1, ADR-0015). super_admin enforced in
