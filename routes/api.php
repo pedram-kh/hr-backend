@@ -170,6 +170,11 @@ Route::middleware(['auth:sanctum', 'admin', 'active'])->prefix('admin')->group(f
         Route::post('/reference-facts', [ReferenceFactController::class, 'store']);
         Route::patch('/reference-facts/{uuid}', [ReferenceFactController::class, 'update']);
         Route::post('/reference-facts/{uuid}/verify', [ReferenceFactController::class, 'verify']);
+        // Sprint 7b-2 (ADR-0022): reject an AI proposal (auditable, no delete);
+        // (re-)run the segmentation agent on a reference source. The agent only
+        // ever PROPOSES — it never hits the verify route (it cannot verify itself).
+        Route::post('/reference-facts/{uuid}/reject', [ReferenceFactController::class, 'reject']);
+        Route::post('/reference-sources/{uuid}/segment', [ReferenceFactController::class, 'segment']);
     });
 
     // Answer-model key handling (Sprint 2b-1, ADR-0015). super_admin enforced in

@@ -25,6 +25,11 @@ class TopicSeeder extends Seeder
             'permisos no retribuidos',
             'normativa/derechos',
             'formación',
+            // Sprint 7b-2 (Q6): the structured-reference fixtures are all
+            // `periodo de prueba`. Seeded approved so the segmentation agent can
+            // BIND topic_id (it never mints a topic — ADR-0011). Lockstep with
+            // the 2026_06_26_120003 data migration for existing installs.
+            'periodo de prueba',
         ];
 
         foreach ($topics as $name) {

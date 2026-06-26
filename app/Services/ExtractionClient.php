@@ -316,4 +316,55 @@ class ExtractionClient
 
         return $response->json();
     }
+
+    /**
+     * Segment a multi-scope reference_source into per-scope facts (Sprint 7b-2,
+     * ADR-0022). hr-ai READS the full concatenated /read-structured content + the
+     * CLOSED candidate convenios (convenio-centric) + the approved topics, and
+     * RETURNS an array of proposed facts (each bound to a real convenio_id, with
+     * group_label/value/confidence/uncertainty/source_excerpt) — it writes
+     * nothing, never migrates (ADR-0007). hr-backend persists each as
+     * `ai_agent`/`needs_review`, upserting on the group_label-extended logical
+     * key. The decrypted answer-model key is passed in the body per call.
+     *
+     * Returns { facts:[...], trace_fragment } or, on a provider/transport
+     * failure, { facts:[], error } so the caller leaves the source unsegmented in
+     * the human queue — a segmentation failure never blocks ingest nor surfaces
+     * an answerable fact.
+     *
+     * @param  list<array<string,mixed>>  $candidateConvenios
+     * @param  list<array<string,mixed>>  $candidateTopics
+     * @param  array{provider:string,model:string,endpoint:?string}  $providerConfig
+     * @return array<string,mixed>
+     */
+    public function segmentFacts(
+        int $documentId,
+        string $documentUuid,
+        string $sourceFormat,
+        string $pagesText,
+        array $candidateConvenios,
+        array $candidateTopics,
+        string $decryptedKey,
+        array $providerConfig,
+    ): array {
+        $response = Http::withHeaders(['X-Internal-Token' => $this->token()])
+            ->timeout(180) // a multi-province segmentation is a larger LLM call
+            ->acceptJson()
+            ->post("{$this->base()}/segment-facts", [
+                'document_id' => $documentId,
+                'document_uuid' => $documentUuid,
+                'source_format' => $sourceFormat,
+                'pages_text' => $pagesText,
+                'candidate_convenios' => $candidateConvenios,
+                'candidate_topics' => $candidateTopics,
+                'provider_api_key' => $decryptedKey,
+                'provider_config' => $providerConfig,
+            ]);
+
+        if (! $response->successful()) {
+            return ['facts' => [], 'error' => 'segment_unavailable', 'detail' => "hr-ai /segment-facts failed ({$response->status()})"];
+        }
+
+        return $response->json();
+    }
 }

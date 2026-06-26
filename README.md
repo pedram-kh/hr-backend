@@ -130,6 +130,29 @@ salary pattern. Reads open to any admin; **writes gated by `knowledge.edit`**.
   ADR-0020 spine; `knowledge.edit`, server-gated). *Carried gap: the document
   `confirm` route above is NOT yet server-gated — see `sprint-07b-1/review.md`.*
 
+**The AI segmentation agent (Sprint 7b-2, ADR-0022) — the `ai_agent` lane, lit.**
+Reuses 7a's propose-pattern verbatim; writes only inert `ai_agent`/`needs_review`
+facts. The agent **never** verifies, **never** writes a salary row, **never** mints
+vocabulary.
+- A `reference_source` ingest **auto-dispatches** the queued `SegmentReferenceSource`
+  job → hr-ai `POST /segment-facts` → `ReferenceFactProposalService` (the only
+  writer): upserts on the **extended logical key**
+  `(convenio_id, topic_id, job_category_id, group_label, validity_start, validity_end)`
+  — `group_label` added (additive) so per-group facts don't collide on null
+  `job_category_id`; idempotent re-runs. Appends `ai_agent` `tag_events`; derives
+  validity from the source `documents` row (not from prose); flags obvious
+  duplicates via `duplicate_of_id` + `uncertainty.field='version'` (**signal, not
+  resolution — 7d**).
+- `POST /admin/reference-sources/{uuid}/segment` — manually re-run segmentation
+  (idempotent; `knowledge.edit`). Used by the eval to re-segment after prompt iteration.
+- `POST /admin/reference-facts/{uuid}/reject` — `needs_review → rejected` (an
+  auditable, queue-excluded discard of an AI proposal — no deletion; `knowledge.edit`).
+- `GET /admin/reference-facts?source=ai_agent&queue=true` — the **uncertain-first**
+  review queue (uncertainty set, then ascending confidence); rows carry
+  `group_label`, `confidence`, `uncertainty`, `source_excerpt`, `is_ai_proposed`,
+  `is_possible_duplicate`. **The deliverable** is the measured accuracy report in
+  `hr-docs/sprints/sprint-07b-2/review.md` (eval harness in `sprint-07b-2/eval/`).
+
 The shared `X-Internal-Token` (`HR_AI_INTERNAL_TOKEN`) guards the hr-backend ↔
 hr-ai call. The deterministic filename parser handles both validity formats
 (`YYYYYYYY` and `YYYY_YYYY`), the `Antiguo` subfolder (→ `historical`), national
@@ -464,6 +487,15 @@ all **AI proposes → human confirms**, no answer-loop change.
   similarity, no model dependency); creating a new value is deliberate; convenios
   are registry-only. Approval writes the alias/new value with provenance and
   resolves the originating doc's `raw_unmatched_value`.
+- **Reference-fact segmentation (Sprint 7b-2, ADR-0022).** The `ai_agent` lane of
+  `reference_facts`, lit. A `reference_source` ingest auto-dispatches
+  `SegmentReferenceSource` → `ExtractionClient::segmentFacts()` → hr-ai
+  `POST /segment-facts`; `ReferenceFactProposalService` (the only writer) upserts
+  per-scope facts on the extended logical key (incl. `group_label`) as
+  `ai_agent`/`needs_review`, appends `ai_agent` provenance, and flags obvious
+  duplicates (signal only — 7d). Re-proven invariants
+  (`Sprint7b2SegmentationInvariantTest`): inert lane, authority floor, **zero
+  salary rows**, idempotent re-runs, agent-never-verifies, duplicate-flag-without-merge.
 - **Expiry queue + lineage write-side.** `php artisan reviews:scan-expiry
   [--days=90] [--dry-run]` materializes `expiry` `document_review_tasks` for
   active prose within 90 days of `validity_end` (or already past, incl. the

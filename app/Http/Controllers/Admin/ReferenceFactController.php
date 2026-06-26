@@ -38,8 +38,7 @@ class ReferenceFactController extends Controller
     public function index(Request $request): JsonResponse
     {
         $query = ReferenceFact::query()
-            ->with(['convenio.territory', 'convenio.sector', 'jobCategory', 'topic', 'sourceDocument:id,uuid,title'])
-            ->orderByDesc('id');
+            ->with(['convenio.territory', 'convenio.sector', 'jobCategory', 'topic', 'sourceDocument:id,uuid,title']);
 
         if ($request->filled('convenio_id')) {
             $query->where('convenio_id', $request->integer('convenio_id'));
@@ -49,6 +48,23 @@ class ReferenceFactController extends Controller
         }
         if ($request->filled('status')) {
             $query->where('status', $request->string('status'));
+        }
+        if ($request->filled('source')) {
+            $query->where('source', $request->string('source'));
+        }
+
+        // The AI-proposed Reference-facts review queue (Sprint 7b-2): the
+        // uncertain-first sort is THE safety affordance — a flagged fact (scope
+        // unclear / compound group / possible version) floats to the top, then
+        // the least-confident, so the reviewer spends attention where the risk
+        // is. Default scope: the inert ai_agent lane awaiting verification.
+        if ($request->boolean('queue')) {
+            $query->where('source', 'ai_agent')->where('status', 'needs_review');
+            $query->orderByRaw('(uncertainty IS NOT NULL) DESC')
+                ->orderByRaw('confidence ASC NULLS LAST')
+                ->orderByDesc('id');
+        } else {
+            $query->orderByDesc('id');
         }
 
         return response()->json([
@@ -62,6 +78,7 @@ class ReferenceFactController extends Controller
         $fact = ReferenceFact::with([
             'convenio.territory', 'convenio.sector', 'jobCategory', 'topic',
             'sourceDocument:id,uuid,title,source_filename', 'verifier:id,full_name', 'creator:id,full_name',
+            'duplicateOf:id,uuid,value',
         ])->where('uuid', $uuid)->firstOrFail();
 
         $provenance = TagEvent::where('entity_type', 'reference_fact')
@@ -206,6 +223,51 @@ class ReferenceFactController extends Controller
         return response()->json(['status' => 'ok', 'fact_status' => 'verified']);
     }
 
+    /**
+     * Reject an AI proposal (Sprint 7b-2, Q5) → `status = rejected`, appended
+     * provenance. Auditable + excluded from the queue WITHOUT deletion (over a
+     * soft-delete timestamp). The agent's bad scope guess is preserved for the
+     * eval/audit trail, never silently dropped. Gated by `knowledge.edit`.
+     */
+    public function reject(Request $request, string $uuid): JsonResponse
+    {
+        $fact = ReferenceFact::where('uuid', $uuid)->firstOrFail();
+        $adminId = $request->user()->id;
+
+        if ($fact->status === 'verified') {
+            return response()->json(['message' => 'A verified fact cannot be rejected; edit or re-verify instead.'], 409);
+        }
+        if ($fact->status === 'rejected') {
+            return response()->json(['status' => 'ok', 'fact_status' => 'rejected', 'note' => 'already rejected']);
+        }
+
+        DB::transaction(function () use ($fact, $adminId, $request) {
+            $fact->update(['status' => 'rejected']);
+            $note = trim((string) $request->input('reason', ''));
+            $this->logEvent($fact->id, 'reference_fact', $fact->getOriginal('status'), 'rejected', $adminId, $note !== '' ? "rejected: {$note}" : 'AI proposal rejected by admin');
+        });
+
+        return response()->json(['status' => 'ok', 'fact_status' => 'rejected']);
+    }
+
+    /**
+     * Manually (re-)run the AI segmentation agent on a reference SOURCE (Sprint
+     * 7b-2). Dispatches the queued SegmentReferenceSource job (the same job the
+     * ingest auto-trigger uses); the proposed facts land inert (ai_agent/
+     * needs_review). Idempotent — re-running upserts on the group_label-extended
+     * logical key. Gated by `knowledge.edit`.
+     */
+    public function segment(Request $request, string $uuid): JsonResponse
+    {
+        $doc = Document::whereHas('documentType', fn ($q) => $q->where('code', 'reference_source'))
+            ->where('uuid', $uuid)
+            ->firstOrFail();
+
+        \App\Jobs\SegmentReferenceSource::dispatch($doc->id);
+
+        return response()->json(['status' => 'queued', 'document_uuid' => $doc->uuid]);
+    }
+
     /** Reference SOURCE documents (read) — the create-form source picker. */
     public function sources(): JsonResponse
     {
@@ -297,12 +359,20 @@ class ReferenceFactController extends Controller
             'territory' => $f->convenio?->territory?->name,
             'sector' => $f->convenio?->sector?->name,
             'job_category' => $f->jobCategory?->name,
+            'group_label' => $f->group_label,
             'topic' => $f->topic?->name,
             'status' => $f->status,
             'source' => $f->source,
             'authority_level' => $f->authority_level,
             'validity_start' => $f->validity_start?->toDateString(),
             'validity_end' => $f->validity_end?->toDateString(),
+            // Sprint 7b-2 — the review-queue safety fields (uncertain-first sort,
+            // fuchsia, the source-line check).
+            'confidence' => $f->confidence,
+            'uncertainty' => $f->uncertainty,
+            'source_excerpt' => $f->source_excerpt,
+            'is_ai_proposed' => $f->source === 'ai_agent' && $f->status === 'needs_review',
+            'is_possible_duplicate' => $f->duplicate_of_id !== null,
         ];
     }
 
@@ -322,6 +392,9 @@ class ReferenceFactController extends Controller
                 'territory' => $fact->convenio?->territory ? ['name' => $fact->convenio->territory->name, 'level' => $fact->convenio->territory->level] : null,
                 'sector' => $fact->convenio?->sector ? ['name' => $fact->convenio->sector->name] : null,
                 'job_category' => $fact->jobCategory ? ['id' => $fact->jobCategory->id, 'name' => $fact->jobCategory->name, 'group_code' => $fact->jobCategory->group_code] : null,
+                // The group AS WRITTEN (Sprint 7b-2) — the identity discriminator
+                // that carries the (common) null-job_category case.
+                'group_label' => $fact->group_label,
             ],
             'topic' => $fact->topic ? ['id' => $fact->topic->id, 'name' => $fact->topic->name] : null,
             'validity_start' => $fact->validity_start?->toDateString(),
@@ -329,9 +402,19 @@ class ReferenceFactController extends Controller
             'authority_level' => $fact->authority_level,
             'source' => $fact->source,
             'status' => $fact->status,
-            // Fuchsia is unverified-AI ONLY (ADR-0020). A manual fact never gets
-            // it; this is always false in 7b-1 (no ai_agent writer exists yet).
+            // Fuchsia is unverified-AI ONLY (ADR-0020): an ai_agent fact that is
+            // still needs_review. A manual or verified fact never gets it.
             'is_ai_proposed' => $fact->source === 'ai_agent' && $fact->status === 'needs_review',
+            // Sprint 7b-2 — the segmentation metadata the reviewer judges against.
+            'confidence' => $fact->confidence,
+            'uncertainty' => $fact->uncertainty,
+            'source_excerpt' => $fact->source_excerpt,
+            'proposal_batch_id' => $fact->proposal_batch_id,
+            // The version/duplicate FLAG (Q4) — a signal, not a resolution (7d).
+            'duplicate_of' => $fact->duplicateOf ? [
+                'uuid' => $fact->duplicateOf->uuid,
+                'value' => $fact->duplicateOf->value,
+            ] : null,
             'verified_by' => $fact->verifier?->full_name,
             'verified_at' => $fact->verified_at?->toDateTimeString(),
             'created_by' => $fact->creator?->full_name,

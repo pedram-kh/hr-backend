@@ -257,12 +257,21 @@ class DocumentIngestor
         // `conflict` is human-adjudicated (the AI may suggest but never on the
         // conflict path here), so only `unresolved` auto-triggers.
         //
-        // A reference_source is deliberately EXCLUDED: it is inherently
-        // multi-scope (no single convenio), so the 7a document-level tagger would
-        // mis-propose one convenio. Its facts are created by hand (7b-1); the AI
-        // fact-segmentation is 7b-2 — not pre-wired here.
+        // A reference_source is deliberately EXCLUDED from the 7a document-level
+        // tagger: it is inherently multi-scope (no single convenio), so that
+        // tagger would mis-propose one convenio.
         if (! $asReference && ($tag['review']['reason'] ?? null) === 'unresolved') {
             \App\Jobs\ProposeDocumentTags::dispatch($document->id);
+        }
+
+        // Sprint 7b-2 (ADR-0022): a reference_source IS auto-segmented — but by
+        // the per-FACT segmentation agent (not the document tagger). Queued AFTER
+        // commit so it never blocks/fails ingest; the proposed facts are inert
+        // (ai_agent/needs_review, not answerable) until a human verifies. The
+        // routing invariant holds: only a reference_source reaches this path, and
+        // the segmenter never writes a salary row.
+        if ($asReference) {
+            \App\Jobs\SegmentReferenceSource::dispatch($document->id);
         }
 
         return [

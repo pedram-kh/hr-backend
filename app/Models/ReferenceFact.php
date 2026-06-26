@@ -35,19 +35,29 @@ class ReferenceFact extends Model
     /**
      * The logical-key columns the 7b-2 AI writer upserts on (see class docblock).
      *
+     * EXTENDED in 7b-2 (Q1) with `group_label`: because `convenio_job_categories`
+     * is salary-derived and unseeded for the periodo convenios, `job_category_id`
+     * is usually null, so the group ("Grupo 1/2/3") MUST be a first-class identity
+     * discriminator or per-group facts collide on the key and the upsert clobbers
+     * them. `group_label` carries that (common) case; `job_category_id` is used
+     * too when a real category resolves.
+     *
      * @var list<string>
      */
-    public const LOGICAL_KEY = ['convenio_id', 'topic_id', 'job_category_id', 'validity_start', 'validity_end'];
+    public const LOGICAL_KEY = ['convenio_id', 'topic_id', 'job_category_id', 'group_label', 'validity_start', 'validity_end'];
 
     protected $fillable = [
-        'uuid', 'convenio_id', 'job_category_id', 'topic_id',
-        'value', 'raw_values', 'validity_start', 'validity_end',
+        'uuid', 'convenio_id', 'job_category_id', 'group_label', 'topic_id',
+        'value', 'raw_values', 'confidence', 'uncertainty', 'validity_start', 'validity_end',
         'authority_level', 'source', 'status', 'verified_by', 'verified_at',
-        'source_document_id', 'source_locator', 'created_by',
+        'source_document_id', 'source_locator', 'source_excerpt',
+        'proposal_batch_id', 'duplicate_of_id', 'created_by',
     ];
 
     protected $casts = [
         'raw_values' => 'array',
+        'uncertainty' => 'array',
+        'confidence' => 'float',
         'validity_start' => 'date',
         'validity_end' => 'date',
         'verified_at' => 'datetime',
@@ -80,6 +90,17 @@ class ReferenceFact extends Model
     public function sourceDocument(): BelongsTo
     {
         return $this->belongsTo(Document::class, 'source_document_id');
+    }
+
+    /**
+     * The existing fact this AI proposal looks like an updated version of — set
+     * ONLY as a flag when the logical key collides with a differing value across
+     * source versions (Sprint 7b-2, Q4). A SIGNAL for the human, never a
+     * resolution: nothing is merged or retired here (that is Sprint 7d).
+     */
+    public function duplicateOf(): BelongsTo
+    {
+        return $this->belongsTo(ReferenceFact::class, 'duplicate_of_id');
     }
 
     public function verifier(): BelongsTo
