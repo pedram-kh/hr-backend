@@ -208,13 +208,26 @@ synthesises, and grounds (ADR-0007/0015/0016).
   selected_job_category_id? }` → a scoped **cited** answer, a **salary** answer, a
   single-turn **category pick**, or an honest **escalation**. The full path
   (`ChatService`): scope resolve → **`GuardrailService`** (hardcoded baseline;
-  fires *before* the router and any `hr-ai` call) → **`RouterService`** (ADR-0016)
-  → branch:
+  fires *before* the router and any `hr-ai` call) → a deterministic **reference-fact
+  pre-check** (`ReferenceFactRouter`, 7c — non-salary questions only, fail-safe
+  fall-through) → **`RouterService`** (ADR-0016) → branch:
   - **salary** → **`SalaryAnswerService`** (SQL over `salary_tables` /
     `salary_table_rows`, exact + year-aligned per ADR-0006): category from profile
     or a **constrained single-turn pick** (`needs_category`, FK-validated,
     unverified, shown "según tu indicación"); coverage gap → escalate
     `salary_coverage_gap`. Skips synthesis/grounding (SQL-grounded by construction).
+  - **reference fact** (7c, ADR-0023) → **`ReferenceFactAnswerService`** (the salary
+    sibling): when a `verified`, in-scope, in-validity `reference_facts` row matches
+    the question's topic, quote the exact `value`/`raw_values`, cite the source with
+    `chunk_id = null` at `structured_reference`, **skip `/ground`** (Phase 1); no
+    usable verified fact → escalate `reference_fact_coverage_gap` (only verified
+    answers; scope is most-specific-else-escalate; `path:"reference_fact"`).
+    **Composition (Phase 2):** if governing convenio prose on the topic is also
+    present (clears Check A), the fact is handed to `/synthesise`+`/ground` as one
+    more typed source (`source_type=reference_fact`, `chunk_id=null`,
+    `structured_reference` below `official_convenio`); the **generated** answer
+    **must `/ground`**; a same-point conflict escalates (`conflict`) before synthesis,
+    never blends (`path:"reference_fact_composition"`).
   - **prose** → recall-hardened `/retrieve` (sub-query union + national-law pass) →
     pre-synthesis floor (Check A) → **`hr-ai /synthesise`** → Check B → figure-guard
     pre-check → **`GroundingService` (`hr-ai /ground`)** per-claim entailment gate →

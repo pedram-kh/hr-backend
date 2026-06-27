@@ -23,14 +23,20 @@ class GroundingService
     public function __construct(private readonly ExtractionClient $ai) {}
 
     /**
-     * @param  list<array{chunk_id:int, content:string, authority_level:?string}>  $citedChunks
+     * @param  list<array{chunk_id:?int, content:string, authority_level:?string, source_type?:string}>  $citedChunks
      * @param  array{provider:string,model:string,endpoint:?string}  $providerConfig
      * @return array{grounded:bool, claims:list<array<string,mixed>>, ungrounded:list<string>, error:?string, trace_fragment:array<string,mixed>}
      */
     public function check(string $question, string $answer, array $citedChunks, string $decryptedKey, array $providerConfig): array
     {
+        // `chunk_id`/`source_type` are additive (Sprint 7c, Q7): a chunk source
+        // keeps its int chunk_id and the default `chunk` type (the prose/salary
+        // grounding payload is unchanged); a structured_reference fact source
+        // carries chunk_id=null + source_type=reference_fact so its claim is
+        // entailed against the quoted value (chunk_id=null).
         $payload = array_map(fn ($c) => [
-            'chunk_id' => (int) $c['chunk_id'],
+            'chunk_id' => array_key_exists('chunk_id', $c) && $c['chunk_id'] !== null ? (int) $c['chunk_id'] : null,
+            'source_type' => $c['source_type'] ?? 'chunk',
             'content' => (string) $c['content'],
             'authority_level' => $c['authority_level'] ?? null,
             'is_tabular' => $this->looksTabular((string) $c['content']),

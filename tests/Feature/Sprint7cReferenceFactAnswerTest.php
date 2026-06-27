@@ -78,8 +78,10 @@ class Sprint7cReferenceFactAnswerTest extends TestCase
         $employee = $this->employee();
         $this->verifiedFact(value: 'periodo de prueba 90/75/60 días según contrato', group: null, jobCategory: null);
 
-        // Bind an AI that would EXPLODE if called — proves the reference-fact path
-        // never touches /route, /synthesise, or /ground (skip-ground by construction).
+        // Bind an AI that returns NO retrieval (so Phase 2 composition finds no
+        // governing convenio prose on the topic and correctly falls through to the
+        // Phase 1 quote) and EXPLODES on /route, /synthesise, /ground — proving the
+        // Phase 1 fallback never touches them (skip-ground by construction).
         $this->bindExplodingAi();
 
         $result = app(ChatService::class)->handleMessage($employee, '¿cuál es mi periodo de prueba?');
@@ -279,6 +281,13 @@ class Sprint7cReferenceFactAnswerTest extends TestCase
         $fake = new class extends ExtractionClient
         {
             public function __construct() {}
+
+            public function retrieve(array $params): array
+            {
+                // No governing convenio prose → Phase 2 composition falls through to
+                // the Phase 1 quote (this test pins the pure quoted-value fallback).
+                return ['chunks' => [], 'eligible_total' => 0];
+            }
 
             public function route(string $q, string $k, array $c): array
             {
