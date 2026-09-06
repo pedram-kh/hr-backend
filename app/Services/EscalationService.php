@@ -23,6 +23,14 @@ use RuntimeException;
  * hr-backend owns ALL writes (ADR-0007); every move/reply/resolution/publish is
  * audited to `escalation_events`. The no-override rule is ENFORCED at publish
  * (block/re-escalate), never advisory.
+ *
+ * SPRINT 7d (ADR-0024) — the fence gained a SEMANTIC pass, strictly additively:
+ * `fence = existing_block OR semantic_block`. `detectConflicts()` below is
+ * UNCHANGED and is still the first term; the semantic comparison is consulted
+ * only when it returns empty, so it can add a block and can never remove one. A
+ * plausible-but-not-certain overlap does not block — it requires the human's
+ * explicit acknowledgement (band 2), and so does a comparison that FAILED. There
+ * is no path from "the comparison didn't work" to a clean publish.
  */
 class EscalationService
 {
@@ -38,6 +46,10 @@ class EscalationService
     public function __construct(
         private readonly RulingPublisher $publisher,
         private readonly GuardrailPolicy $policy,
+        // Sprint 7d (ADR-0024). ADDITIVE: consulted only when detectConflicts()
+        // comes back empty, so the combined fence is `existing OR semantic` and
+        // this collaborator cannot clear a structural block.
+        private readonly SemanticFenceService $fence,
     ) {}
 
     /**
@@ -121,14 +133,26 @@ class EscalationService
      * Outcomes:
      *  - ['outcome' => 'resolved', 'card' => …, 'document' => Document|null, 'publish' => array|null]
      *  - ['outcome' => 'publish_blocked', 'conflicts' => list<array>]  (no-override fence)
+     *  - ['outcome' => 'publish_requires_acknowledgement', 'passages' => list<array>]  (Sprint 7d band 2)
      *
      * The scope-confirm gate (409) is enforced in the controller (the Sprint-3
      * pattern). This method assumes confirmation already happened for a convert.
      *
+     * `$acknowledgeSemanticOverlap` (Sprint 7d) is the human's explicit "I have
+     * read the near-passages and there is no overlap" — a per-attempt flag, never
+     * a stored grant, exactly like `confirm_scope_change`. It can only satisfy the
+     * REVIEW band; it can never unblock a `semantic_overlap` or a structural block.
+     *
      * @return array<string,mixed>
      */
-    public function resolve(EscalationCard $card, Admin $actor, string $resolutionText, bool $convert, ?int $topicId): array
-    {
+    public function resolve(
+        EscalationCard $card,
+        Admin $actor,
+        string $resolutionText,
+        bool $convert,
+        ?int $topicId,
+        bool $acknowledgeSemanticOverlap = false,
+    ): array {
         if (! $convert) {
             return DB::transaction(function () use ($card, $actor, $resolutionText) {
                 $resolution = EscalationResolution::updateOrCreate(
@@ -252,8 +276,32 @@ class EscalationService
         // human review, the safe failure direction (a false block routes to a
         // human; a false "no conflict" is the exact harm we refuse).
         $conflicts = $this->detectConflicts($convenioId, $topicId);
-        if ($conflicts->isNotEmpty()) {
-            DB::transaction(function () use ($card, $actor, $conflicts, $topicId, $document) {
+
+        // ── Sprint 7d (ADR-0024): the SEMANTIC pass — additive, never a replacement ──
+        // `fence = existing_block OR semantic_block`, BY CONSTRUCTION: the semantic
+        // comparison is consulted ONLY when the structural check came back empty,
+        // so it can turn ALLOW into BLOCK and can never turn BLOCK into ALLOW. A
+        // similarity miss therefore cannot open a gate the crude check closed.
+        //   Two further consequences of this ordering, both deliberate:
+        //   - no added latency on the common (already-blocked) path — the cheap SQL
+        //     short-circuits before any network call;
+        //   - it fires exactly where the topic lens was letting things through: an
+        //     active convenio tagged on a DIFFERENT topic (Sprint-5 fence case 4).
+        // A failed comparison NEVER yields `clear` (SemanticFenceService rule 3).
+        $semantic = $conflicts->isEmpty()
+            ? $this->fence->compareRulingToScope($convenioId, $resolutionText, $document->id)
+            : null;
+
+        if ($conflicts->isNotEmpty() || ($semantic !== null && $semantic->blocks())) {
+            $semanticBlock = $conflicts->isEmpty();
+            // The documents to surface: the structural conflicts, or (semantic
+            // block) the documents whose passages overlapped.
+            $blocking = $semanticBlock
+                ? $this->documentsFromMatches($semantic->matches)
+                : $conflicts;
+            $detail = $semantic?->toAudit();
+
+            DB::transaction(function () use ($card, $actor, $conflicts, $blocking, $topicId, $document, $semanticBlock, $semantic, $detail) {
                 // Keep the DRAFT unpublished. Surface the conflict in the document
                 // review queue (find-or-create an open `conflict` task on the draft,
                 // the same queue ingest conflicts land in — ADR-0011) AND on the
@@ -262,20 +310,26 @@ class EscalationService
                     ['document_id' => $document->id, 'type' => 'conflict', 'status' => 'open'],
                     [
                         'reason' => 'conflict',
-                        'raw_unmatched_values' => $conflicts->map(fn ($d) => ['facet' => 'authority', 'value' => $d->uuid])->all(),
+                        'raw_unmatched_values' => $blocking->map(fn ($d) => ['facet' => 'authority', 'value' => $d->uuid])->all(),
                     ],
                 );
 
                 // Accurate reason: a true same-topic conflict vs. a scope-level
-                // block on an untagged-but-governing convenio (Correction-01).
-                if ($topicId === null) {
+                // block on an untagged-but-governing convenio (Correction-01) vs.
+                // (7d) a meaning-based overlap the topic lens did not catch.
+                if ($semanticBlock) {
+                    $score = number_format((float) $semantic->maxScore, 3);
+                    $note = "semantic overlap with active official convenio text in the asker's scope "
+                        ."(max similarity {$score} ≥ threshold ".number_format($semantic->threshold, 3).') — '
+                        .'the convenio appears to already govern this specific point; internal ruling cannot override it (Sprint 7d)';
+                } elseif ($topicId === null) {
                     $note = 'no topic assigned — scope-only conflict fence blocked publish (an official convenio is active in scope)';
                 } elseif (DocumentTopic::whereIn('document_id', $conflicts->pluck('id'))->where('topic_id', $topicId)->exists()) {
                     $note = 'official convenio governs this topic in the asker\'s scope — internal ruling cannot override it';
                 } else {
                     $note = 'an active official convenio governs this scope (untagged for this topic) — internal ruling cannot override it (topic-additive fail-closed block, Correction-01)';
                 }
-                $this->log($card, 'publish_blocked', null, $conflicts->pluck('uuid')->implode(','), $actor, $note);
+                $this->log($card, 'publish_blocked', null, $blocking->pluck('uuid')->implode(','), $actor, $note, $detail);
 
                 // Route to a human: the card returns to in_progress (NOT resolved).
                 if ($card->status !== 'in_progress') {
@@ -287,10 +341,45 @@ class EscalationService
                 }
             });
 
-            return ['outcome' => 'publish_blocked', 'conflicts' => $conflicts->map(fn ($d) => [
-                'uuid' => $d->uuid,
-                'title' => $d->title,
-            ])->all()];
+            return [
+                'outcome' => 'publish_blocked',
+                'reason' => $semanticBlock ? 'semantic_overlap' : 'topic_scope_conflict',
+                'conflicts' => $blocking->map(fn ($d) => [
+                    'uuid' => $d->uuid,
+                    'title' => $d->title,
+                ])->all(),
+                'passages' => $semanticBlock ? $semantic->passages() : [],
+                'max_score' => $semantic?->maxScore,
+            ];
+        }
+
+        // ── Sprint 7d band 2: PLAUSIBLE overlap → ask, never silently pass ──────
+        // Not blocked, but the human must read the near-passages and say so. The
+        // draft is left exactly as it is (still `draft`, still 0 chunks) and the
+        // card is NOT re-opened — this is a question, not a rejection. The same
+        // branch catches a FAILED comparison (`semantic_compare_unavailable`) and a
+        // scope whose convenio has no readable text (`semantic_no_text_to_compare`),
+        // because neither is evidence that there is no conflict.
+        if ($semantic !== null && $semantic->requiresAcknowledgement() && ! $acknowledgeSemanticOverlap) {
+            return [
+                'outcome' => 'publish_requires_acknowledgement',
+                'reason' => $semantic->reason,
+                'passages' => $semantic->passages(),
+                'max_score' => $semantic->maxScore,
+                'failure_detail' => $semantic->failureDetail,
+            ];
+        }
+
+        if ($semantic !== null && $semantic->requiresAcknowledgement()) {
+            // The human explicitly acknowledged. Recorded BEFORE the publish so the
+            // audit trail holds the acknowledgement even if the publish then fails.
+            $score = $semantic->maxScore !== null ? number_format($semantic->maxScore, 3) : 'n/a';
+            $this->log(
+                $card, 'publish_acknowledged_overlap', null, $score, $actor,
+                "human acknowledged a near-overlap and published anyway (reason {$semantic->reason}, "
+                ."max similarity {$score}, review band ".number_format($semantic->reviewBand, 3).')',
+                $semantic->toAudit(),
+            );
         }
 
         // No conflict → render → S3 → /extract → /embed (hr-ai untouched). Outside
@@ -380,8 +469,43 @@ class EscalationService
         return "Resolución interna RR. HH.{$topicPart} (escalación #{$card->id})";
     }
 
-    /** Append an immutable audit row to the card's activity log. */
-    private function log(EscalationCard $card, string $type, ?string $old, ?string $new, Admin $actor, ?string $note): void
+    /**
+     * Resolve the Documents behind a semantic comparison's matched chunks (hr-ai
+     * returns chunk + document IDS only — it never joins the registry). Ordered by
+     * best score first so the human reads the strongest overlap at the top.
+     *
+     * @param  list<array<string,mixed>>  $matches
+     * @return Collection<int, Document>
+     */
+    private function documentsFromMatches(array $matches)
+    {
+        $ordered = [];
+        foreach ($matches as $m) {
+            $id = (int) ($m['document_id'] ?? 0);
+            if ($id !== 0 && ! isset($ordered[$id])) {
+                $ordered[$id] = true; // first occurrence == best score (matches are score-sorted)
+            }
+        }
+
+        $documents = Document::whereIn('id', array_keys($ordered))->get(['id', 'uuid', 'title'])->keyBy('id');
+
+        return collect(array_keys($ordered))
+            ->map(fn (int $id) => $documents->get($id))
+            ->filter()
+            ->values();
+    }
+
+    /**
+     * Append an immutable audit row to the card's activity log.
+     *
+     * `$detail` (Sprint 7d) carries the semantic fence's machine-readable evidence
+     * — matched chunk ids, scores, and the thresholds in force — so "*why* did this
+     * block?" is still answerable after the thresholds are re-calibrated. Still
+     * append-only: rows are INSERTed, never UPDATEd.
+     *
+     * @param  array<string,mixed>|null  $detail
+     */
+    private function log(EscalationCard $card, string $type, ?string $old, ?string $new, Admin $actor, ?string $note, ?array $detail = null): void
     {
         EscalationEvent::create([
             'escalation_card_id' => $card->id,
@@ -390,6 +514,7 @@ class EscalationService
             'new_value' => $new,
             'actor_id' => $actor->id,
             'note' => $note,
+            'detail' => $detail,
         ]);
     }
 }

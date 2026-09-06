@@ -198,6 +198,12 @@ class EscalationController extends Controller
      * Resolve a card, optionally converting the resolution into a published
      * `internal_hr_ruling` (the flywheel). The scope-confirm gate (Sprint-3
      * pattern, 409) and the no-override conflict gate (409) are enforced here.
+     *
+     * Sprint 7d (ADR-0024) adds one more 409 — `publish_requires_acknowledgement`
+     * — for the semantic fence's review band. Three publish-time 409s now exist and
+     * they are NOT interchangeable: `scope_confirmation_required` (who gets
+     * answered), `publish_blocked` (refused), `publish_requires_acknowledgement`
+     * (asked). Only the third can be satisfied by re-POSTing a flag.
      */
     public function resolve(string $uuid, Request $request): JsonResponse
     {
@@ -207,6 +213,11 @@ class EscalationController extends Controller
             'convert' => ['nullable', 'boolean'],
             'topic_id' => ['nullable', 'integer'],
             'confirm_scope_change' => ['nullable', 'boolean'],
+            // Sprint 7d (ADR-0024): the human's explicit "I read the near-passages,
+            // there is no overlap". Per-attempt, never stored — the same shape as
+            // `confirm_scope_change`. It satisfies ONLY the review band; it can
+            // never unblock a `semantic_overlap` or a structural conflict.
+            'acknowledge_semantic_overlap' => ['nullable', 'boolean'],
         ]);
 
         $convert = (bool) ($data['convert'] ?? false);
@@ -232,6 +243,7 @@ class EscalationController extends Controller
                 trim($data['resolution_text']),
                 $convert,
                 isset($data['topic_id']) ? (int) $data['topic_id'] : null,
+                (bool) ($data['acknowledge_semantic_overlap'] ?? false),
             );
         } catch (RuntimeException $e) {
             return response()->json(['code' => $e->getMessage(), 'message' => 'No se pudo resolver la tarjeta.'], 422);
@@ -253,11 +265,51 @@ class EscalationController extends Controller
         }
 
         if (($result['outcome'] ?? null) === 'publish_blocked') {
+            // Sprint 7d: the same 409 code and the same `conflicts` shape as before
+            // (the existing UI keeps working unchanged); `reason` distinguishes the
+            // structural block from the new semantic one, and `passages` carries the
+            // overlapping convenio text so the human can judge for themselves.
+            $semantic = ($result['reason'] ?? null) === 'semantic_overlap';
+
             return response()->json([
                 'code' => 'publish_blocked',
-                'message' => 'No se puede publicar: existe un convenio oficial vigente para este ámbito y tema. '
-                    .'Una resolución interna no puede prevalecer sobre el convenio — se ha devuelto la tarjeta a una persona.',
+                'message' => $semantic
+                    ? 'No se puede publicar: el texto del convenio oficial vigente para este ámbito ya parece '
+                        .'regular este punto concreto. Una resolución interna no puede prevalecer sobre el convenio — '
+                        .'revisa los pasajes coincidentes; se ha devuelto la tarjeta a una persona.'
+                    : 'No se puede publicar: existe un convenio oficial vigente para este ámbito y tema. '
+                        .'Una resolución interna no puede prevalecer sobre el convenio — se ha devuelto la tarjeta a una persona.',
+                'reason' => $result['reason'] ?? null,
                 'conflicts' => $result['conflicts'],
+                'passages' => $result['passages'] ?? [],
+                'max_score' => $result['max_score'] ?? null,
+            ], 409);
+        }
+
+        // Sprint 7d band 2 (ADR-0024): a PLAUSIBLE overlap, or a comparison that
+        // could not be made. Not a rejection — a question. Nothing was published,
+        // the draft is untouched and the card is NOT re-opened; re-POST with
+        // `acknowledge_semantic_overlap = true` to proceed. Never a silent pass.
+        if (($result['outcome'] ?? null) === 'publish_requires_acknowledgement') {
+            $unreadable = in_array($result['reason'] ?? null, ['semantic_compare_unavailable', 'semantic_no_text_to_compare'], true);
+
+            return response()->json([
+                'code' => 'publish_requires_acknowledgement',
+                'message' => $unreadable
+                    // The copy names the cause explicitly, so this prompt is never
+                    // mistaken for a real near-passage — an acknowledgement the human
+                    // learns to click through is a fence that has quietly opened.
+                    ? 'No se ha podido comparar esta resolución con el texto del convenio vigente '
+                        .'(la comparación semántica no está disponible o el convenio del ámbito no tiene texto legible). '
+                        .'Eso no confirma que no haya solapamiento: revísalo y confirma explícitamente para publicar.'
+                    : 'Esta resolución se parece a pasajes del convenio oficial vigente en este ámbito, '
+                        .'pero no lo bastante como para bloquear la publicación. Revisa los pasajes y confirma '
+                        .'explícitamente que no hay solapamiento para publicar.',
+                'reason' => $result['reason'] ?? null,
+                'passages' => $result['passages'] ?? [],
+                'max_score' => $result['max_score'] ?? null,
+                'comparison_unavailable' => $unreadable,
+                'detail' => $result['failure_detail'] ?? null,
             ], 409);
         }
 

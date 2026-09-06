@@ -59,4 +59,65 @@ return [
     // give the precedence re-rank the baseline chunks to pair convenio against).
     'retrieval_national_law_k' => (int) env('HR_RETRIEVAL_NATIONAL_LAW_K', 8),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Sprint 7d — the semantic publish fence (ADR-0024)
+    |--------------------------------------------------------------------------
+    |
+    | ⚠ THE DIRECTION OF "STRICTER" IS INVERTED HERE. Every knob above is a
+    | FLOOR: raising it means more caution, which is why GuardrailPolicy combines
+    | them with max(floor, admin) (ADR-0019). These two are BLOCK-TRIGGERING
+    | THRESHOLDS: a LOWER value blocks MORE. Feeding them through
+    | GuardrailPolicy::maxFloor would therefore let an admin LOOSEN the publish
+    | fence under a mechanism whose whole promise is that it can only tighten.
+    |
+    | Consequence, recorded in ADR-0024: these are NOT exposed in the Sprint-6
+    | guardrails UI. Any future admin exposure must combine with
+    | min(baseline, admin), never max. Until then they are code config only.
+    |
+    | ⚠ PROVISIONAL VALUES — pending the mandatory calibration run. Set them from
+    | the output of `php artisan fence:calibrate-semantic` (real published-ruling
+    | distribution + the labeled synthetic anchors in
+    | hr-docs/sprints/sprint-07d/eval/anchors.json), choosing a block threshold
+    | BELOW the lowest score any known-true-overlap anchor produced. The defaults
+    | below are deliberately conservative (they block more than a measured value
+    | probably needs to) because over-blocking routes to a human and
+    | under-blocking is the harm the fence exists to prevent.
+    */
+
+    // Band 1 — certain overlap: publish is BLOCKED (409 `semantic_overlap`).
+    'semantic_conflict_threshold' => (float) env('HR_SEMANTIC_CONFLICT_THRESHOLD', 0.75),
+
+    // Band 2 — plausible overlap: publish is not blocked, but the human is shown
+    // the near-passages and must EXPLICITLY acknowledge before it proceeds.
+    // Never a silent "no conflict".
+    'semantic_review_band' => (float) env('HR_SEMANTIC_REVIEW_BAND', 0.60),
+
+    // How many passages are RETURNED per probe for the human to read. NOT a gate:
+    // the block decision reads the top score of an exactly-filtered, exactly-
+    // ordered set (authority filtered in SQL), so it is k-independent.
+    'semantic_compare_k' => (int) env('HR_SEMANTIC_COMPARE_K', 5),
+
+    // Probe splitting (the embedder silently truncates a long text, which would
+    // leave a ruling's tail uncompared — a fail-open). The ruling is split into
+    // paragraph-sized probes and the fence takes max over ALL probes.
+    'semantic_probe_max' => (int) env('HR_SEMANTIC_PROBE_MAX', 12),
+    'semantic_probe_min_chars' => (int) env('HR_SEMANTIC_PROBE_MIN_CHARS', 120),
+    'semantic_probe_max_chars' => (int) env('HR_SEMANTIC_PROBE_MAX_CHARS', 600),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Sprint 7d — the succession proposal (ADR-0024, part C)
+    |--------------------------------------------------------------------------
+    |
+    | A `successor` proposal needs BOTH high overlap AND a strictly-later
+    | validity_start — a conjunction, because a confidently-wrong successor is
+    | the one output that would tempt a human to retire a live document. These
+    | drive a PROPOSAL a human confirms, not a gate, so they are ordinary knobs.
+    */
+    'succession_overlap_threshold' => (float) env('HR_SUCCESSION_OVERLAP_THRESHOLD', 0.75),
+    'succession_sibling_ceiling' => (float) env('HR_SUCCESSION_SIBLING_CEILING', 0.55),
+    'succession_probe_max' => (int) env('HR_SUCCESSION_PROBE_MAX', 12),
+    'succession_candidate_max' => (int) env('HR_SUCCESSION_CANDIDATE_MAX', 20),
+
 ];

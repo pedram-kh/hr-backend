@@ -46,12 +46,25 @@ class ReferenceFact extends Model
      */
     public const LOGICAL_KEY = ['convenio_id', 'topic_id', 'job_category_id', 'group_label', 'validity_start', 'validity_end'];
 
+    /**
+     * Sprint 7d (ADR-0024) — the human's verdict on a flagged duplicate pair.
+     * Validated at the FormRequest, NOT as a DB enum: an enum becomes a Postgres
+     * CHECK and extending it later would need the introspect-drop-readd dance
+     * 7b-2 had to perform for `status`.
+     *
+     * @var list<string>
+     */
+    public const RESOLUTIONS = ['supersedes', 'superseded', 'coexists', 'rejected_duplicate'];
+
     protected $fillable = [
         'uuid', 'convenio_id', 'job_category_id', 'group_label', 'topic_id',
         'value', 'raw_values', 'confidence', 'uncertainty', 'validity_start', 'validity_end',
         'authority_level', 'source', 'status', 'verified_by', 'verified_at',
         'source_document_id', 'source_locator', 'source_excerpt',
         'proposal_batch_id', 'duplicate_of_id', 'created_by',
+        // Sprint 7d: the resolution verdict + version lineage. `superseded_by_id`
+        // is the fact-level sibling of documents.predecessor_document_id.
+        'resolution', 'superseded_by_id', 'resolved_by', 'resolved_at',
     ];
 
     protected $casts = [
@@ -61,6 +74,7 @@ class ReferenceFact extends Model
         'validity_start' => 'date',
         'validity_end' => 'date',
         'verified_at' => 'datetime',
+        'resolved_at' => 'datetime',
     ];
 
     protected static function booted(): void
@@ -103,9 +117,26 @@ class ReferenceFact extends Model
         return $this->belongsTo(ReferenceFact::class, 'duplicate_of_id');
     }
 
+    /**
+     * Version lineage (Sprint 7d): the NEWER fact whose `validity_start` closed
+     * this one's window on a human-confirmed supersede. Set only by
+     * FactResolutionService; the older fact is NEVER deleted and stays `verified`
+     * for its own window, so a question dated inside that window still gets the
+     * old value.
+     */
+    public function supersededBy(): BelongsTo
+    {
+        return $this->belongsTo(ReferenceFact::class, 'superseded_by_id');
+    }
+
     public function verifier(): BelongsTo
     {
         return $this->belongsTo(Admin::class, 'verified_by');
+    }
+
+    public function resolver(): BelongsTo
+    {
+        return $this->belongsTo(Admin::class, 'resolved_by');
     }
 
     public function creator(): BelongsTo

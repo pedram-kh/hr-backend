@@ -515,7 +515,93 @@ all **AI proposes → human confirms**, no answer-loop change.
   Sprint-3 `date_expired_active` staleness docs). The succession handoff
   (`POST /admin/review/expiry/{taskId}/resolve`) writes `predecessor_document_id`
   on human confirmation — **same-convenio candidates only, never auto-retire**.
-  (AI *suggestion* of succession candidates is deferred to Sprint 7d.)
+  (AI *suggestion* of succession candidates arrived in Sprint 7d, below.)
+
+## Semantic comparison: the fence, fact versions, succession (Sprint 7d, ADR-0024)
+
+One read-only primitive (`ExtractionClient::compareScope()` → hr-ai
+`POST /compare-scope`) and three **human-adjudicated** surfaces. Nothing here
+auto-resolves, auto-links, auto-retires or auto-publishes.
+
+- **(A) The semantic publish fence** — `SemanticFenceService`, consulted from
+  `EscalationService::resolve()`. The combined fence is
+  **`existing_block OR semantic_block`, structurally**: `detectConflicts()` is
+  unchanged and still the first term, and the semantic pass runs **only when it
+  returns empty**, so it can turn ALLOW→BLOCK and never BLOCK→ALLOW (and costs
+  nothing on the already-blocked path). The draft has no chunks yet, so
+  `resolution_text` is the query — **multi-probe** (paragraph-split, because the
+  embedder truncates a long text silently and would leave the tail uncompared),
+  **max over probes**. Two bands: `≥ semantic_conflict_threshold` → 409
+  `publish_blocked` / `semantic_overlap` (a `conflict` task opens on the draft, the
+  card returns to In Progress, `escalation_events.detail` records the chunk ids +
+  scores + thresholds); `≥ semantic_review_band` → 409
+  `publish_requires_acknowledgement` (the draft is untouched; re-POST with
+  `acknowledge_semantic_overlap = true` publishes and records
+  `publish_acknowledged_overlap`). **A failed comparison takes the acknowledgement
+  path, never a clean publish** — a failure is not evidence of absence.
+- **Thresholds are code config only** (`config/hr.php`) and deliberately **not** in
+  the Sprint-6 guardrails UI: a *lower* block threshold blocks *more*, so
+  ADR-0019's `max(floor, admin)` would let an admin loosen the fence. Any future
+  exposure must use `min(baseline, admin)`. **The shipped values are PROVISIONAL** —
+  run `php artisan fence:calibrate-semantic [--json]` (read-only; real published-
+  ruling distribution **plus** the labeled synthetic anchors in
+  `hr-docs/sprints/sprint-07d/eval/anchors.json`) against the corpus and set the
+  block threshold **below** the lowest score any known-true-overlap anchor scored.
+- **§8.5 reverse re-check (flag-only).** An `official_convenio` becoming `active`
+  (ingest or admin activation) dispatches `RecheckRulingsForConvenio` →
+  `SemanticRecheckService`, which opens a `conflict` review task on any overlapping
+  published ruling. It **never** changes `retrieval_status`. Backfill:
+  `php artisan rulings:scan-semantic-conflicts [--dry-run]`.
+- **(B) Fact version resolution.** `php artisan facts:scan-duplicates [--dry-run]`
+  flags same-convenio+topic facts whose `group_label` **digit tokens overlap**
+  (`Grupos 1 y 2` ∩ `Grupo 2`) — deterministic, no embeddings, no threshold.
+  `GET /admin/reference-facts/{uuid}/duplicate-pair` serves the side-by-side, and
+  `POST …/resolve-duplicate` (`knowledge.edit`) applies one of three verdicts via
+  `FactResolutionService`: **supersede** (the older fact's `validity_end` closes at
+  `newer.validity_start − 1 day`, both stay `verified`, lineage recorded — **never a
+  delete**; refused if the dates don't support the direction), **coexist**, or
+  **reject**. Resolution reaches chat **through the data only** — the 7c answer rule
+  is untouched.
+- **(C) Succession proposal (no LLM).** `reviews:scan-expiry` now queues
+  `ProposeSuccession` per new task (`--no-propose` to skip);
+  `POST /admin/review/expiry/{taskId}/propose-succession` re-runs it. The relationship
+  is deterministic: **`successor` requires overlap ≥ threshold AND a strictly-later
+  `validity_start`** — a conjunction, because a confidently-wrong successor is the
+  one output that would tempt a human to retire a live document. The proposal writes
+  **only** `ai_proposal`, `ai_proposal_status`, `ai_proposed_at` on the task and no
+  `documents` column at all; confirming runs the **unchanged** 7a write-side, and
+  `POST …/reject-proposal` writes a verdict + audit row and leaves the task open.
+  Measure it with `php artisan succession:gold-eval [--discover] [--json]`
+  (read-only; the failure metric is **confidently-wrong successor**, which must be 0).
+
+### Additive migrations (Sprint 7d)
+
+1. `add_detail_to_escalation_events` — nullable `jsonb`: the machine-readable
+   evidence (chunk ids, scores, thresholds) behind a semantic block/acknowledgement.
+2. `add_resolution_fields_to_reference_facts` — nullable `resolution`,
+   `superseded_by_id`, `resolved_by`, `resolved_at`.
+3. `add_succession_proposal_to_document_review_tasks` — nullable `ai_proposal`,
+   `ai_proposal_status`, `ai_proposed_at`.
+
+No CHECK-enum rewrite: the new event types ride a free-string column, and the
+reverse re-check reuses the existing `conflict` task type with a `kind`
+discriminator inside `raw_unmatched_values`. No hr-ai migration (ADR-0007).
+
+### Tests (the acceptance proof)
+
+`Sprint7dFenceNeverOpensTest` — the fence can only get stricter: all four
+`Sprint5Correction01FenceTest` cases through the combined fence with the semantic
+fake at `0.0` behave exactly as before; case 4 blocks at `0.95`; a 2×2 matrix
+asserts `blocked == (existing || semantic)`; the band → acknowledge → publishes; a
+throwing comparison reaches the acknowledgement path and never a clean publish;
+threshold monotonicity; and the comparison is **never called** when
+`detectConflicts` is non-empty. `Sprint7dCalibrationTest` — no block threshold is
+recommended without labeled evidence, and the recommendation sits strictly below the
+weakest true overlap. `Sprint7dFactResolutionTest` — the Navarra pair is flagged;
+supersede closes validity and deletes nothing; the unchanged 7c rule stops
+escalating once the data is corrected. `Sprint7dSuccessionProposalTest` — the
+conjunction, the three-columns-only invariant (every document column snapshotted),
+confirm-through-7a, reject-writes-nothing, and the gold-eval harness itself.
 
 ### Additive migrations (Sprint 7a)
 
