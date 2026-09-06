@@ -2,7 +2,11 @@
 
 namespace App\Console\Commands;
 
+use Database\Seeders\DocumentTypeSeeder;
+use Database\Seeders\RoleSeeder;
+use Database\Seeders\TerritorySeeder;
 use Database\Seeders\TestUserSeeder;
+use Database\Seeders\TopicSeeder;
 use Illuminate\Console\Command;
 
 /**
@@ -17,7 +21,15 @@ use Illuminate\Console\Command;
  * not example.com. This command only adds a staging-safe, explicit name and
  * a printed summary so the deploy runbook has one clear step to point at.
  *
- * Safe to re-run: TestUserSeeder uses updateOrCreate/firstOrCreate throughout.
+ * TestUserSeeder depends on territories + roles already existing
+ * (DatabaseSeeder.php's own ordering: TerritorySeeder, DocumentTypeSeeder,
+ * TopicSeeder, RoleSeeder, THEN TestUserSeeder — found live, `migrate
+ * --force` alone does not seed any of these). Deliberately NOT running the
+ * full DatabaseSeeder: it also calls ChatTestUserSeeder, which depends on
+ * the registry import (Session 3, not yet run this session).
+ *
+ * Safe to re-run: every seeder called here uses updateOrCreate/firstOrCreate
+ * throughout.
  */
 class StagingSeedTestUsers extends Command
 {
@@ -35,7 +47,9 @@ class StagingSeedTestUsers extends Command
             }
         }
 
-        $this->call('db:seed', ['--class' => TestUserSeeder::class, '--force' => true]);
+        foreach ([TerritorySeeder::class, DocumentTypeSeeder::class, TopicSeeder::class, RoleSeeder::class, TestUserSeeder::class] as $seeder) {
+            $this->call('db:seed', ['--class' => $seeder, '--force' => true]);
+        }
 
         $this->info('Seeded staging test accounts:');
         $this->table(
