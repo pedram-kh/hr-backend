@@ -307,7 +307,15 @@ class Sprint7dFenceNeverOpensTest extends TestCase
     public function test_review_band_requires_acknowledgement_and_writes_nothing_until_given(): void
     {
         $this->tagConvenio($this->jornada);
-        $this->ai->maxScore = 0.65; // between review_band (0.60) and threshold (0.75)
+        // Strictly inside the band, DERIVED from the configured thresholds rather
+        // than hardcoded: the band is [review_band, conflict_threshold), and these
+        // are calibration outputs (`fence:calibrate-semantic`) that move whenever
+        // the corpus does. A literal 0.65 was inside the provisional band
+        // (0.60-0.75) and fell outside the calibrated one (0.66-0.78), so the test
+        // failed for a reason that had nothing to do with the behaviour it asserts.
+        $bandScore = (float) config('hr.semantic_review_band')
+            + ((float) config('hr.semantic_conflict_threshold') - (float) config('hr.semantic_review_band')) / 2;
+        $this->ai->maxScore = $bandScore;
         $this->ai->matchDocumentId = $this->convenioDoc->id;
         $card = $this->makeCard();
 
@@ -336,7 +344,7 @@ class Sprint7dFenceNeverOpensTest extends TestCase
         $this->assertSame('active', $draft->fresh()->retrieval_status);
 
         $ack = EscalationEvent::where('type', 'publish_acknowledged_overlap')->sole();
-        $this->assertSame(0.65, $ack->detail['max_score']);
+        $this->assertSame($bandScore, $ack->detail['max_score']);
         $this->assertSame('semantic_near_overlap', $ack->detail['reason']);
     }
 

@@ -75,23 +75,48 @@ return [
     | guardrails UI. Any future admin exposure must combine with
     | min(baseline, admin), never max. Until then they are code config only.
     |
-    | ⚠ PROVISIONAL VALUES — pending the mandatory calibration run. Set them from
-    | the output of `php artisan fence:calibrate-semantic` (real published-ruling
-    | distribution + the labeled synthetic anchors in
-    | hr-docs/sprints/sprint-07d/eval/anchors.json), choosing a block threshold
-    | BELOW the lowest score any known-true-overlap anchor produced. The defaults
-    | below are deliberately conservative (they block more than a measured value
-    | probably needs to) because over-blocking routes to a human and
-    | under-blocking is the harm the fence exists to prevent.
+    | CALIBRATED on staging, 2026-09-06, via `php artisan fence:calibrate-semantic
+    | --json` against the real corpus (0 published `internal_hr_ruling` docs yet
+    | — nothing to measure there) + the labeled synthetic anchors
+    | (hr-docs/sprints/sprint-07d/eval/anchors.json, 2 of 5 paraphrase anchors
+    | scored on this corpus — a1 Navarra Intervención Social 0.8002, a2 Álava
+    | Ocio Educativo/COEAS 0.8116; a3 Vizcaya + a4 Navarra Gestión Deportiva
+    | skipped, historical-only convenio with no active successor; a5 Estatal
+    | COEAS skipped, successor doc is still under_review, not active).
+    |
+    | Justifying anchor scores (full report: hr-docs/sprints/sprint-07d/review.md
+    | §2):
+    |   class (a) near-verbatim/paraphrase — min 0.8002, median 0.8116, max 0.8116 (n=2)
+    |   class (b) same-topic-other-point    — min 0.6892, median 0.8751, max 0.8751 (n=2)
+    |   class (c) unrelated                 — min 0.5885, median 0.6198, max 0.6198 (n=2)
+    |
+    | threshold = floor((0.8002 - 0.02) * 100) / 100 = 0.78  (below class-(a) min:
+    |   no known-true overlap can ever escape a block)
+    | review_band = floor((0.6892 - 0.02) * 100) / 100 = 0.66  (below class-(b)
+    |   min: the ENTIRE observed same-topic-other-point range — 0.6892 to
+    |   0.8751 — sits at or above the ask-floor; a class-(b) score above 0.78
+    |   blocks outright rather than merely asking, which is deliberate: erring
+    |   toward blocking more, per the calibration mandate)
+    | Sanity check: class-(c) ceiling 0.6198 < review_band 0.66 — genuinely
+    |   unrelated text never even triggers "ask". If a future, larger anchor set
+    |   ever produces an unrelated score >= 0.66, re-run calibration; the corpus
+    |   would be noisier than these 6 anchors assume.
+    |
+    | n is small (2 anchors per class on this corpus) because only 2 of the 5
+    | convenios anchors reference have BOTH an active official_convenio doc to
+    | compare against AND a matching paraphrase/other-point/unrelated triple —
+    | the other 3 are genuine coverage gaps (historical-only or under_review),
+    | not a calibration bug. Re-run and re-tighten once more convenios have
+    | active official_convenio text (widen the anchor fixture first, ADR-0024).
     */
 
     // Band 1 — certain overlap: publish is BLOCKED (409 `semantic_overlap`).
-    'semantic_conflict_threshold' => (float) env('HR_SEMANTIC_CONFLICT_THRESHOLD', 0.75),
+    'semantic_conflict_threshold' => (float) env('HR_SEMANTIC_CONFLICT_THRESHOLD', 0.78),
 
     // Band 2 — plausible overlap: publish is not blocked, but the human is shown
     // the near-passages and must EXPLICITLY acknowledge before it proceeds.
     // Never a silent "no conflict".
-    'semantic_review_band' => (float) env('HR_SEMANTIC_REVIEW_BAND', 0.60),
+    'semantic_review_band' => (float) env('HR_SEMANTIC_REVIEW_BAND', 0.66),
 
     // How many passages are RETURNED per probe for the human to read. NOT a gate:
     // the block decision reads the top score of an exactly-filtered, exactly-
@@ -114,6 +139,25 @@ return [
     | validity_start — a conjunction, because a confidently-wrong successor is
     | the one output that would tempt a human to retire a live document. These
     | drive a PROPOSAL a human confirms, not a gate, so they are ordinary knobs.
+    |
+    | MEASURED against the staging corpus, 2026-09-06 (`succession:gold-eval`,
+    | 5 labeled pairs; `--discover` over 19 same-convenio pairs first). Both
+    | values are LEFT AS THEY WERE, and the measurement is why:
+    |
+    | - The three true successors scored 0.8903 / 0.9982 / 1.0. overlap_threshold
+    |   0.75 sits 0.14 below the weakest of them, so no true successor is lost.
+    | - The strongest NON-successor scored 0.9875 (two duplicate ingests of the
+    |   same Bizkaia text, identical validity windows) — ABOVE the weakest true
+    |   successor. So no threshold value separates the two classes by score on
+    |   this corpus, and raising the threshold would buy no safety, only misses.
+    |   What actually prevented every wrong successor was the second conjunct,
+    |   strictly-later validity_start — which is precisely the reason ADR-0024
+    |   made it a conjunction instead of a score cut. Confidently-wrong
+    |   successors: 0 of 5.
+    | - sibling_ceiling 0.55 was never exercised: the lowest score any real
+    |   same-convenio pair produced was 0.8189, so the sibling branch has only
+    |   unit-test coverage. Do not tune it from this corpus — there is no
+    |   evidence in it either way.
     */
     'succession_overlap_threshold' => (float) env('HR_SUCCESSION_OVERLAP_THRESHOLD', 0.75),
     'succession_sibling_ceiling' => (float) env('HR_SUCCESSION_SIBLING_CEILING', 0.55),
