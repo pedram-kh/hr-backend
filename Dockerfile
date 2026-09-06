@@ -26,7 +26,15 @@ COPY . .
 RUN composer install --no-dev --no-scripts --optimize-autoloader --prefer-dist --ignore-platform-reqs \
  && composer dump-autoload --no-dev --optimize
 
-FROM php:8.3-fpm AS runtime
+# composer.json declares "php": "^8.3", but composer.lock (generated on the
+# maintainer's actual machine, PHP 8.5.9) resolved Symfony packages requiring
+# PHP >=8.4.1 (a pre-existing composer.json/lock drift, found running
+# `migrate --force` in the staging container against a php:8.3-fpm image —
+# `vendor/composer/platform_check.php` enforces the LOCKED requirement, not
+# composer.json's declared range). 8.4-fpm satisfies it; not touching
+# composer.lock itself (that would re-resolve dependency versions, a much
+# bigger and riskier change than picking a newer base image).
+FROM php:8.4-fpm AS runtime
 
 # awscli: used by the shared SSM entrypoint script (bind-mounted at deploy
 # time) to resolve SecureString parameters via the instance profile.
