@@ -103,6 +103,14 @@ class FenceCalibrateSemantic extends Command
     {
         $rulings = Document::query()
             ->where('authority_level', 'internal_hr_ruling')
+            // "already-published" per the docblock above, but the query didn't
+            // enforce it: found live on staging, where three `draft` rulings from
+            // a fence verification session (one of them itself BLOCKED by the
+            // fence) were being counted as "real published-ruling distribution".
+            // A draft is never published — it may not even survive review — so it
+            // is not evidence of what real rulings score. `active` matches how
+            // every other real read in this codebase treats retrieval eligibility.
+            ->where('retrieval_status', 'active')
             ->whereNotNull('convenio_id')
             ->orderBy('id')
             ->get(['id', 'uuid', 'title', 'convenio_id', 'retrieval_status']);
