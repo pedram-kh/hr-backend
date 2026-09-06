@@ -18,6 +18,9 @@ use RuntimeException;
  *                    in the body (never a header) per call; hr-ai never persists
  *                    it. hr-backend (not hr-ai) owns the answer-or-escalate
  *                    decision.
+ *  - /compare-scope  Sprint 7d (ADR-0024): read-only semantic comparison — embed
+ *                    N probe texts, rank a scope's chunks against each with the
+ *                    authority band filtered IN THE SQL. No LLM, no write.
  * hr-backend (this app) remains the only writer of every table except
  * document_chunks.
  */
@@ -173,6 +176,35 @@ class ExtractionClient
 
         if (! $response->successful()) {
             throw new RuntimeException("hr-ai /sandbox-retrieve failed ({$response->status()}): ".$response->body());
+        }
+
+        return $response->json();
+    }
+
+    /**
+     * The Sprint-7d semantic COMPARISON primitive (ADR-0024). Read-only: hr-ai
+     * embeds the probe texts and ranks the scope's chunks against each, with the
+     * `authority_levels` band applied IN THE SQL — so a threshold decision on
+     * `max_score` is k-independent (a post-top-k authority filter could hide the
+     * one overlapping passage, a fail-open in a safety gate).
+     *
+     * THROWS on any transport/hr-ai failure. That is deliberate and load-bearing:
+     * the caller (SemanticFenceService) must never be able to read a failure as
+     * "no conflict" — it converts the exception into the fail-toward-caution
+     * acknowledge band, never a clean publish.
+     *
+     * @param  array<string,mixed>  $params
+     * @return array{matches:list<array<string,mixed>>, max_score:?float, eligible_total:int, probe_count:int}
+     */
+    public function compareScope(array $params): array
+    {
+        $response = Http::withHeaders(['X-Internal-Token' => $this->token()])
+            ->timeout(180) // CPU embedding of N probes is a background admin path
+            ->acceptJson()
+            ->post("{$this->base()}/compare-scope", $params);
+
+        if (! $response->successful()) {
+            throw new RuntimeException("hr-ai /compare-scope failed ({$response->status()}): ".$response->body());
         }
 
         return $response->json();

@@ -143,6 +143,12 @@ Route::middleware(['auth:sanctum', 'admin', 'active'])->prefix('admin')->group(f
         Route::post('/documents/{uuid}/resuggest', [DocumentController::class, 'resuggest']);
         Route::post('/vocabulary-proposals', [VocabularyProposalController::class, 'store']);
         Route::post('/review/expiry/{taskId}/resolve', [ReviewQueueController::class, 'resolveExpiry']);
+        // Sprint 7d (ADR-0024): (re-)ask for the INERT AI successor suggestion, and
+        // reject one. Neither writes lineage or status — confirming a proposal goes
+        // through the unchanged `resolve` route above, which is the only writer of
+        // `predecessor_document_id` in the whole backend.
+        Route::post('/review/expiry/{taskId}/propose-succession', [ReviewQueueController::class, 'proposeSuccession']);
+        Route::post('/review/expiry/{taskId}/reject-proposal', [ReviewQueueController::class, 'rejectSuccessionProposal']);
     });
 
     // vocabulary.approve writes (super_admin): approve/reject a proposal into the
@@ -166,6 +172,9 @@ Route::middleware(['auth:sanctum', 'admin', 'active'])->prefix('admin')->group(f
     Route::get('/reference-facts/sources', [ReferenceFactController::class, 'sources']);
     Route::get('/reference-facts/{uuid}', [ReferenceFactController::class, 'show']);
     Route::get('/reference-sources/{uuid}/content', [ReferenceFactController::class, 'sourceContent']);
+    // Sprint 7d (ADR-0024): the side-by-side duplicate PAIR (read — open, like
+    // every other fact read) and its RESOLUTION (write — gated below).
+    Route::get('/reference-facts/{uuid}/duplicate-pair', [ReferenceFactController::class, 'duplicatePair']);
     Route::middleware('ability:knowledge.edit')->group(function () {
         Route::post('/reference-facts', [ReferenceFactController::class, 'store']);
         Route::patch('/reference-facts/{uuid}', [ReferenceFactController::class, 'update']);
@@ -175,6 +184,10 @@ Route::middleware(['auth:sanctum', 'admin', 'active'])->prefix('admin')->group(f
         // ever PROPOSES — it never hits the verify route (it cannot verify itself).
         Route::post('/reference-facts/{uuid}/reject', [ReferenceFactController::class, 'reject']);
         Route::post('/reference-sources/{uuid}/segment', [ReferenceFactController::class, 'segment']);
+        // Sprint 7d (ADR-0024): resolve a flagged version pair — supersede (closes
+        // the older fact's validity, deletes nothing) | coexist | reject the flag.
+        // Human-invoked only; there is no automatic resolver anywhere.
+        Route::post('/reference-facts/{uuid}/resolve-duplicate', [ReferenceFactController::class, 'resolveDuplicate']);
     });
 
     // Answer-model key handling (Sprint 2b-1, ADR-0015). super_admin enforced in

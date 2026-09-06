@@ -3,12 +3,14 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\ResolveFactDuplicateRequest;
 use App\Http\Requests\StoreReferenceFactRequest;
 use App\Http\Requests\UpdateReferenceFactRequest;
 use App\Models\ConvenioJobCategory;
 use App\Models\Document;
 use App\Models\ReferenceFact;
 use App\Models\TagEvent;
+use App\Services\FactResolutionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -33,6 +35,8 @@ class ReferenceFactController extends Controller
 {
     /** Edits that move which employees a fact would answer (once 7c exists). */
     private const SCOPE_FACETS = ['convenio_id', 'job_category_id', 'validity_start', 'validity_end'];
+
+    public function __construct(private readonly FactResolutionService $resolver) {}
 
     /** List/filter facts (read — open to any admin, incl. auditor). */
     public function index(Request $request): JsonResponse
@@ -79,6 +83,8 @@ class ReferenceFactController extends Controller
             'convenio.territory', 'convenio.sector', 'jobCategory', 'topic',
             'sourceDocument:id,uuid,title,source_filename', 'verifier:id,full_name', 'creator:id,full_name',
             'duplicateOf:id,uuid,value',
+            // Sprint 7d — the resolution verdict + version lineage.
+            'supersededBy:id,uuid,value,validity_start', 'resolver:id,full_name',
         ])->where('uuid', $uuid)->firstOrFail();
 
         $provenance = TagEvent::where('entity_type', 'reference_fact')
@@ -251,6 +257,197 @@ class ReferenceFactController extends Controller
     }
 
     /**
+     * The SIDE-BY-SIDE duplicate pair (Sprint 7d, ADR-0024) — read.
+     *
+     * 7b-2 could only show a `≈ version` badge; the human had no way to see WHAT
+     * differed, and no action. This returns both facts fully plus the list of
+     * fields that actually differ, because the reviewer's whole job here is to see
+     * the difference and decide: is this a new version, two rules that both apply,
+     * or a bad flag?
+     */
+    public function duplicatePair(string $uuid): JsonResponse
+    {
+        $fact = ReferenceFact::with($this->pairRelations())->where('uuid', $uuid)->firstOrFail();
+
+        // The pair can be reached from either side: a fact that FLAGS another, or a
+        // fact another flagged.
+        $counterpart = $fact->duplicate_of_id !== null
+            ? ReferenceFact::with($this->pairRelations())->find($fact->duplicate_of_id)
+            : ReferenceFact::with($this->pairRelations())->where('duplicate_of_id', $fact->id)->orderByDesc('id')->first();
+
+        if ($counterpart === null) {
+            return response()->json(['message' => 'Este hecho no tiene un duplicado marcado.'], 404);
+        }
+
+        return response()->json([
+            'pair' => [$this->pairSide($fact), $this->pairSide($counterpart)],
+            // Which fields differ — the muted/highlighted split in the UI. Computed
+            // server-side so both the UI and an audit read the same comparison.
+            'differing_fields' => $this->differingFields($fact, $counterpart),
+            'resolved' => $fact->resolution !== null || $counterpart->resolution !== null,
+            // A supersede needs a direction, and only the dates can justify one. The
+            // UI uses this to pre-select (never to auto-apply) and to explain a 422.
+            'supersede_candidate' => $this->supersedeCandidate($fact, $counterpart),
+        ]);
+    }
+
+    /**
+     * Resolve a flagged duplicate pair — `supersede` | `coexist` | `reject`
+     * (Sprint 7d, ADR-0024). Gated `knowledge.edit`.
+     *
+     * All three are HUMAN-INVOKED and append-only in `tag_events`. A supersede
+     * closes the older fact's validity window and NEVER deletes: the older value
+     * stays `verified` and answerable for its own window, so a question dated in
+     * the past still gets the answer that was true then.
+     */
+    public function resolveDuplicate(ResolveFactDuplicateRequest $request, string $uuid): JsonResponse
+    {
+        $fact = ReferenceFact::where('uuid', $uuid)->firstOrFail();
+        $data = $request->validated();
+        $adminId = $request->user()->id;
+        $note = $data['note'] ?? null;
+
+        if ($data['action'] === FactResolutionService::REJECT) {
+            return response()->json($this->resolver->rejectDuplicate($fact, $adminId, $note));
+        }
+
+        $counterpart = $fact->duplicate_of_id !== null
+            ? ReferenceFact::find($fact->duplicate_of_id)
+            : ReferenceFact::where('duplicate_of_id', $fact->id)->orderByDesc('id')->first();
+
+        if ($counterpart === null) {
+            return response()->json(['message' => 'Este hecho no tiene un duplicado marcado.'], 404);
+        }
+
+        if ($data['action'] === FactResolutionService::COEXIST) {
+            return response()->json($this->resolver->coexist($fact, $counterpart, $adminId, $note));
+        }
+
+        // supersede — the human names which side is newer; the service refuses if
+        // the validity dates do not support that claim.
+        $newer = collect([$fact, $counterpart])->firstWhere('uuid', $data['newer_uuid']);
+        if ($newer === null) {
+            return response()->json(['message' => 'newer_uuid no corresponde a ninguno de los dos hechos del par.'], 422);
+        }
+        $older = $newer->id === $fact->id ? $counterpart : $fact;
+
+        try {
+            return response()->json($this->resolver->supersede($newer, $older, $adminId, $note));
+        } catch (\RuntimeException $e) {
+            return response()->json([
+                'code' => $e->getMessage(),
+                'message' => $this->supersedeError($e->getMessage()),
+            ], 422);
+        }
+    }
+
+    /** @return list<string> */
+    private function pairRelations(): array
+    {
+        return ['convenio.territory', 'convenio.sector', 'jobCategory', 'topic', 'sourceDocument:id,uuid,title,source_filename', 'resolver:id,full_name'];
+    }
+
+    /** @return array<string,mixed> */
+    private function pairSide(ReferenceFact $f): array
+    {
+        return [
+            'uuid' => $f->uuid,
+            'id' => $f->id,
+            'value' => $f->value,
+            'raw_values' => $f->raw_values,
+            'convenio' => $f->convenio?->numero,
+            'convenio_name' => $f->convenio?->name,
+            'territory' => $f->convenio?->territory?->name,
+            'sector' => $f->convenio?->sector?->name,
+            'job_category' => $f->jobCategory?->name,
+            'group_label' => $f->group_label,
+            'topic' => $f->topic?->name,
+            'validity_start' => $f->validity_start?->toDateString(),
+            'validity_end' => $f->validity_end?->toDateString(),
+            'status' => $f->status,
+            'source' => $f->source,
+            'confidence' => $f->confidence,
+            'uncertainty' => $f->uncertainty,
+            'source_excerpt' => $f->source_excerpt,
+            'source_document' => $f->sourceDocument ? [
+                'uuid' => $f->sourceDocument->uuid,
+                'title' => $f->sourceDocument->title,
+                'source_filename' => $f->sourceDocument->source_filename,
+            ] : null,
+            'source_locator' => $f->source_locator,
+            'resolution' => $f->resolution,
+            'resolved_by' => $f->resolver?->full_name,
+            'resolved_at' => $f->resolved_at?->toDateTimeString(),
+            'superseded_by_id' => $f->superseded_by_id,
+        ];
+    }
+
+    /** @return list<string> */
+    private function differingFields(ReferenceFact $a, ReferenceFact $b): array
+    {
+        $fields = [
+            'value' => fn (ReferenceFact $f) => trim((string) $f->value),
+            'group_label' => fn (ReferenceFact $f) => \App\Support\GroupLabel::normalize($f->group_label),
+            'job_category' => fn (ReferenceFact $f) => $f->job_category_id,
+            'topic' => fn (ReferenceFact $f) => $f->topic_id,
+            'convenio' => fn (ReferenceFact $f) => $f->convenio_id,
+            'validity_start' => fn (ReferenceFact $f) => $f->validity_start?->toDateString(),
+            'validity_end' => fn (ReferenceFact $f) => $f->validity_end?->toDateString(),
+            'status' => fn (ReferenceFact $f) => $f->status,
+            'source' => fn (ReferenceFact $f) => $f->source,
+        ];
+
+        $differing = [];
+        foreach ($fields as $name => $extract) {
+            if ($extract($a) !== $extract($b)) {
+                $differing[] = $name;
+            }
+        }
+
+        return $differing;
+    }
+
+    /**
+     * Which side the dates would allow to be the newer one. Advisory only — the UI
+     * pre-selects it, the human confirms it, and the service re-validates.
+     *
+     * @return array<string,mixed>
+     */
+    private function supersedeCandidate(ReferenceFact $a, ReferenceFact $b): array
+    {
+        foreach ([[$a, $b], [$b, $a]] as [$newer, $older]) {
+            if ($newer->validity_start !== null
+                && ($older->validity_start === null || $newer->validity_start->greaterThan($older->validity_start))) {
+                return [
+                    'possible' => true,
+                    'newer_uuid' => $newer->uuid,
+                    'older_uuid' => $older->uuid,
+                    'would_close_older_at' => $newer->validity_start->copy()->subDay()->toDateString(),
+                ];
+            }
+        }
+
+        return [
+            'possible' => false,
+            'reason' => 'Las fechas de vigencia no permiten determinar cuál es la versión posterior '
+                .'(faltan fechas o son iguales). Corrige la vigencia antes de sustituir, o marca que coexisten.',
+        ];
+    }
+
+    private function supersedeError(string $code): string
+    {
+        return match ($code) {
+            'same_fact' => 'No se puede sustituir un hecho por sí mismo.',
+            'scope_mismatch' => 'Los dos hechos no comparten convenio y tema, así que no son versiones del mismo hecho.',
+            'newer_has_no_validity_start' => 'La versión más reciente no tiene fecha de inicio de vigencia, '
+                .'así que no hay límite con el que cerrar la vigencia del hecho anterior. Añade la fecha primero.',
+            'newer_does_not_start_after_older' => 'La versión indicada como más reciente no empieza después de la anterior. '
+                .'La dirección de una sustitución no se adivina: corrige las fechas o invierte la selección.',
+            default => 'No se pudo aplicar la sustitución.',
+        };
+    }
+
+    /**
      * Manually (re-)run the AI segmentation agent on a reference SOURCE (Sprint
      * 7b-2). Dispatches the queued SegmentReferenceSource job (the same job the
      * ingest auto-trigger uses); the proposed facts land inert (ai_agent/
@@ -373,6 +570,11 @@ class ReferenceFactController extends Controller
             'source_excerpt' => $f->source_excerpt,
             'is_ai_proposed' => $f->source === 'ai_agent' && $f->status === 'needs_review',
             'is_possible_duplicate' => $f->duplicate_of_id !== null,
+            // Sprint 7d — the flag is now actionable, so the row has to say whether
+            // it is still waiting on a human. An UNRESOLVED duplicate is the one that
+            // needs attention; a resolved one keeps its lineage but leaves the queue.
+            'resolution' => $f->resolution,
+            'is_unresolved_duplicate' => $f->duplicate_of_id !== null && $f->resolution === null,
         ];
     }
 
@@ -410,11 +612,23 @@ class ReferenceFactController extends Controller
             'uncertainty' => $fact->uncertainty,
             'source_excerpt' => $fact->source_excerpt,
             'proposal_batch_id' => $fact->proposal_batch_id,
-            // The version/duplicate FLAG (Q4) — a signal, not a resolution (7d).
+            // The version/duplicate FLAG (Q4) — a signal in 7b-2; RESOLVABLE in 7d
+            // (see resolveDuplicate). The link is retained after resolution as the
+            // version lineage, so the flag is resolved rather than erased.
             'duplicate_of' => $fact->duplicateOf ? [
                 'uuid' => $fact->duplicateOf->uuid,
                 'value' => $fact->duplicateOf->value,
             ] : null,
+            // Sprint 7d — the human's verdict and the version lineage.
+            'resolution' => $fact->resolution,
+            'resolved_by' => $fact->resolver?->full_name,
+            'resolved_at' => $fact->resolved_at?->toDateTimeString(),
+            'superseded_by' => $fact->supersededBy ? [
+                'uuid' => $fact->supersededBy->uuid,
+                'value' => $fact->supersededBy->value,
+                'validity_start' => $fact->supersededBy->validity_start?->toDateString(),
+            ] : null,
+            'is_unresolved_duplicate' => $fact->duplicate_of_id !== null && $fact->resolution === null,
             'verified_by' => $fact->verifier?->full_name,
             'verified_at' => $fact->verified_at?->toDateTimeString(),
             'created_by' => $fact->creator?->full_name,

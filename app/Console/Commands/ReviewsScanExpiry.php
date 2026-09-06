@@ -28,7 +28,10 @@ use Illuminate\Support\Carbon;
  */
 class ReviewsScanExpiry extends Command
 {
-    protected $signature = 'reviews:scan-expiry {--days=90 : lead window before validity_end} {--dry-run}';
+    protected $signature = 'reviews:scan-expiry
+                            {--days=90 : lead window before validity_end}
+                            {--dry-run}
+                            {--no-propose : skip the Sprint-7d AI successor suggestion}';
 
     protected $description = 'Materialize expiry review tasks for active prose nearing or past validity_end (a queue, never auto-retire).';
 
@@ -69,7 +72,7 @@ class ReviewsScanExpiry extends Command
             $this->line("  [{$d->id}] {$d->title} — expires {$d->validity_end->toDateString()}{$pastLabel}");
 
             if (! $this->option('dry-run')) {
-                DocumentReviewTask::create([
+                $task = DocumentReviewTask::create([
                     'document_id' => $d->id,
                     'type' => 'expiry',
                     'reason' => null, // expiry tasks carry no unresolved/conflict reason
@@ -78,6 +81,15 @@ class ReviewsScanExpiry extends Command
                     'due_date' => $d->validity_end->toDateString(),
                 ]);
                 $created++;
+
+                // Sprint 7d (ADR-0024): ask for an AI successor SUGGESTION for the new
+                // task. Queued so the scan stays fast, and INERT — the proposal writes
+                // three columns on the task and nothing on any document, so this command
+                // still "NEVER changes retrieval_status and NEVER writes
+                // predecessor_document_id" exactly as documented above.
+                if (! $this->option('no-propose')) {
+                    \App\Jobs\ProposeSuccession::dispatch($task->id);
+                }
             }
         }
 

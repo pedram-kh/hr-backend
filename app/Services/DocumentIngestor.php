@@ -264,6 +264,15 @@ class DocumentIngestor
             \App\Jobs\ProposeDocumentTags::dispatch($document->id);
         }
 
+        // Sprint 7d (ADR-0024, §8.5): an official convenio arriving ACTIVE in a
+        // scope may have overtaken rulings published there while it was silent.
+        // Queued after commit, FLAG-ONLY (a `conflict` review task on the ruling —
+        // never a demotion, never a retrieval touch), and it never rethrows, so a
+        // comparison failure cannot fail ingest.
+        if ($document->authority_level === 'official_convenio' && $document->retrieval_status === 'active') {
+            \App\Jobs\RecheckRulingsForConvenio::dispatch($document->id);
+        }
+
         // Sprint 7b-2 (ADR-0022): a reference_source IS auto-segmented — but by
         // the per-FACT segmentation agent (not the document tagger). Queued AFTER
         // commit so it never blocks/fails ingest; the proposed facts are inert

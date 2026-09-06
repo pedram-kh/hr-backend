@@ -74,10 +74,76 @@ class ReviewQueueController extends Controller
                 ] : null,
                 'is_unscoped' => $doc?->convenio_id === null,
                 'successor_candidates' => $candidates->values(),
+                // Sprint 7d (ADR-0024): the INERT AI succession suggestion, if one was
+                // made. It is a claim with its evidence attached (the compared passages
+                // and the score), not an instruction — the human confirms it through the
+                // unchanged write-side below, or rejects it.
+                'ai_proposal' => $t->ai_proposal,
+                'ai_proposal_status' => $t->ai_proposal_status,
+                'ai_proposed_at' => $t->ai_proposed_at?->toDateTimeString(),
+                // Fuchsia is unverified-AI ONLY (ADR-0020): a live proposal nobody has
+                // acted on yet. It goes away the moment a human confirms or rejects.
+                'is_ai_proposed' => $t->ai_proposal_status === DocumentReviewTask::PROPOSAL_PROPOSED,
             ];
         });
 
         return response()->json(['tasks' => $rows]);
+    }
+
+    /**
+     * (Re-)request the AI succession SUGGESTION for one expiry task (Sprint 7d,
+     * gated knowledge.edit). Dispatches the same queued job `reviews:scan-expiry`
+     * uses — mirroring the 7a `resuggest` / 7b-2 `segment` re-run endpoints.
+     *
+     * The AI never writes lineage: this only fills `ai_proposal` on the task.
+     */
+    public function proposeSuccession(int $taskId): JsonResponse
+    {
+        $task = DocumentReviewTask::where('type', 'expiry')->where('id', $taskId)->firstOrFail();
+        if ($task->status !== 'open') {
+            return response()->json(['message' => 'This expiry task is already resolved.'], 422);
+        }
+
+        \App\Jobs\ProposeSuccession::dispatch($task->id);
+
+        return response()->json(['status' => 'queued', 'task_id' => $task->id]);
+    }
+
+    /**
+     * Reject the AI succession proposal (Sprint 7d, gated knowledge.edit).
+     *
+     * Writes the proposal's status and an audit row — and NOTHING else. The expiry
+     * task stays OPEN (the document is still expiring; rejecting a suggestion is not
+     * resolving the task), no lineage is written, no status changes. The proposal
+     * itself is kept for the eval trail, never deleted.
+     */
+    public function rejectSuccessionProposal(Request $request, int $taskId): JsonResponse
+    {
+        $task = DocumentReviewTask::where('type', 'expiry')->where('id', $taskId)->firstOrFail();
+        if ($task->ai_proposal_status !== DocumentReviewTask::PROPOSAL_PROPOSED) {
+            return response()->json(['message' => 'There is no live AI proposal on this task.'], 422);
+        }
+
+        $adminId = $request->user()->id;
+        $note = trim((string) $request->input('note', ''));
+
+        DB::transaction(function () use ($task, $adminId, $note) {
+            $task->forceFill(['ai_proposal_status' => DocumentReviewTask::PROPOSAL_REJECTED])->save();
+            TagEvent::create([
+                'entity_type' => 'document',
+                'entity_id' => $task->document_id,
+                'facet' => 'succession_proposal',
+                'old_value' => (string) ($task->ai_proposal['relationship'] ?? ''),
+                'new_value' => 'rejected',
+                'source' => 'admin_manual',
+                'actor_id' => $adminId,
+                'confidence' => null,
+                'note' => 'AI succession proposal rejected'.($note !== '' ? ": {$note}" : '')
+                    .' — no lineage written, expiry task left open',
+            ]);
+        });
+
+        return response()->json(['status' => 'ok', 'ai_proposal_status' => DocumentReviewTask::PROPOSAL_REJECTED, 'task_status' => $task->status]);
     }
 
     /**
@@ -202,6 +268,17 @@ class ReviewQueueController extends Controller
                 ]);
             }
 
+            // Sprint 7d: if the confirmed successor is the one the AI proposed, record
+            // that the proposal was CONFIRMED (the eval's "right" column, and the
+            // provenance of a human agreeing with a machine). This is bookkeeping on
+            // the task — the lineage above was written by the unchanged 7a path either
+            // way, and a human confirming their own different choice simply leaves the
+            // proposal marked `proposed`.
+            if ($task->ai_proposal_status === DocumentReviewTask::PROPOSAL_PROPOSED
+                && ($task->ai_proposal['candidate_document_id'] ?? null) === $successor->id) {
+                $task->ai_proposal_status = DocumentReviewTask::PROPOSAL_CONFIRMED;
+            }
+
             $this->resolveTask($task, $adminId);
         });
 
@@ -211,6 +288,7 @@ class ReviewQueueController extends Controller
             'successor_uuid' => $successor->uuid,
             'predecessor_uuid' => $predecessor->uuid,
             'retired' => $retire,
+            'ai_proposal_status' => $task->fresh()->ai_proposal_status,
         ]);
     }
 

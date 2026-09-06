@@ -490,6 +490,16 @@ class DocumentController extends Controller
             $document->save();
         });
 
+        // Sprint 7d (ADR-0024, §8.5): an official convenio that has just BECOME
+        // active may have overtaken rulings published in its scope while it was
+        // silent. Queued, flag-only (a `conflict` review task on the ruling), never
+        // a demotion — and dispatched only on the activation transition, not on
+        // every edit of an already-active convenio.
+        if (($changes['retrieval_status'][1] ?? null) === 'active'
+            && $document->authority_level === 'official_convenio') {
+            \App\Jobs\RecheckRulingsForConvenio::dispatch($document->id);
+        }
+
         return response()->json(['status' => 'ok']);
     }
 

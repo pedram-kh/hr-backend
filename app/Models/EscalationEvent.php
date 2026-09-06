@@ -17,6 +17,14 @@ class EscalationEvent extends Model
 
     protected $fillable = [
         'escalation_card_id', 'type', 'old_value', 'new_value', 'actor_id', 'note',
+        // Sprint 7d (ADR-0024): the semantic fence's machine-readable evidence —
+        // matched chunk ids + scores + the thresholds in force, so "why did this
+        // block?" is answerable and countable, not buried in prose.
+        'detail',
+    ];
+
+    protected $casts = [
+        'detail' => 'array',
     ];
 
     public function card(): BelongsTo
