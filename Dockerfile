@@ -17,18 +17,25 @@
 FROM composer:2 AS vendor
 WORKDIR /app
 COPY composer.json composer.lock ./
-RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist
+# --ignore-platform-reqs: this stage only resolves/downloads packages into
+# vendor/ (the composer:2 base image is a minimal CLI image without ext-gd,
+# which phpoffice/phpspreadsheet requires) — ext-gd is actually installed in
+# the runtime stage below, where the app actually executes.
+RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist --ignore-platform-reqs
 COPY . .
-RUN composer install --no-dev --no-scripts --optimize-autoloader --prefer-dist \
+RUN composer install --no-dev --no-scripts --optimize-autoloader --prefer-dist --ignore-platform-reqs \
  && composer dump-autoload --no-dev --optimize
 
 FROM php:8.3-fpm AS runtime
 
 # awscli: used by the shared SSM entrypoint script (bind-mounted at deploy
 # time) to resolve SecureString parameters via the instance profile.
+# gd (+ its build deps): phpoffice/phpspreadsheet requires ext-gd.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       nginx supervisor libpq-dev libzip-dev libicu-dev unzip awscli curl \
-    && docker-php-ext-install pdo_pgsql pgsql zip intl bcmath \
+      libpng-dev libjpeg62-turbo-dev libfreetype6-dev libwebp-dev \
+    && docker-php-ext-configure gd --with-jpeg --with-freetype --with-webp \
+    && docker-php-ext-install pdo_pgsql pgsql zip intl bcmath gd \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /var/www
