@@ -62,6 +62,7 @@ class OcrBackfill extends Command
 
         $totalCost = 0.0;
         $failedDocs = 0;
+        $totalSkippedNoKey = 0;
 
         foreach ($documents as $document) {
             // Never re-open an already-verified document — OCR only fills
@@ -95,6 +96,8 @@ class OcrBackfill extends Command
             $cost = 0.0;
             $ocrd = 0;
             $errors = 0;
+            $skipped = 0;
+            $skipReasons = [];
             foreach ($pages as $page) {
                 $result = $ocr->ocrOnePage($page->fresh());
                 if ($result['status'] === 'ok') {
@@ -103,6 +106,18 @@ class OcrBackfill extends Command
                         $qualities[] = (float) $result['quality'];
                     }
                     $cost += (float) ($result['cost_usd'] ?? 0);
+                } elseif ($result['status'] === 'skipped') {
+                    // Distinct from a real provider/transport failure (below) —
+                    // e.g. `answer_model_not_configured`: no call was ever made,
+                    // nothing failed, the page is just left ocr_pending exactly
+                    // as it was. Counting this as an "error" would be actively
+                    // misleading (it reads as "OCR tried and failed" when
+                    // nothing was attempted at all).
+                    $skipped++;
+                    $skipReasons[$result['reason'] ?? 'unknown'] = true;
+                    if (($result['reason'] ?? null) === 'answer_model_not_configured') {
+                        $totalSkippedNoKey++;
+                    }
                 } else {
                     $errors++;
                 }
@@ -114,13 +129,15 @@ class OcrBackfill extends Command
 
             $meanQ = $qualities !== [] ? round(array_sum($qualities) / count($qualities), 3) : null;
             $minQ = $qualities !== [] ? round(min($qualities), 3) : null;
+            $skipNote = $skipped > 0 ? sprintf(', %d skipped (%s)', $skipped, implode(',', array_keys($skipReasons))) : '';
             $this->line(sprintf(
-                "  [%d] %s: %d/%d pages OCR'd (%d error(s)); quality mean=%s min=%s; cost=\$%.4f",
+                "  [%d] %s: %d/%d pages OCR'd (%d error(s)%s); quality mean=%s min=%s; cost=\$%.4f",
                 $document->id,
                 $document->source_filename,
                 $ocrd,
                 $pages->count(),
                 $errors,
+                $skipNote,
                 $meanQ ?? '—',
                 $minQ ?? '—',
                 $cost,
@@ -145,6 +162,10 @@ class OcrBackfill extends Command
             $failedDocs,
         ));
         $this->line('Every document is left under_review — a human must verify the OCR text (and the tag proposal, once queued) before chunks:embed can select it.');
+
+        if ($totalSkippedNoKey > 0) {
+            $this->warn("{$totalSkippedNoKey} page(s) were skipped (not attempted, not failed) because no answer-model API key is configured — set one via POST /admin/answer-model, then re-run this command; it is idempotent and will pick up exactly the still-ocr_pending pages.");
+        }
 
         return $failedDocs > 0 ? self::FAILURE : self::SUCCESS;
     }
