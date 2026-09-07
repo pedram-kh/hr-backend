@@ -37,9 +37,9 @@ class ExtractionClient
     }
 
     /**
-     * @return array{page_count:int, pages:list<array{page_number:int,text:string,image_key:string}>}
+     * @return array{page_count:int, pages:list<array{page_number:int,text:string,image_key:string,extraction_source:string}>}
      */
-    public function extract(string $storageKey, string $documentUuid): array
+    public function extract(string $storageKey, string $documentUuid, bool $ocr = false, int $ocrPageCap = 60): array
     {
         $response = Http::withHeaders(['X-Internal-Token' => $this->token()])
             ->timeout(180)
@@ -47,6 +47,12 @@ class ExtractionClient
             ->post("{$this->base()}/extract", [
                 'storage_key' => $storageKey,
                 'document_uuid' => $documentUuid,
+                // Sprint 7e (ADR-0026, review.md §2.1): additive, default off. hr-ai
+                // NEVER calls the OCR model here — it only marks a text-less page
+                // (within the cap) as extraction_source=ocr_pending; this call's
+                // latency is unchanged either way (still the sub-second PyMuPDF path).
+                'ocr' => $ocr,
+                'ocr_page_cap' => $ocrPageCap,
             ]);
 
         if (! $response->successful()) {
@@ -395,6 +401,46 @@ class ExtractionClient
 
         if (! $response->successful()) {
             return ['facts' => [], 'error' => 'segment_unavailable', 'detail' => "hr-ai /segment-facts failed ({$response->status()})"];
+        }
+
+        return $response->json();
+    }
+
+    /**
+     * OCR one already-rendered page image (Sprint 7e, ADR-0026, review.md §2.1/
+     * §2.2). hr-ai reuses the page image already written at `$imageKey` — never
+     * re-renders — calls the vision provider, writes the S3 sidecar
+     * (`documents/{uuid}/ocr/{page:04d}.json`, hr-ai's own privilege), and
+     * returns the flattened text + quality/cost/engine metadata. The decrypted
+     * key is passed in the body per call (same envelope as proposeTags/ground/
+     * route); hr-ai never persists it.
+     *
+     * Never throws on a provider/transport failure — returns
+     * `{error, detail}` instead (same convention as route()/ground()/
+     * proposeTags()) so the caller (`OcrService`) can leave the page
+     * `ocr_pending` for a retry rather than let a background job "fail" loudly
+     * for what may just be a transient provider hiccup.
+     *
+     * @param  array{provider:string,model:string,endpoint:?string}  $providerConfig
+     * @return array<string,mixed> hr-ai's /ocr-page envelope: {text, layout,
+     *   bilingual, quality, quality_notes, cost_usd, sec_per_page, engine} or
+     *   {error, detail}
+     */
+    public function ocrPage(string $documentUuid, int $pageNumber, string $imageKey, string $decryptedKey, array $providerConfig): array
+    {
+        $response = Http::withHeaders(['X-Internal-Token' => $this->token()])
+            ->timeout(150) // measured 9-90 s/page (review.md §1.3/§1.5) — well under this
+            ->acceptJson()
+            ->post("{$this->base()}/ocr-page", [
+                'document_uuid' => $documentUuid,
+                'page_number' => $pageNumber,
+                'image_key' => $imageKey,
+                'provider_api_key' => $decryptedKey,
+                'provider_config' => $providerConfig,
+            ]);
+
+        if (! $response->successful()) {
+            return ['error' => 'ocr_unavailable', 'detail' => "hr-ai /ocr-page failed ({$response->status()})"];
         }
 
         return $response->json();

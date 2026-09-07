@@ -38,6 +38,12 @@ class DocumentIngestor
      *   as display `document_pages`; it is NEVER embedded (reference_source ∉
      *   ChunksEmbed::IN_SCOPE_TYPES) and NEVER touches the salary path. The
      *   reference FACTS are created by hand from this source (the manual path).
+     * @param  bool  $ocr  Sprint 7e (ADR-0026, review.md §2.1/§2.7): opt-in OCR
+     *   fallback for text-less PDF pages. Default off (unchanged Sprint-1
+     *   behavior) — forwarded verbatim to hr-ai's `/extract`; hr-ai itself never
+     *   calls the OCR model here, it only marks a page `ocr_pending`.
+     * @param  int  $ocrPageCap  Per-document page cap (review.md §2.7) — bounds
+     *   worst-case cost/latency for one pathological upload.
      * @return array<string,mixed> per-file outcome for the batch response
      */
     public function ingest(
@@ -48,6 +54,8 @@ class DocumentIngestor
         ?int $adminId,
         VocabularyResolver $vocab,
         bool $asReference = false,
+        bool $ocr = false,
+        int $ocrPageCap = 60,
     ): array {
         $bytes = (string) file_get_contents($tmpPath);
         $hash = hash('sha256', $bytes);
@@ -137,7 +145,10 @@ class DocumentIngestor
                 ];
             }
         } elseif (! $isXlsx) {
-            $extract = $this->extractor->extract($storageKey, $uuid);
+            // Sprint 7e (ADR-0026): $ocr is only ever meaningful on this PDF-prose
+            // path — a reference_source uses /read-structured (no OCR fallback,
+            // out of scope), and a salary .xlsx has no page-image surface at all.
+            $extract = $this->extractor->extract($storageKey, $uuid, $ocr, $ocrPageCap);
             $pages = $extract['pages'] ?? [];
         }
         $emptyText = ! $isXlsx && $pages !== [] && collect($pages)->every(
@@ -175,6 +186,12 @@ class DocumentIngestor
                     'page_number' => $p['page_number'],
                     'text' => $p['text'] ?? '',
                     'image_path' => $p['image_key'] ?? null,
+                    // Sprint 7e (ADR-0026, review.md §2.1): verbatim from hr-ai's
+                    // /extract per-page field. Absent (reference/xlsx paths, or an
+                    // older hr-ai response) defaults to 'text_layer' — the DB
+                    // column's own default, and the correct value for every path
+                    // that never asked for OCR.
+                    'extraction_source' => $p['extraction_source'] ?? 'text_layer',
                 ]);
             }
 
@@ -262,6 +279,17 @@ class DocumentIngestor
         // tagger would mis-propose one convenio.
         if (! $asReference && ($tag['review']['reason'] ?? null) === 'unresolved') {
             \App\Jobs\ProposeDocumentTags::dispatch($document->id);
+        }
+
+        // Sprint 7e (ADR-0026, review.md §2.1): mirrors the exact
+        // dispatch-after-commit pattern above. Fired once per document, only
+        // when at least one page came back `ocr_pending` from hr-ai's /extract
+        // (i.e. only ever when $ocr was true and a text-less page existed within
+        // the cap). OcrDocumentPages itself does no OCR — it fans out one
+        // OcrPage job per pending page and returns immediately, so ingest never
+        // blocks on it.
+        if (collect($pages)->contains(fn ($p) => ($p['extraction_source'] ?? null) === 'ocr_pending')) {
+            \App\Jobs\OcrDocumentPages::dispatch($document->id);
         }
 
         // Sprint 7d (ADR-0024, §8.5): an official convenio arriving ACTIVE in a

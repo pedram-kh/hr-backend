@@ -625,6 +625,88 @@ and folds into the existing value; a confirmed succession writes
 `predecessor_document_id` (same-convenio) and never auto-retires; a cross-convenio
 succession is rejected. `php artisan test`.
 
+## OCR fallback for scanned/text-less pages (Sprint 7e, ADR-0026)
+
+A **format** fix, not a tagging or answer-loop change: some ingested PDFs are
+image-only scans with **no text layer**, so they produce 0 chunks and are
+unanswerable. Engine + model were chosen by a measured eval against
+human-corrected gold transcriptions (`sprints/sprint-07e/eval/`, `score_ocr.py`)
+— **`claude-opus-5`** (config'd as its own `OCR_MODEL`, decoupled from
+`ANSWER_MODEL` so an answer-quality change can never silently retarget OCR).
+
+- **`/extract` marks, never OCRs inline.** `DocumentIngestor::ingest()` passes
+  `ocr`/`ocrPageCap` through to hr-ai `/extract`; a text-less page comes back
+  `extraction_source = ocr_pending` (within the cap) and is persisted as such on
+  `document_pages` via the **unchanged** write path. If any page is
+  `ocr_pending`, `OcrDocumentPages` is dispatched once per document (after the
+  transaction commits).
+- **The queued job split (mirrors 7a's `ProposeDocumentTags` pattern).**
+  `OcrDocumentPages` fans out one `OcrPage` job per pending page (never OCRs
+  itself); each `OcrPage` calls **`OcrService::ocrOnePage()`**, which decrypts
+  the configured provider key, calls `ExtractionClient::ocrPage()` → hr-ai
+  `POST /ocr-page`, and on success writes `document_pages.text` +
+  `extraction_source = ocr` + `ocr_quality` (deterministic score — `_es_ratio`
+  function-word density, a garbage-character ratio, text-length-vs-page-area;
+  no second LLM call) + `ocr_engine` (`claude-opus-5`) + `ocr_cost_usd` +
+  `ocr_bilingual`. On failure the page is logged and **left `ocr_pending`** for
+  retry — never silently dropped. The **last** `OcrPage` for a document
+  re-dispatches `ProposeDocumentTags` if the document is still `under_review`,
+  since text just became available for the 7a tagger to read.
+- **Reaching `/embed` — the S3 sidecar.** `/ocr-page` also writes
+  `documents/{uuid}/ocr/{page:04d}.json` to S3 (hr-ai's write, not hr-backend's)
+  — the column-split, language-tagged units + table rows that
+  `extract_language_streams`/`build_chunks` append into the `es`/`eu`
+  accumulators **only** when a page has zero native blocks (Option B).
+  `document_pages.text` alone unblocks the viewer + the 7a tagger's read, but
+  **not** chunking — `/embed` re-extracts from the original PDF and never reads
+  that column.
+- **Bilingual pages get a normal verify, not a special gate.** With
+  `claude-opus-5` measuring eu WER < 1% (ADR-0026), both language streams of a
+  bilingual OCR'd page ride the identical `under_review → confirm → embed`
+  path — no held-back `eu` stream, no second approval step. `ocr_bilingual`
+  drives only a reviewer-guidance note ("check the eu column against the es
+  column"), shown in the Knowledge Center viewer.
+- **Inert until verified.** OCR'd documents are/stay `under_review`; the
+  existing embedding gate (`tagging_status != under_review`) holds them at 0
+  chunks until the Sprint-3 `confirm()` — same invariant as 7a, re-proven here
+  (`Sprint7eOcrInvariantTest`).
+- **Provenance + UI.** Additive migration on `document_pages`:
+  `extraction_source` (`text_layer` default | `ocr_pending` | `ocr`),
+  `ocr_quality`, `ocr_engine`, `ocr_cost_usd`, `ocr_bilingual`. Document-level
+  derived `ocr_pages_count` (`DocumentController::index`/`show`) drives a
+  Knowledge-Center "OCR'd (N)" badge; the per-page viewer shows "texto obtenido
+  por OCR" + quality + the bilingual note where `extraction_source = 'ocr'`.
+- **Opt-in ingest + backfill (CLI, no UI this sprint).**
+
+```bash
+# Fresh corpus ingest, OCR opted in (default off) + a per-document page cap:
+php artisan documents:ingest-folder --ocr [--ocr-page-cap=60]
+
+# Back-fill documents ingested before this feature existed: finds text-less
+# docs (pages > 0 AND pages_with_text = 0), OCRs them (respecting the cap),
+# then re-runs the 7a tag-proposal now that text exists. Reports per document:
+# pages OCR'd, mean/min quality, cost. Leaves every document under_review.
+php artisan documents:ocr-backfill [--document=<uuid>] [--page-cap=] [--dry-run]
+```
+
+### Additive migration (Sprint 7e)
+
+1. `add_ocr_provenance_to_document_pages` — `extraction_source` (3-valued:
+   `text_layer` | `ocr_pending` | `ocr`), `ocr_quality`, `ocr_engine`,
+   `ocr_cost_usd`, `ocr_bilingual`. No hr-ai migration (ADR-0007 — hr-ai's only
+   new write for this feature is the S3 sidecar, not a DB row).
+
+### Tests (the acceptance proof)
+
+`tests/Feature/Sprint7eOcrInvariantTest.php`: the **no-op invariant** (a
+text-layer PDF ingests with `extraction_source = text_layer` on every page and
+zero OCR jobs dispatched); the positive control (a text-less page, opted in,
+*does* dispatch `OcrDocumentPages`); the fan-out (`OcrDocumentPages` → one
+`OcrPage` per pending page); and the **`under_review`/0-chunks gate** (an OCR'd
+document stays `under_review` with 0 chunks until confirmed, then embeds).
+`Sprint7cAdditivityRegressionTest` stays green (the golden trace is untouched).
+`php artisan test`.
+
 ## Mail transport
 
 Selected by `MAIL_MAILER` with no code change:
