@@ -314,6 +314,129 @@ class CorrectionSalary01Test extends TestCase
         $this->assertSame(0, $exit, 'the stored figure matches the 14-pagas column the header names');
     }
 
+    // ---- 4. every monthly figure is named by its own source column ----------
+
+    /**
+     * The convenio-10 shape: the sheet prints TWO monthly figures that are not the
+     * same quantity — `salario base` 1.183,34 and `bruto mes` 1.771,64 (the base
+     * plus its prorated extras). Both are stated, each under its own header, and
+     * neither is called a bare "salario mensual", which would name a quantity the
+     * employee cannot check against a payslip.
+     */
+    public function test_two_monthly_columns_are_both_stated_each_named_by_its_own_header(): void
+    {
+        $this->row([
+            'gross_annual' => 21259.75,
+            'base_salary_monthly' => 1183.34,
+            'base_salary_monthly_label' => 'salario base',
+            'raw_values' => [
+                'bruto mes' => 1771.64,
+                'bruto anual' => 21259.752,
+                'salario base' => 1183.34,
+                'p.p.paga extra' => 394.446667,
+                'plus transporte' => 114.97,
+            ],
+        ]);
+
+        $answer = $this->answer();
+
+        $this->assertStringContainsString('salario base mensual de 1.183,34 €', $answer);
+        $this->assertStringContainsString('bruto mensual de 1.771,64 €', $answer);
+        $this->assertStringNotContainsString('salario mensual de', $answer, 'the generic label names neither quantity');
+        $this->assertStringNotContainsString('394,45', $answer, 'a prorated extra is not a monthly salary');
+        $this->assertStringNotContainsString('114,97', $answer, 'nor is a transport plus');
+    }
+
+    /**
+     * COEAS Navarra reads its monthly from a column headed "14 pagas". Calling
+     * that "salario base mensual" would attach a name the source never used, so
+     * the figure is named after the column — and the 12-pagas figure printed
+     * beside it is stated too, since the source prints both.
+     */
+    public function test_a_monthly_read_from_a_pagas_column_is_named_after_that_column(): void
+    {
+        $this->row([
+            'base_salary_monthly' => 2231.04,
+            'base_salary_monthly_label' => '14 pagas',
+            'pagas_count' => 14,
+            'raw_values' => ['14 pagas' => 2231.038668, '12 pagas' => 2602.878446, 'hora' => 18.33013],
+        ]);
+
+        $answer = $this->answer();
+
+        $this->assertStringContainsString('importe mensual en 14 pagas de 2.231,04 €', $answer);
+        $this->assertStringContainsString('importe mensual en 12 pagas de 2.602,88 €', $answer);
+        $this->assertStringNotContainsString('salario base', $answer, 'the source never calls this column a base salary');
+        $this->assertStringNotContainsString('en 14 pagas en 14 pagas', $answer, 'the count is not repeated when the column name states it');
+    }
+
+    /** An unrecognized header is QUOTED, never paraphrased into a meaning it may not have. */
+    public function test_an_unrecognized_monthly_header_is_quoted_verbatim(): void
+    {
+        $this->row([
+            'base_salary_monthly' => 1500.00,
+            'base_salary_monthly_label' => 'Retribución de tabla (mes)',
+            'raw_values' => [],
+        ]);
+
+        $answer = $this->answer();
+
+        $this->assertStringContainsString('«Retribución de tabla (mes)» de 1.500,00 €', $answer);
+    }
+
+    /**
+     * `--mark-provenance` adds the original OCR'd header as a SECOND key holding
+     * the same value. That is one printed figure under two names, and it must be
+     * stated once.
+     */
+    public function test_the_same_figure_restored_under_a_verbatim_key_is_stated_once(): void
+    {
+        $this->row([
+            'base_salary_monthly' => 2232.75,
+            'base_salary_monthly_label' => "Salario base (mes)\n(€)",
+            'raw_values' => ['salario base' => 2232.75, "Salario base (mes)\n(€)" => 2232.75],
+        ]);
+
+        $answer = $this->answer();
+
+        $this->assertSame(1, substr_count($answer, '2.232,75'), 'one source figure, one mention');
+        $this->assertStringContainsString('salario base mensual de 2.232,75 €', $answer);
+    }
+
+    /** The second year of a multi-year block belongs to another table's year — never quoted here. */
+    public function test_a_suffixed_duplicate_key_is_never_quoted(): void
+    {
+        $this->row([
+            'base_salary_monthly' => 2166.06,
+            'base_salary_monthly_label' => '14 pagas',
+            'raw_values' => ['14 pagas' => 2166.06, '14 pagas (2)' => 2231.04],
+        ]);
+
+        $answer = $this->answer();
+
+        $this->assertStringContainsString('2.166,06', $answer);
+        $this->assertStringNotContainsString('2.231,04', $answer, "the next year's figure is not this table's");
+    }
+
+    /**
+     * With no typed monthly the sheet's monthly is unsettled (ADR-0027's
+     * multi-year block) — the raw cells are NOT offered as a substitute, or the
+     * answer would hand over four figures and no way to choose between them.
+     */
+    public function test_raw_monthly_cells_are_not_quoted_when_no_monthly_is_typed(): void
+    {
+        $this->row([
+            'gross_annual' => null,
+            'base_salary_monthly' => null,
+            'raw_values' => ['14 pagas' => 1365.16, '12 pagas' => 1592.69, '14 pagas (2)' => 1406.12],
+        ]);
+
+        $answer = $this->answer();
+
+        $this->assertStringNotContainsString('mensual', $answer);
+        $this->assertStringNotContainsString('1.365,16', $answer);
+    }
+
     // ---- helpers ------------------------------------------------------------
 
     private function row(array $attributes): SalaryTableRow

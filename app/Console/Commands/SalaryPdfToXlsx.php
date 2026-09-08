@@ -1115,7 +1115,18 @@ class SalaryPdfToXlsx extends Command
             foreach (SalaryTableRow::where('salary_table_id', $table->id)->get() as $row) {
                 $raw = $row->raw_values ?? [];
                 $changed = false;
+                $updates = [];
                 foreach ($manifest as $entry) {
+                    // The monthly figure is quoted to the employee under the name
+                    // of the column it came from, so that name must be the SOURCE
+                    // header too — not the rewritten one the mapping put in the
+                    // sheet for the importer's benefit.
+                    if ($row->base_salary_monthly_label !== null
+                        && $row->base_salary_monthly_label !== $entry['original']
+                        && $this->normalizeHeaderText($row->base_salary_monthly_label) === $entry['normalized_key']) {
+                        $updates['base_salary_monthly_label'] = $entry['original'];
+                        $changed = true;
+                    }
                     if (array_key_exists($entry['original'], $raw)) {
                         continue; // already verbatim (idempotent re-run)
                     }
@@ -1127,7 +1138,7 @@ class SalaryPdfToXlsx extends Command
                     $changed = true;
                 }
                 if ($changed) {
-                    $row->update(['raw_values' => $raw]);
+                    $row->update($updates + ['raw_values' => $raw]);
                     $rowsTouched++;
                 }
             }

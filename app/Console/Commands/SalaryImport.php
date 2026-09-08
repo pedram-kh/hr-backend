@@ -149,6 +149,7 @@ class SalaryImport extends Command
                             'job_category_id' => $category->id,
                             'gross_annual' => $row['gross_annual'] ?? null,
                             'base_salary_monthly' => $row['base_salary_monthly'] ?? null,
+                            'base_salary_monthly_label' => $row['base_salary_monthly_label'] ?? null,
                             'extra_pay' => $row['extra_pay'] ?? null,
                             'pagas_count' => $row['pagas_count'] ?? null,
                             'hourly_rate' => $row['hourly_rate'] ?? null,

@@ -6,6 +6,7 @@ use App\Models\Document;
 use App\Models\Employee;
 use App\Models\ReferenceFact;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 
 /**
  * Reference-fact-in-chat (Sprint 7c Phase 1, ADR-0023) — the salary sibling.
@@ -125,7 +126,7 @@ class ReferenceFactAnswerService
      * on a genuine same-validity conflict) and compose the answer for the chosen
      * fact. `$matchKind` ∈ job_category | group_label | convenio_wide.
      *
-     * @param  \Illuminate\Support\Collection<int, ReferenceFact>  $tier
+     * @param  Collection<int, ReferenceFact>  $tier
      * @param  array<string,mixed>  $rf
      * @return array{outcome:string, answer:string, citations:list<array<string,mixed>>, escalation_reason:?string, reference_fact:array<string,mixed>}
      */
@@ -164,7 +165,7 @@ class ReferenceFactAnswerService
      * still holds >1 fact with DIFFERING values → ambiguous, escalate (7d
      * resolves). Returns [fact|null, selection].
      *
-     * @param  \Illuminate\Support\Collection<int, ReferenceFact>  $facts
+     * @param  Collection<int, ReferenceFact>  $facts
      * @return array{0: ?ReferenceFact, 1: string}
      */
     private function selectMostRecent($facts): array
@@ -230,6 +231,12 @@ class ReferenceFactAnswerService
      * are surfaced, joined "; ", capped — never a noisy structure dump. Returns ''
      * when there is nothing useful to add (the `value` already states the fact).
      *
+     * The cap drops WHOLE entries, never cutting mid-string (Correction-salary-01
+     * follow-up): a character-wise `mb_substr` could end a breakdown halfway
+     * through a figure — "1.234,56" printed as "1.23" — which is a number the
+     * source does not contain, arrived at by truncation instead of by division.
+     * Same rule as everywhere else: quote a source figure whole, or omit it.
+     *
      * @param  mixed  $raw
      */
     private function renderRawValues($raw): string
@@ -239,16 +246,24 @@ class ReferenceFactAnswerService
         }
 
         $parts = [];
+        $length = 0;
         foreach ($raw as $key => $val) {
-            if (is_scalar($val)) {
-                $parts[] = is_int($key) ? (string) $val : "{$key}: {$val}";
+            if (! is_scalar($val)) {
+                continue;
             }
+            $part = is_int($key) ? (string) $val : "{$key}: {$val}";
+            $separator = $parts === [] ? 0 : 2;
+            if ($length + $separator + mb_strlen($part) > 240) {
+                break;
+            }
+            $parts[] = $part;
+            $length += $separator + mb_strlen($part);
             if (count($parts) >= 6) {
                 break;
             }
         }
 
-        return mb_substr(implode('; ', $parts), 0, 240);
+        return implode('; ', $parts);
     }
 
     /**

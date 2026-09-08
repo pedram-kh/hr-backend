@@ -2,6 +2,9 @@
 
 namespace App\Console\Commands;
 
+use App\Models\Convenio;
+use App\Models\Employee;
+use Database\Seeders\ChatTestUserSeeder;
 use Database\Seeders\DocumentTypeSeeder;
 use Database\Seeders\RoleSeeder;
 use Database\Seeders\TerritorySeeder;
@@ -33,7 +36,7 @@ use Illuminate\Console\Command;
  */
 class StagingSeedTestUsers extends Command
 {
-    protected $signature = 'staging:seed-test-users';
+    protected $signature = 'staging:seed-test-users {--chat-profiles : also seed the convenio-scoped chat test employees (needs registry:import + salary:import to have run)}';
 
     protected $description = 'Seed staging test accounts (super_admin, knowledge_editor, auditor, hr_agent, one employee) from SEED_*_EMAIL env vars. Idempotent.';
 
@@ -49,6 +52,31 @@ class StagingSeedTestUsers extends Command
 
         foreach ([TerritorySeeder::class, DocumentTypeSeeder::class, TopicSeeder::class, RoleSeeder::class, TestUserSeeder::class] as $seeder) {
             $this->call('db:seed', ['--class' => $seeder, '--force' => true]);
+        }
+
+        // The convenio-scoped chat profiles are opt-in because they need the
+        // registry AND the salary import to have run (a profile is bound to a real
+        // convenio and, for the salary ones, to a category that actually has a
+        // row). Seeding them into an empty registry would silently skip them all.
+        if ($this->option('chat-profiles')) {
+            if (Convenio::query()->doesntExist()) {
+                $this->error('--chat-profiles needs the registry: no convenios exist yet. Run registry:import first.');
+
+                return self::FAILURE;
+            }
+            $this->call('db:seed', ['--class' => ChatTestUserSeeder::class, '--force' => true]);
+            $this->table(
+                ['employee', 'convenio', 'category'],
+                Employee::with(['convenio:id,name', 'jobCategory:id,name'])
+                    ->where('email', 'like', 'test-%@example.com')
+                    ->orderBy('id')
+                    ->get()
+                    ->map(fn (Employee $e) => [
+                        $e->full_name,
+                        $e->convenio?->name ?? '—',
+                        $e->jobCategory?->name ?? '— (constrained pick)',
+                    ])->all(),
+            );
         }
 
         $this->info('Seeded staging test accounts:');

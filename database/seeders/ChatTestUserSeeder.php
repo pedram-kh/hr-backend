@@ -26,6 +26,10 @@ use Illuminate\Support\Facades\Log;
  *  - the COVERAGE-GAP profile (Gipuzkoa Limpieza — salary is PDF-only) → escalate
  *    salary_coverage_gap.
  *
+ * Correction-salary-01 adds the two convenios whose salary rows came from a
+ * converted PDF grid (15 and 3): one whose source prints a monthly, one whose
+ * source prints only an annual — the two answer shapes ADR-0027 distinguishes.
+ *
  * The super_admin used by the "Answer model" key screen is seeded by
  * TestUserSeeder (admin@example.com).
  */
@@ -66,6 +70,27 @@ class ChatTestUserSeeder extends Seeder
             convenio: $andalucia,
             jobCategoryId: null,
             resolveCategory: false,
+        );
+
+        // The two convenios whose salary figures exist ONLY because a PDF grid was
+        // converted (flow 2b) — the profiles that exercise that path end to end.
+        // They also cover both ADR-0027 answer shapes: convenio 15's gazette prints
+        // a monthly next to its annual, convenio 3's prints an annual and nothing
+        // else, so its answer states the annual alone rather than deriving one.
+        $gestores = $this->byNumero('20104415012022') ?? $this->byName('INFORMACI', 'Gipuzkoa');
+        $this->seedEmployee(
+            email: 'test-gestores-gipuzkoa@example.com',
+            name: 'Test Gestores Gipuzkoa (convenio 15)',
+            convenio: $gestores,
+            jobCategoryId: $this->categoryWithSalaryRow($gestores),
+        );
+
+        $ocioAlava = $this->byNumero('01100635012017') ?? $this->byName('OCIO EDUCATIVO', 'lava');
+        $this->seedEmployee(
+            email: 'test-ocio-alava@example.com',
+            name: 'Test Ocio Educativo Álava (convenio 3)',
+            convenio: $ocioAlava,
+            jobCategoryId: $this->categoryWithSalaryRow($ocioAlava),
         );
 
         // A generic active-convenio employee for the sensitive-topic + floor gates.

@@ -21,6 +21,11 @@ use Illuminate\Support\Carbon;
  * deriving `gross_annual / 14`) quoted convenio 15 a monthly of 2.392,24 € where
  * its own gazette prints 2.232,75 €.
  *
+ * Each monthly figure is NAMED BY ITS SOURCE COLUMN, never generically: a sheet
+ * can print several monthly quantities that are not interchangeable (convenio 10
+ * prints `salario base` 1.183,34 and `bruto mes` 1.771,64), so the answer states
+ * every one it has, each with the header the table gives it. See monthlyFigures().
+ *
  * A salary figure comes ONLY from the typed `salary_table_rows` cell, bound to
  * its job category and year BY CONSTRUCTION — never parsed from a prose/embedded-
  * table chunk (the structural antidote to the Q5 misattribution, where a 2025 row
@@ -142,6 +147,7 @@ class SalaryAnswerService
         $salary['row'] = [
             'gross_annual' => $row->gross_annual,
             'base_salary_monthly' => $row->base_salary_monthly,
+            'base_salary_monthly_label' => $row->base_salary_monthly_label,
             'pagas_count' => $row->pagas_count,
             'hourly_rate' => $row->hourly_rate,
             'extra_pay' => $row->extra_pay,
@@ -257,9 +263,8 @@ class SalaryAnswerService
             }
             $parts[] = $annual;
         }
-        if ($row->base_salary_monthly !== null) {
-            $payments = $row->pagas_count ? " en {$row->pagas_count} pagas" : '';
-            $parts[] = 'salario base mensual de '.$this->money($row->base_salary_monthly).$payments;
+        foreach ($this->monthlyFigures($row) as $monthly) {
+            $parts[] = $monthly;
         }
         if ($row->extra_pay !== null) {
             $parts[] = 'pagas extra de '.$this->money($row->extra_pay);
@@ -276,6 +281,136 @@ class SalaryAnswerService
         return "Para la categoría {$catLabel}{$disclosure}, según la tabla salarial de {$table->year} "
             ."de tu convenio: {$figures}. (Cifra exacta de la tabla salarial estructurada; "
             .'si tu categoría no es la indicada, dímelo y la ajusto.)';
+    }
+
+    /**
+     * Every monthly figure the source prints for this row, each named the way the
+     * source names it (Correction-salary-01 follow-up).
+     *
+     * A convenio does not print "the monthly salary": convenio 10's sheet prints a
+     * `salario base` of 1.183,34 AND a `bruto mes` of 1.771,64 (the base plus its
+     * prorated extras), and COEAS Navarra prints `14 pagas` next to `12 pagas`.
+     * Those are different quantities, so a generic "salario mensual de …" states
+     * something the employee cannot check against a payslip. Each figure is
+     * therefore labelled with its own column header, and when the table prints
+     * more than one, all of them are stated.
+     *
+     * The extra figures are read from `raw_values`, which holds the source's cells
+     * verbatim — so this widens WHAT IS QUOTED, never what is computed. Two
+     * deliberate limits: they are only surfaced when the typed monthly exists (a
+     * sheet whose monthly is ambiguous — the multi-year block of ADR-0027 — stays
+     * silent rather than offering four figures and no way to choose), and a
+     * suffixed duplicate key ("14 pagas (2)", the second year of such a block) is
+     * never quoted.
+     *
+     * @return list<string>
+     */
+    private function monthlyFigures(SalaryTableRow $row): array
+    {
+        if ($row->base_salary_monthly === null) {
+            return [];
+        }
+
+        $typed = (float) $row->base_salary_monthly;
+        $out = [$this->phraseMonthly($row->base_salary_monthly_label, $typed, $row->pagas_count)];
+        $seen = [$this->cents($typed)];
+
+        foreach ($row->raw_values ?? [] as $header => $value) {
+            $label = (string) $header;
+            if (preg_match('/\s\(\d+\)$/', $label)) {
+                continue; // the second year of a multi-year block — not this table's
+            }
+            if (! $this->isMonthlyHeader($label)) {
+                continue;
+            }
+            $amount = $this->parseAmount($value);
+            if ($amount === null || in_array($this->cents($amount), $seen, true)) {
+                continue;
+            }
+            $seen[] = $this->cents($amount);
+            $out[] = $this->phraseMonthly($label, $amount, null);
+        }
+
+        return $out;
+    }
+
+    /** True when a source header names a monthly amount (strict — a complement or a plus is not one). */
+    private function isMonthlyHeader(string $header): bool
+    {
+        $n = $this->normalizeHeader($header);
+
+        return (bool) preg_match('/^\d{1,2} pagas$/', $n)
+            || (bool) preg_match('/^bruto ?\/? ?mes\b/', $n)
+            || (bool) preg_match('/^(sb|salario base|sueldo base|sueldo mensual|salario mensual|base mensual|salario mes|base mes)\b/', $n);
+    }
+
+    /**
+     * Name a monthly figure using the source column's own wording. An unrecognized
+     * header is QUOTED rather than paraphrased — better a verbatim «bruto/mes 14
+     * pagas» than a guess at what it means.
+     */
+    private function phraseMonthly(?string $header, float $amount, ?int $pagasCount): string
+    {
+        $n = $header === null ? '' : $this->normalizeHeader($header);
+        $statesPagas = (bool) preg_match('/\d{1,2} pagas/', $n);
+
+        if (preg_match('/^(\d{1,2}) pagas$/', $n, $m)) {
+            $name = "importe mensual en {$m[1]} pagas";
+        } elseif (preg_match('/^bruto ?\/? ?mes\b/', $n)) {
+            $name = 'bruto mensual';
+        } elseif ($n === '' || preg_match('/^(sb|salario base|sueldo base|sueldo mensual|salario mensual|base mensual|salario mes|base mes)\b/', $n)) {
+            // No stored label: the typed column only ever accepts a base-monthly
+            // header, so this is the narrowest true statement — rows imported
+            // before the label existed keep it.
+            $name = 'salario base mensual';
+        } else {
+            $name = '«'.trim((string) $header).'»';
+        }
+
+        // The count is a stated fact about the table, never a divisor — and it is
+        // not repeated when the column name already says it.
+        $payments = $pagasCount !== null && ! $statesPagas ? " en {$pagasCount} pagas" : '';
+
+        return $name.' de '.$this->money($amount).$payments;
+    }
+
+    /** Lowercase, unaccented, whitespace-collapsed, trailing unit/currency markers dropped. */
+    private function normalizeHeader(string $header): string
+    {
+        $s = str_replace("\n", ' ', $header);
+        $s = (string) preg_replace('/\s+/u', ' ', $s);
+        $s = mb_strtolower(trim($s));
+        $s = strtr($s, ['á' => 'a', 'é' => 'e', 'í' => 'i', 'ó' => 'o', 'ú' => 'u', 'ü' => 'u', 'ñ' => 'n']);
+
+        return trim((string) preg_replace('/\s*\((?:€|eur|euros?|mes|mensual)\)\s*$/u', '', $s));
+    }
+
+    /** A raw cell → float, accepting both 1.183,34 and 1183.34. Null when it isn't a number. */
+    private function parseAmount($value): ?float
+    {
+        if (is_int($value) || is_float($value)) {
+            return (float) $value;
+        }
+        if (! is_string($value)) {
+            return null;
+        }
+        $s = trim(preg_replace('/[^\d,.\-]/u', '', $value) ?? '');
+        if ($s === '') {
+            return null;
+        }
+        if (preg_match('/^-?\d{1,3}(\.\d{3})+(,\d+)?$/', $s)) {
+            $s = str_replace(['.', ','], ['', '.'], $s);
+        } elseif (preg_match('/^-?\d+,\d+$/', $s)) {
+            $s = str_replace(',', '.', $s);
+        }
+
+        return is_numeric($s) ? (float) $s : null;
+    }
+
+    /** Compare amounts at cent precision — the same figure restored verbatim under a second key is one figure. */
+    private function cents(float $amount): int
+    {
+        return (int) round($amount * 100);
     }
 
     /**
