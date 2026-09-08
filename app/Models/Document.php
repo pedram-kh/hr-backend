@@ -14,6 +14,7 @@ class Document extends Model
         'uuid', 'title', 'source_filename', 'storage_path', 'content_hash',
         'convenio_id', 'document_type_id', 'validity_start', 'validity_end',
         'retrieval_status', 'authority_level', 'predecessor_document_id',
+        'derived_from_document_id',
         'language', 'tagging_status', 'tagging_confidence',
         'ingested_at', 'ingested_by',
     ];
@@ -64,6 +65,23 @@ class Document extends Model
     public function successors(): HasMany
     {
         return $this->hasMany(Document::class, 'predecessor_document_id');
+    }
+
+    /**
+     * The original document this one was MECHANICALLY derived from (Sprint 7e
+     * follow-up, review.md §5) — e.g. the OCR-derived `salary.xlsx` stand-in
+     * for a scanned salary PDF. Distinct from {@see predecessor()}, which is a
+     * human/registry version-succession concept.
+     */
+    public function derivedFrom(): BelongsTo
+    {
+        return $this->belongsTo(Document::class, 'derived_from_document_id');
+    }
+
+    /** The inverse of {@see derivedFrom()} — machine-derived artifacts of this document. */
+    public function derivedDocuments(): HasMany
+    {
+        return $this->hasMany(Document::class, 'derived_from_document_id');
     }
 
     /** Descriptive topics with their provenance (Sprint 3 is the first writer). */

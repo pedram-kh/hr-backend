@@ -10,6 +10,11 @@ class SalaryTable extends Model
 {
     protected $fillable = [
         'convenio_id', 'year', 'validity_start', 'validity_end', 'source_document_id',
+        // 'source' is deliberately NOT set by the normal write path (`salary:
+        // import`'s updateOrCreate() never mentions it, so it keeps its
+        // xlsx_native default there) — only `salary:pdf-to-xlsx --mark-
+        // provenance` ever assigns 'ocr_pdf', as a separate, human-gated step.
+        'source',
     ];
 
     protected $casts = [
