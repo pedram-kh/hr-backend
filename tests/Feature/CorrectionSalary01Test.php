@@ -1,0 +1,333 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Models\Convenio;
+use App\Models\ConvenioJobCategory;
+use App\Models\Document;
+use App\Models\DocumentType;
+use App\Models\Employee;
+use App\Models\SalaryTable;
+use App\Models\SalaryTableRow;
+use App\Models\Sector;
+use App\Models\Territory;
+use App\Services\ExtractionClient;
+use App\Services\SalaryAnswerService;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Artisan;
+use Tests\TestCase;
+
+/**
+ * Correction-salary-01 — a salary figure is a SOURCE CELL or it is not stored.
+ *
+ * hr-ai used to compute `base_salary_monthly = gross_annual / 14` and assert
+ * `num_payments = 14` for every table. Convenio 15 (Gestores Información
+ * Gipuzkoa) pays its annual over 15, so the chat read out 2.392,24 € where the
+ * convenio's own gazette prints 2.232,75 €. This test class pins the three
+ * halves of the fix:
+ *
+ *  1. the ANSWER states only stored figures — no monthly is invented, and a
+ *     stated pagas count is reported but never applied as a divisor;
+ *  2. `salary:import` FAILS LOUDLY (non-zero, no success line, nothing
+ *     written) when a recognized grid yields no rows or maps to no typed
+ *     field, instead of reporting a completed import over nothing;
+ *  3. `salary:audit-monthly` catches a stored monthly that contradicts (or has
+ *     no) source cell — the guard that keeps a derived figure from creeping
+ *     back in.
+ *
+ * hr-ai's own half of the contract is pinned in
+ * `hr-ai/scripts/salary_parser_test.py`.
+ */
+class CorrectionSalary01Test extends TestCase
+{
+    use RefreshDatabase;
+
+    private Convenio $convenio;
+
+    private Territory $territory;
+
+    private ConvenioJobCategory $category;
+
+    private SalaryTable $table;
+
+    private Document $salaryDoc;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->territory = Territory::create(['code' => '20', 'name' => 'Gipuzkoa', 'level' => 'provincial', 'aliases' => []]);
+        $sector = Sector::create(['name' => 'Información y Documentación', 'aliases' => []]);
+        $this->convenio = Convenio::create([
+            'numero' => '20104415012022', 'name' => 'Gestores Información Gipuzkoa',
+            'territory_id' => $this->territory->id, 'sector_id' => $sector->id,
+        ]);
+        $this->category = ConvenioJobCategory::create([
+            'convenio_id' => $this->convenio->id, 'name' => 'Grupo I. Jefes de Área', 'group_code' => 'I',
+        ]);
+        $type = DocumentType::create(['code' => 'salary_tables', 'name' => 'Tablas salariales']);
+        $this->salaryDoc = Document::create([
+            'title' => 'Gestores Información Gipuzkoa — Tablas 2026',
+            'source_filename' => 'gestores_tablas_2026.xlsx',
+            'storage_path' => 'documents/fake/salary.xlsx',
+            'content_hash' => hash('sha256', 'salary-'.uniqid()),
+            'convenio_id' => $this->convenio->id,
+            'document_type_id' => $type->id,
+            'retrieval_status' => 'active',
+            'authority_level' => 'official_convenio',
+            'language' => 'es',
+            'tagging_status' => 'verified',
+            'ingested_at' => now(),
+        ]);
+        $this->table = SalaryTable::create([
+            'convenio_id' => $this->convenio->id, 'year' => (int) now()->year,
+            'source_document_id' => $this->salaryDoc->id,
+        ]);
+    }
+
+    // ---- 1. the answer states only stored figures ---------------------------
+
+    /**
+     * The convenio-15 case itself: the gazette states an annual but no monthly.
+     * The answer gives the annual, says nothing about a monthly, and above all
+     * never prints 33.491,36 / 14 = 2.392,24 €.
+     */
+    public function test_a_row_with_no_stored_monthly_states_the_annual_and_omits_the_monthly(): void
+    {
+        $this->row(['gross_annual' => 33491.36, 'base_salary_monthly' => null, 'pagas_count' => null]);
+
+        $answer = $this->answer();
+
+        $this->assertStringContainsString('bruto anual de 33.491,36 €', $answer);
+        $this->assertStringNotContainsString('mensual', $answer);
+        $this->assertStringNotContainsString('2.392,24', $answer, 'the derived figure must never appear');
+        $this->assertStringNotContainsString('pagas', $answer, 'no pagas count was stated by the source');
+    }
+
+    /** A stated pagas count is reported alongside the annual — as a fact, not a divisor. */
+    public function test_a_stated_pagas_count_is_reported_but_never_applied(): void
+    {
+        $this->row(['gross_annual' => 31234.54, 'base_salary_monthly' => null, 'pagas_count' => 14]);
+
+        $answer = $this->answer();
+
+        $this->assertStringContainsString('bruto anual de 31.234,54 € (tabla expresada en 14 pagas)', $answer);
+        $this->assertStringNotContainsString('mensual', $answer);
+        $this->assertStringNotContainsString('2.231,04', $answer, '31234.54/14 is exactly what must NOT be computed');
+    }
+
+    /** When the source DOES state a monthly, it is quoted, with its pagas count. */
+    public function test_a_stored_monthly_is_quoted_with_its_stated_pagas_count(): void
+    {
+        $this->row(['gross_annual' => 33491.36, 'base_salary_monthly' => 2232.75, 'pagas_count' => 15]);
+
+        $answer = $this->answer();
+
+        $this->assertStringContainsString('bruto anual de 33.491,36 €', $answer);
+        $this->assertStringContainsString('salario base mensual de 2.232,75 € en 15 pagas', $answer);
+        $this->assertStringNotContainsString('tabla expresada', $answer, 'the pagas count rides with the monthly when there is one');
+    }
+
+    /** A stored monthly with no stated pagas count is quoted bare — nothing assumed. */
+    public function test_a_stored_monthly_without_a_pagas_count_is_quoted_bare(): void
+    {
+        $this->row(['gross_annual' => 37131.5, 'base_salary_monthly' => 2652.25, 'pagas_count' => null]);
+
+        $answer = $this->answer();
+
+        $this->assertStringContainsString('salario base mensual de 2.652,25 €.', $answer);
+        $this->assertStringNotContainsString('pagas', $answer);
+    }
+
+    // ---- 2. salary:import fails loudly --------------------------------------
+
+    public function test_import_fails_loudly_when_a_recognized_grid_yields_no_rows(): void
+    {
+        $this->fakeExtraction([
+            'tables' => [],
+            'warnings' => ["sheet '2026': a salary-grid header was found on row 0 but NOT ONE data row carried a numeric figure"],
+            'sheet_diagnostics' => [['sheet' => '2026', 'status' => 'header_but_no_rows', 'typed_fields' => ['gross_annual'], 'rows' => 0]],
+        ]);
+
+        $exit = Artisan::call('salary:import', ['--document' => $this->salaryDoc->uuid]);
+        $output = Artisan::output();
+
+        $this->assertSame(1, $exit, 'a recognized-but-empty grid must exit non-zero');
+        $this->assertStringNotContainsString('Salary import complete', $output, 'and must never print a success line');
+        $this->assertStringContainsString('header_but_no_rows', $output);
+        $this->assertStringContainsString('NOTHING written for this document', $output);
+        $this->assertSame(0, SalaryTableRow::whereIn('salary_table_id', SalaryTable::where('source_document_id', $this->salaryDoc->id)->pluck('id'))->count());
+    }
+
+    public function test_import_fails_loudly_when_a_header_maps_to_nothing(): void
+    {
+        $this->fakeExtraction([
+            'tables' => [],
+            'warnings' => [],
+            'sheet_diagnostics' => [['sheet' => '2026', 'status' => 'header_maps_to_nothing', 'typed_fields' => [], 'rows' => 0]],
+        ]);
+
+        $exit = Artisan::call('salary:import', ['--document' => $this->salaryDoc->uuid]);
+        $output = Artisan::output();
+
+        $this->assertSame(1, $exit);
+        $this->assertStringNotContainsString('Salary import complete', $output);
+        $this->assertStringContainsString('header_maps_to_nothing', $output);
+    }
+
+    public function test_import_fails_loudly_when_no_table_is_parsed_at_all(): void
+    {
+        $this->fakeExtraction(['tables' => [], 'warnings' => [], 'sheet_diagnostics' => [['sheet' => 'Notas', 'status' => 'no_header', 'typed_fields' => [], 'rows' => 0]]]);
+
+        $exit = Artisan::call('salary:import', ['--document' => $this->salaryDoc->uuid]);
+        $output = Artisan::output();
+
+        $this->assertSame(1, $exit);
+        $this->assertStringNotContainsString('Salary import complete', $output);
+        $this->assertStringContainsString('no salary tables parsed', $output);
+    }
+
+    /** A notes sheet alongside a real grid stays benign — it must not fail the import. */
+    public function test_import_succeeds_with_a_notes_sheet_and_stores_the_sourced_figures(): void
+    {
+        $this->fakeExtraction([
+            'tables' => [[
+                'year' => (int) now()->year, 'validity_start' => null, 'validity_end' => null,
+                'rows' => [[
+                    'job_category_name' => 'Grupo I. Jefes de Área', 'group_code' => 'I',
+                    'gross_annual' => 33491.36, 'base_salary_monthly' => 2232.75, 'extra_pay' => null,
+                    'pagas_count' => null, 'hourly_rate' => null, 'night_plus' => null,
+                    'raw_values' => ['salario base' => '2.232,75', 'salario anual' => '33.491,36'],
+                ]],
+            ]],
+            'warnings' => [],
+            'sheet_diagnostics' => [
+                ['sheet' => '2026', 'status' => 'ok', 'typed_fields' => ['base_salary_monthly', 'gross_annual'], 'rows' => 1],
+                ['sheet' => 'Notes', 'status' => 'no_header', 'typed_fields' => [], 'rows' => 0],
+            ],
+        ]);
+
+        $exit = Artisan::call('salary:import', ['--document' => $this->salaryDoc->uuid]);
+        $output = Artisan::output();
+
+        $this->assertSame(0, $exit);
+        $this->assertStringContainsString('Salary import complete', $output);
+
+        $row = SalaryTableRow::whereIn('salary_table_id', SalaryTable::where('source_document_id', $this->salaryDoc->id)->pluck('id'))->firstOrFail();
+        $this->assertEqualsWithDelta(2232.75, $row->base_salary_monthly, 0.001, 'the monthly is the source cell, not gross/14');
+        $this->assertNull($row->pagas_count, 'the source states no pagas count, so none is stored');
+    }
+
+    // ---- 3. the audit guard -------------------------------------------------
+
+    /** The pre-correction state: a stored monthly that contradicts the source's own. */
+    public function test_the_audit_reports_a_stored_monthly_that_contradicts_the_source(): void
+    {
+        $this->row([
+            'gross_annual' => 33491.36,
+            'base_salary_monthly' => 2392.24,   // 33491.36 / 14, the old derivation
+            'pagas_count' => 14,                // asserted by nothing in the source
+            'raw_values' => ['salario base' => '2.232,75', 'salario anual' => '33.491,36'],
+        ]);
+
+        $exit = Artisan::call('salary:audit-monthly');
+        $output = Artisan::output();
+
+        $this->assertSame(1, $exit, 'any discrepancy must exit non-zero');
+        $this->assertStringContainsString('DISCREPANCY', $output);
+        $this->assertStringContainsString('2.392,24', $output, 'the stored figure');
+        $this->assertStringContainsString('2.232,75', $output, 'what the source actually states');
+        $this->assertStringContainsString('UNSOURCED PAGAS COUNT', $output, 'no header states 14 pagas');
+        $this->assertStringContainsString('Grupo I. Jefes de Área', $output);
+    }
+
+    /** A monthly with no counterpart anywhere in raw_values is, by definition, derived. */
+    public function test_the_audit_reports_an_unsourced_monthly(): void
+    {
+        $this->row([
+            'gross_annual' => 24748.65,
+            'base_salary_monthly' => 1767.76,
+            'raw_values' => ['total anual' => '24.748,65', 'precio/hora' => '14,79'],
+        ]);
+
+        $exit = Artisan::call('salary:audit-monthly');
+
+        $this->assertSame(1, $exit);
+        $this->assertStringContainsString('UNSOURCED MONTHLY', Artisan::output());
+    }
+
+    /** The post-correction state: every stored figure has a source cell behind it. */
+    public function test_the_audit_passes_when_every_stored_figure_is_sourced(): void
+    {
+        $this->row([
+            'gross_annual' => 33491.36,
+            'base_salary_monthly' => 2232.75,
+            'pagas_count' => null,
+            'raw_values' => ['salario base' => '2.232,75', 'salario anual' => '33.491,36'],
+        ]);
+
+        $exit = Artisan::call('salary:audit-monthly');
+
+        $this->assertSame(0, $exit);
+        $this->assertStringContainsString('No discrepancies', Artisan::output());
+    }
+
+    /**
+     * A sheet that prints "14 pagas" and "12 pagas" side by side states two
+     * monthlies; storing either one is sourced, and the audit must not read the
+     * mismatch with the other as a discrepancy.
+     */
+    public function test_the_audit_accepts_whichever_stated_monthly_was_stored(): void
+    {
+        $this->row([
+            'base_salary_monthly' => 2231.04,
+            'pagas_count' => 14,
+            'raw_values' => ['14 pagas' => '2.231,04', '12 pagas' => '2.602,88'],
+        ]);
+
+        $exit = Artisan::call('salary:audit-monthly');
+
+        $this->assertSame(0, $exit, 'the stored figure matches the 14-pagas column the header names');
+    }
+
+    // ---- helpers ------------------------------------------------------------
+
+    private function row(array $attributes): SalaryTableRow
+    {
+        return SalaryTableRow::create(array_merge([
+            'salary_table_id' => $this->table->id,
+            'job_category_id' => $this->category->id,
+            'raw_values' => [],
+        ], $attributes));
+    }
+
+    private function answer(): string
+    {
+        $employee = Employee::create([
+            'email' => 'emp15@example.com', 'full_name' => 'Empleada Gipuzkoa',
+            'convenio_id' => $this->convenio->id, 'job_category_id' => $this->category->id,
+            'territory_id' => $this->territory->id, 'employment_type' => 'full_time', 'status' => 'active',
+        ]);
+
+        $result = app(SalaryAnswerService::class)->answer($employee, Carbon::create((int) now()->year, 6, 1));
+
+        $this->assertSame(SalaryAnswerService::OUTCOME_ANSWER, $result['outcome']);
+
+        return $result['answer'];
+    }
+
+    /** @param  array<string,mixed>  $response */
+    private function fakeExtraction(array $response): void
+    {
+        $this->app->instance(ExtractionClient::class, new class($response) extends ExtractionClient
+        {
+            public function __construct(private array $response) {}
+
+            public function extractSalary(string $storageKey, string $documentUuid): array
+            {
+                return $this->response;
+            }
+        });
+    }
+}

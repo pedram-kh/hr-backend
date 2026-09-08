@@ -89,6 +89,7 @@ class SalaryPdfToXlsx extends Command
 {
     protected $signature = 'salary:pdf-to-xlsx
         {--document= : the salary_tables PDF document uuid}
+        {--year-columns : the grid\'s columns are YEARS, not salary concepts — write one sheet per year under the canonical "Salario anual" header (human-approved transform, see foldYearColumns())}
         {--apply-header-mapping : mutate ONLY the header row of the already-written derived .xlsx per the proposed mapping (human-approved)}
         {--verify : read-only — call hr-ai\'s extract-salary against the derived xlsx and print tables/warnings, no DB write}
         {--mark-provenance : after a human-approved salary:import run against the derived xlsx, stamp its salary_tables row(s) source=ocr_pdf}';
@@ -108,12 +109,15 @@ class SalaryPdfToXlsx extends Command
         'hourly_rate' => ['€/hora', 'e/hora', 'euro/hora', 'euros/hora', 'hora', 'precio hora', 'precio/hora', 'coste hora', '/hora', 'bruto/hora', 'bruto hora', 'salario hora'],
         'extra_pay' => ['pagas extra', 'paga extra', 'pagas extras', 'paga extras'],
         'night_plus' => ['plus nocturno', 'nocturnidad', 'plus noche', 'nocturno', 'plus nocturnidad', 'plus hora nocturna', 'plus hora noctur', 'hora nocturna'],
+        // Correction-salary-01: a monthly base is now READ from its own column
+        // instead of being computed as `gross_annual / 14`, so a "(mes)"
+        // header maps onto a real typed field and its qualifier is honoured
+        // rather than dropped.
+        'base_salary_monthly' => ['sb', 'salario base', 'salario base mensual', 'sueldo base', 'sueldo mensual', 'salario mensual', 'base mensual', 'salario mes', 'salario/mes', 'base mes'],
         // salary.py's own docs: these ANCHOR the money-column boundary (so
         // the label columns are correctly separated from the numeric grid)
-        // but are NEVER themselves typed onto a salary_table_rows column —
-        // `base_salary_monthly` is COMPUTED elsewhere as `gross_annual / 14`,
-        // never read directly off a "salario base" column.
-        'untyped_anchor' => ['sb', 'sb anual', 'comp', 'comp.', 'comp smi', 'comp. smi', 'comp smi / ano', 'comp smi / mes', '14', '12', 'bruto mes', 'bruto/mes 14 pagas', 'bruto/mes 12 pagas', 'salario base', 'dedica', 'pc', 'paga 16', 'p.p.paga extra', 'plus transporte', 'plus tpte/dia', 'plus tpte/día', '5% mejora sedena', '1,2,3,5 quinquenio', '4 quinquenio', 'quinquenio', 'antiguedad'],
+        // but are NEVER themselves typed onto a salary_table_rows column.
+        'untyped_anchor' => ['sb anual', 'comp', 'comp.', 'comp smi', 'comp. smi', 'comp smi / ano', 'comp smi / mes', '14', '12', 'bruto mes', 'bruto/mes 14 pagas', 'bruto/mes 12 pagas', 'dedica', 'pc', 'paga 16', 'p.p.paga extra', 'plus transporte', 'plus tpte/dia', 'plus tpte/día', '5% mejora sedena', '1,2,3,5 quinquenio', '4 quinquenio', 'quinquenio', 'antiguedad'],
     ];
 
     /** Period words whose loss would change a figure's meaning (the "(mes)/(año)" rule). */
@@ -259,9 +263,19 @@ class SalaryPdfToXlsx extends Command
         $reviewRows = [];
         $mappingProposals = []; // sheet name => [ per-column proposal ]
 
-        foreach ($sheets as $pageNumber => $tableRows) {
-            [$year, $yearFrom] = $years[$pageNumber] ?? [null, null];
-            $sheetName = $this->sheetName($pageNumber, $year);
+        $specs = $this->option('year-columns')
+            ? $this->foldYearColumns($sheets, $notes)
+            : $this->pageSheetSpecs($sheets, $years);
+
+        if ($specs === []) {
+            $this->error('No sheet could be built from the OCR grids. Aborting (no .xlsx produced, no document row created).');
+
+            return self::FAILURE;
+        }
+
+        foreach ($specs as $spec) {
+            ['name' => $sheetName, 'year' => $year, 'year_from' => $yearFrom, 'rows' => $tableRows] = $spec;
+            $pageNumber = $spec['pages'][0] ?? null;
             $sheet = $spreadsheet->createSheet();
             $sheet->setTitle($sheetName);
 
@@ -274,10 +288,10 @@ class SalaryPdfToXlsx extends Command
                 }
             }
 
-            $page = $pages->firstWhere('page_number', $pageNumber);
+            $page = $pageNumber === null ? null : $pages->firstWhere('page_number', $pageNumber);
             $header = $tableRows[0] ?? [];
             $reviewRows[] = [
-                'page' => $pageNumber,
+                'page' => implode(',', $spec['pages']),
                 'sheet' => $sheetName,
                 'year' => $year ?? '⚠ none',
                 'rows' => count($tableRows),
@@ -294,7 +308,7 @@ class SalaryPdfToXlsx extends Command
             // reads that year from the SHEET NAME (salary.py's
             // `_year_from_sheet_name`), not from anything inside the grid.
             $notes[] = [
-                'page' => $pageNumber,
+                'page' => $pageNumber ?? 0,
                 'type' => 'sheet_year_provenance',
                 'lang' => null,
                 'text' => $year === null
@@ -344,6 +358,158 @@ class SalaryPdfToXlsx extends Command
         $this->line("  5. Then stamp provenance:  php artisan salary:pdf-to-xlsx --document={$document->uuid} --mark-provenance");
 
         return self::SUCCESS;
+    }
+
+    /**
+     * The default shape: one sheet per PDF page, verbatim.
+     *
+     * @param  array<int,array<int,array<int,mixed>>>  $sheets  page number => grid
+     * @param  array<int,array{0:?int,1:?string}>  $years  page number => [year, provenance]
+     * @return list<array{name:string,year:?int,year_from:?string,rows:array,pages:list<int>}>
+     */
+    private function pageSheetSpecs(array $sheets, array $years): array
+    {
+        $specs = [];
+        foreach ($sheets as $pageNumber => $tableRows) {
+            [$year, $yearFrom] = $years[$pageNumber] ?? [null, null];
+            $specs[] = [
+                'name' => $this->sheetName($pageNumber, $year),
+                'year' => $year,
+                'year_from' => $yearFrom,
+                'rows' => $tableRows,
+                'pages' => [$pageNumber],
+            ];
+        }
+
+        return $specs;
+    }
+
+    /**
+     * `--year-columns` — the third gazette convention (deploy.md §5 runbook):
+     * a grid whose COLUMNS are years ("CATEGORÍA | 2025 | 2026"), not salary
+     * concepts, which `salary.py`'s per-concept header model cannot read as-is.
+     *
+     * Approved transform (doc 57): one sheet per year, each with the header
+     * `<label header> | Salario anual` — the canonical annual term — and one
+     * row per category. The grid continues across pages under a repeated
+     * header, so pages are MERGED per year rather than written as separate
+     * sheets, which would otherwise collide on (convenio_id, year).
+     *
+     * Two things are altered and both are recorded verbatim on the Notes sheet:
+     * the header cell (a year → "Salario anual") and a literal " euros" suffix
+     * removed from the value so the cell is a number. NOTHING else — no
+     * monthly is synthesized (the source states none), no figure is rescaled.
+     * The untouched original stays in the OCR sidecar and the source PDF.
+     *
+     * @param  array<int,array<int,array<int,mixed>>>  $sheets  page number => grid
+     * @param  array<int,array{page:int,type:string,lang:?string,text:string}>  $notes
+     * @return list<array{name:string,year:?int,year_from:?string,rows:array,pages:list<int>}>
+     */
+    private function foldYearColumns(array $sheets, array &$notes): array
+    {
+        $labelHeader = null;
+        $columns = [];   // year => [column index, list of pages it appeared on]
+        $data = [];      // year => [ [label, value], ... ]
+        $stripped = 0;
+        $skipped = [];
+
+        foreach ($sheets as $pageNumber => $tableRows) {
+            $headerIndex = null;
+            $yearColumns = [];
+            foreach ($tableRows as $i => $row) {
+                $found = [];
+                foreach ($row as $c => $cell) {
+                    if ($c > 0 && preg_match('/^\s*((?:19|20)\d{2})\s*$/', (string) $cell, $m)) {
+                        $found[(int) $m[1]] = $c;
+                    }
+                }
+                if ($found !== []) {
+                    $headerIndex = $i;
+                    $yearColumns = $found;
+                    $labelHeader ??= (string) ($row[0] ?? '');
+                    break;
+                }
+            }
+
+            if ($headerIndex === null) {
+                $skipped[] = "page {$pageNumber}: no year-column header row found";
+
+                continue;
+            }
+
+            foreach ($yearColumns as $year => $columnIndex) {
+                $columns[$year]['pages'][] = $pageNumber;
+                $data[$year] ??= [];
+            }
+
+            foreach (array_slice($tableRows, $headerIndex + 1) as $row) {
+                $label = trim((string) ($row[0] ?? ''));
+                if ($label === '') {
+                    continue;
+                }
+                foreach ($yearColumns as $year => $columnIndex) {
+                    $value = trim((string) ($row[$columnIndex] ?? ''));
+                    if ($value === '') {
+                        continue;
+                    }
+                    $clean = preg_replace('/\s*euros?\s*$/iu', '', $value);
+                    if ($clean !== $value) {
+                        $stripped++;
+                    }
+                    $data[$year][] = [$label, $clean];
+                }
+            }
+        }
+
+        foreach ($skipped as $s) {
+            $this->warn("  {$s}");
+            $notes[] = ['page' => 0, 'type' => 'year_columns_skipped_page', 'lang' => null, 'text' => $s];
+        }
+
+        $labelHeader = $labelHeader === '' || $labelHeader === null ? 'Categoría' : $labelHeader;
+        $specs = [];
+        foreach ($data as $year => $rows) {
+            if ($rows === []) {
+                continue;
+            }
+            $pages = array_values(array_unique($columns[$year]['pages'] ?? []));
+            $specs[] = [
+                'name' => (string) $year,
+                'year' => (int) $year,
+                'year_from' => "the grid's own year-column header (--year-columns)",
+                'rows' => array_merge([[$labelHeader, 'Salario anual']], $rows),
+                'pages' => $pages,
+            ];
+            $notes[] = [
+                'page' => $pages[0] ?? 0,
+                'type' => 'year_columns_transform',
+                'lang' => null,
+                'text' => sprintf(
+                    'Sheet "%d" built by --year-columns from page(s) %s: the source grid\'s year column "%d" became the single '
+                    .'value column under the canonical header "Salario anual" (%d categories). No monthly figure is written — the '
+                    .'source states none. The untouched grid is in the OCR sidecar.',
+                    $year, implode(', ', $pages), $year, count($rows),
+                ),
+            ];
+        }
+
+        if ($stripped > 0) {
+            $notes[] = [
+                'page' => 0,
+                'type' => 'year_columns_value_cleanup',
+                'lang' => null,
+                'text' => sprintf(
+                    'Removed a literal " euros" suffix from %d value cell(s) so the figure is a number to the importer. '
+                    .'Digits, separators and order are untouched; the original text is in the OCR sidecar.',
+                    $stripped,
+                ),
+            ];
+            $this->line("  --year-columns: stripped a trailing ' euros' from {$stripped} value cell(s) (recorded on the Notes sheet).");
+        }
+
+        ksort($specs);
+
+        return $specs;
     }
 
     /**
@@ -472,9 +638,9 @@ class SalaryPdfToXlsx extends Command
      *
      * Safety rule (the "(mes)/(año) meaning" instruction): a proposal that
      * would drop a MONTHLY qualifier while mapping onto `gross_annual`
-     * (which `salary.py` treats as strictly annual — it's the figure
-     * `base_salary_monthly` is computed FROM, via /14) is never proposed —
-     * returned `unsafe`, a human call, not this command's.
+     * (which `salary.py` treats as strictly annual) is never proposed —
+     * returned `unsafe`, a human call, not this command's. The same qualifier
+     * dropped onto `base_salary_monthly` is harmless and marked as consistent.
      */
     private function proposeHeaderMapping(string $raw): array
     {
@@ -549,7 +715,24 @@ class SalaryPdfToXlsx extends Command
             }
         }
 
-        $droppedTexts = array_map(fn ($g) => "{$g['text']} [{$g['kind']}]", $droppedGroups);
+        // A "(mes)" dropped onto `base_salary_monthly` loses no meaning — the
+        // target field IS the monthly one (Correction-salary-01). Say so, so a
+        // reviewer can tell a harmless drop from a lossy one at a glance.
+        $consistent = $field === 'base_salary_monthly' ? self::MONTHLY_WORDS : ($field === 'gross_annual' ? self::ANNUAL_WORDS : []);
+        $droppedTexts = array_map(function ($g) use ($consistent) {
+            $kind = $g['kind'];
+            if ($kind === 'semantic') {
+                $norm = $this->normalizeHeaderText($g['text']);
+                foreach ($consistent as $word) {
+                    if (str_contains($norm, $word)) {
+                        $kind = 'semantic, consistent with target field';
+                        break;
+                    }
+                }
+            }
+
+            return "{$g['text']} [{$kind}]";
+        }, $droppedGroups);
 
         if ($unsafe) {
             return [

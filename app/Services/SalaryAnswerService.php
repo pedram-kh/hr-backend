@@ -12,6 +12,15 @@ use Illuminate\Support\Carbon;
 /**
  * Salary-in-chat (Sprint 2b-2 §3) — SQL-grounded, exact, year-aligned (ADR-0006).
  *
+ * Correction-salary-01: the answer states ONLY figures that are STORED. It never
+ * computes one from another — a monthly figure is quoted only when the source
+ * table had a monthly column (`base_salary_monthly`), and the payment count only
+ * when the source stated it (`pagas_count`). When there is no stored monthly the
+ * answer gives the annual and says how many pagas the table is expressed over if
+ * that is known, and simply omits the monthly. The previous behaviour (hr-ai
+ * deriving `gross_annual / 14`) quoted convenio 15 a monthly of 2.392,24 € where
+ * its own gazette prints 2.232,75 €.
+ *
  * A salary figure comes ONLY from the typed `salary_table_rows` cell, bound to
  * its job category and year BY CONSTRUCTION — never parsed from a prose/embedded-
  * table chunk (the structural antidote to the Q5 misattribution, where a 2025 row
@@ -133,7 +142,7 @@ class SalaryAnswerService
         $salary['row'] = [
             'gross_annual' => $row->gross_annual,
             'base_salary_monthly' => $row->base_salary_monthly,
-            'num_payments' => $row->num_payments,
+            'pagas_count' => $row->pagas_count,
             'hourly_rate' => $row->hourly_rate,
             'extra_pay' => $row->extra_pay,
             'night_plus' => $row->night_plus,
@@ -239,10 +248,17 @@ class SalaryAnswerService
 
         $parts = [];
         if ($row->gross_annual !== null) {
-            $parts[] = 'bruto anual de '.$this->money($row->gross_annual);
+            $annual = 'bruto anual de '.$this->money($row->gross_annual);
+            // With no stored monthly, the pagas count is the most that can be
+            // said honestly — it is a STATED fact about the table, never a
+            // divisor this answer is allowed to apply (Correction-salary-01).
+            if ($row->base_salary_monthly === null && $row->pagas_count !== null) {
+                $annual .= " (tabla expresada en {$row->pagas_count} pagas)";
+            }
+            $parts[] = $annual;
         }
         if ($row->base_salary_monthly !== null) {
-            $payments = $row->num_payments ? " en {$row->num_payments} pagas" : '';
+            $payments = $row->pagas_count ? " en {$row->pagas_count} pagas" : '';
             $parts[] = 'salario base mensual de '.$this->money($row->base_salary_monthly).$payments;
         }
         if ($row->extra_pay !== null) {

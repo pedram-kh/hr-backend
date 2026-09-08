@@ -99,7 +99,10 @@ class Sprint7cAdditivityRegressionTest extends TestCase
         ]);
         SalaryTableRow::create([
             'salary_table_id' => $table->id, 'job_category_id' => $this->category->id,
-            'gross_annual' => 21000, 'base_salary_monthly' => 1500, 'num_payments' => 14,
+            // Both figures are STORED, from a source that states both — which is
+            // why Correction-salary-01 leaves this pinned turn byte-for-byte
+            // unchanged: it only ever removed DERIVED figures.
+            'gross_annual' => 21000, 'base_salary_monthly' => 1500, 'pagas_count' => 14,
         ]);
 
         $this->configureAnswerModel();
@@ -171,6 +174,38 @@ class Sprint7cAdditivityRegressionTest extends TestCase
 
         $this->assertArrayHasKey('salary', $trace);
         $this->assertArrayNotHasKey('reference_fact', $trace, 'salary wins first — the 7c pre-check never runs');
+    }
+
+    /**
+     * Correction-salary-01, the deliberate RE-BASELINE of this pinned answer.
+     *
+     * The turn above is byte-for-byte unchanged by the correction, because its
+     * fixture STORES both figures (a source that prints an annual and a monthly
+     * — Deporte Cantabria, and the two OCR'd Gipuzkoa tables). That is the point
+     * of the correction, not an escape from it: only DERIVED figures went away.
+     *
+     * This second turn pins the shape that did change. Where the source states
+     * an annual and no monthly, the old code answered "salario base mensual de
+     * 1.500,00 € en 14 pagas" (21.000 / 14, a figure no source printed); it now
+     * states the annual and omits the monthly. The convenio that made this
+     * visible is 15, whose live answer moved 2.392,24 € → 2.232,75 € — a
+     * correctness re-baseline, not drift (ADR-0006, ADR-0027).
+     */
+    public function test_a_source_with_no_monthly_column_yields_an_annual_only_answer(): void
+    {
+        SalaryTableRow::where('job_category_id', $this->category->id)
+            ->update(['base_salary_monthly' => null, 'pagas_count' => null]);
+
+        $result = $this->chat()->handleMessage($this->employee, '¿cuánto gana un peón?');
+
+        $this->assertSame('answer', $result['outcome']);
+        $this->assertStringContainsString('bruto anual de 21.000,00 €', $result['answer']);
+        $this->assertStringNotContainsString('1.500,00', $result['answer'], 'the pre-correction derived monthly');
+        $this->assertStringNotContainsString('mensual', $result['answer']);
+
+        $trace = $this->trace($result);
+        $this->assertSame('salary_sql', $trace['floor_decision']['path'], 'still the SQL path — the answer is narrower, not weaker');
+        $this->assertNull($trace['salary']['row']['base_salary_monthly']);
     }
 
     // ---- helpers ------------------------------------------------------------

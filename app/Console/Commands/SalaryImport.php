@@ -21,9 +21,19 @@ use Illuminate\Support\Facades\Log;
  * The admin running this command IS the deliberate action — the AI never mints
  * job categories at tag time. Categories are per-convenio (no global dedup).
  *
- * 14/12 canonical mapping (catch 3): base_salary_monthly = gross_annual/14,
- * num_payments = 14; the /12 figure and every original column are kept verbatim
- * in raw_values. hr-ai computes the typed columns; this command persists them.
+ * Every typed figure comes from a source cell (ADR-0006). Correction-salary-01
+ * removed the old "14/12 canonical mapping" (base_salary_monthly =
+ * gross_annual/14, num_payments = 14), which told a convenio that does not pay
+ * in 14 a monthly figure its own gazette contradicted: `base_salary_monthly` is
+ * now written only when the sheet has a monthly column, and `pagas_count` only
+ * when a header states it. Every original column stays verbatim in raw_values.
+ * hr-ai types the columns; this command persists them.
+ *
+ * FAILS LOUDLY (Correction-salary-01, priority 2): a document whose sheet was
+ * recognized as a salary grid but yielded no rows, or whose header maps to no
+ * typed field at all, is NOT written and the command exits non-zero without
+ * printing a success line. Silently importing zero rows over a real grid is how
+ * a coverage gap disguises itself as a completed import.
  *
  * Numero-less salary .xlsx land under_review at ingest and need an admin convenio
  * assignment first (ADR-0014, catch 4); this command imports only salary
@@ -58,12 +68,15 @@ class SalaryImport extends Command
         $categoriesCreated = 0;
         $tablesWritten = 0;
         $rowsWritten = 0;
+        /** @var list<string> $failures documents refused for a hard, non-silent reason */
+        $failures = [];
 
         foreach ($withConvenio as $doc) {
             try {
                 $result = $client->extractSalary($doc->storage_path, $doc->uuid);
             } catch (\Throwable $e) {
                 $this->error("  [{$doc->id}] {$doc->source_filename}: ".$e->getMessage());
+                $failures[] = "[{$doc->id}] {$doc->source_filename}: extract failed — ".$e->getMessage();
 
                 continue;
             }
@@ -72,8 +85,36 @@ class SalaryImport extends Command
             foreach (($result['warnings'] ?? []) as $w) {
                 $this->line("    · {$w}");
             }
+
+            // A recognized grid that yielded nothing is a FAILURE, not a skip
+            // (priority 2). `no_header` / `empty` stay benign: that is the
+            // junk/notes-sheet case the parser is designed to ignore (the
+            // derived .xlsx's own `Notes` sheet is one).
+            $broken = array_values(array_filter(
+                $result['sheet_diagnostics'] ?? [],
+                fn ($d) => in_array($d['status'] ?? '', ['header_but_no_rows', 'header_maps_to_nothing'], true),
+            ));
+            if ($broken !== []) {
+                foreach ($broken as $d) {
+                    $this->error(sprintf(
+                        "  [%d] %s: sheet '%s' — %s. NOTHING written for this document.",
+                        $doc->id, $doc->source_filename, $d['sheet'] ?? '?', $d['status'],
+                    ));
+                    $failures[] = sprintf(
+                        "[%d] %s: sheet '%s' %s",
+                        $doc->id, $doc->source_filename, $d['sheet'] ?? '?', $d['status'],
+                    );
+                }
+                Log::error('salary:import refused a document with a recognized-but-empty grid', [
+                    'uuid' => $doc->uuid, 'file' => $doc->source_filename, 'sheets' => $broken,
+                ]);
+
+                continue;
+            }
+
             if ($tables === []) {
-                $this->warn("  [{$doc->id}] {$doc->source_filename}: no salary tables parsed");
+                $this->error("  [{$doc->id}] {$doc->source_filename}: no salary tables parsed — nothing written.");
+                $failures[] = "[{$doc->id}] {$doc->source_filename}: no salary tables parsed";
 
                 continue;
             }
@@ -109,7 +150,7 @@ class SalaryImport extends Command
                             'gross_annual' => $row['gross_annual'] ?? null,
                             'base_salary_monthly' => $row['base_salary_monthly'] ?? null,
                             'extra_pay' => $row['extra_pay'] ?? null,
-                            'num_payments' => $row['num_payments'] ?? null,
+                            'pagas_count' => $row['pagas_count'] ?? null,
                             'hourly_rate' => $row['hourly_rate'] ?? null,
                             'night_plus' => $row['night_plus'] ?? null,
                             'raw_values' => $row['raw_values'] ?? [],
@@ -123,8 +164,31 @@ class SalaryImport extends Command
         }
 
         $this->newLine();
+        if ($failures !== []) {
+            // No success line, non-zero exit: an import that refused a document
+            // must never read as a completed one.
+            $this->error('Salary import FAILED for '.count($failures).' document(s) — wrote '
+                ."{$tablesWritten} tables, {$rowsWritten} rows, {$categoriesCreated} new job categories from the rest:");
+            foreach ($failures as $failure) {
+                $this->error("  {$failure}");
+            }
+            $this->newLine();
+            $this->error('Fix the source sheet (or its header mapping) and re-run. Exiting non-zero.');
+            $this->reportPendingAndGaps($pending);
+
+            return self::FAILURE;
+        }
+
         $this->info("Salary import complete: {$tablesWritten} tables, {$rowsWritten} rows, {$categoriesCreated} new job categories.");
 
+        $this->reportPendingAndGaps($pending);
+
+        return self::SUCCESS;
+    }
+
+    /** @param  \Illuminate\Support\Collection<int,Document>  $pending */
+    private function reportPendingAndGaps($pending): void
+    {
         if ($pending->isNotEmpty()) {
             $this->newLine();
             $this->warn('Salary documents PENDING convenio assignment (ADR-0014, catch 4 — assign a convenio, then re-run):');
@@ -135,8 +199,6 @@ class SalaryImport extends Command
         }
 
         $this->reportCoverageGaps();
-
-        return self::SUCCESS;
     }
 
     /**

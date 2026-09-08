@@ -459,6 +459,79 @@ class Sprint7eSalaryPdfToXlsxTest extends TestCase
         $this->assertStringContainsString('already a native .xlsx', Artisan::output());
         $this->assertNull(Document::where('derived_from_document_id', $document->id)->first());
     }
+
+    /**
+     * The third gazette convention (doc 57): the grid's COLUMNS are years, not
+     * salary concepts. `--year-columns` writes one sheet per year under the
+     * canonical "Salario anual" header, MERGING the pages the grid continues
+     * across — two sheets for the same year would collide on
+     * (convenio_id, year) and silently overwrite each other.
+     */
+    public function test_year_columns_writes_one_sheet_per_year_and_merges_the_pages(): void
+    {
+        Storage::fake('s3');
+        $document = $this->makeSalaryPdfDocument();
+        DocumentPage::create([
+            'document_id' => $document->id, 'page_number' => 2, 'text' => '',
+            'image_path' => "documents/{$document->uuid}/pages/0002.jpg", 'extraction_source' => 'ocr',
+        ]);
+        $this->fake->ocrPageResponse = ['text' => '', 'layout' => 'table', 'bilingual' => false, 'quality' => 0.9, 'cost_usd' => 0.04, 'sec_per_page' => 19, 'engine' => 'claude-opus-5'];
+
+        // The grid continues onto page 2 under a REPEATED header row, and the
+        // values carry a literal " euros" suffix.
+        Storage::disk('s3')->put("documents/{$document->uuid}/ocr/0001.json", json_encode([
+            'layout' => 'table', 'columns' => [], 'article_headers' => ['TABLAS SALARIALES'],
+            'table_rows' => [
+                ['CATEGORÍA', '2025', '2026'],
+                ['Titulado Superior', '31.234,54 euros', '32.171,58 euros'],
+                ['Oficial Administrativo', '22.100,00 euros', '22.763,00 euros'],
+            ],
+        ]));
+        Storage::disk('s3')->put("documents/{$document->uuid}/ocr/0002.json", json_encode([
+            'layout' => 'table', 'columns' => [], 'article_headers' => [],
+            'table_rows' => [
+                ['CATEGORÍA', '2025', '2026'],
+                ['Peón', '18.000,00 euros', '18.540,00 euros'],
+            ],
+        ]));
+
+        Artisan::call('salary:pdf-to-xlsx', ['--document' => $document->uuid, '--year-columns' => true]);
+        $output = Artisan::output();
+
+        $derived = Document::where('derived_from_document_id', $document->id)->firstOrFail();
+        $spreadsheet = IOFactory::createReader('Xlsx')->load($this->writeTempXlsx(Storage::disk('s3')->get($derived->storage_path)));
+
+        $this->assertSame(['2025', '2026', 'Notes'], $spreadsheet->getSheetNames(), 'one sheet per year, named so salary.py reads the year off the sheet name');
+
+        $grid = $spreadsheet->getSheetByName('2025')->toArray(null, true, true, false);
+        $this->assertSame(['CATEGORÍA', 'Salario anual'], $grid[0], 'the label header verbatim + the canonical annual term');
+        $this->assertSame(['Titulado Superior', '31.234,54'], $grid[1], "the ' euros' suffix is removed; the digits are untouched");
+        $this->assertSame(['Peón', '18.000,00'], $grid[3], 'page 2 is merged into the same year, not a second sheet');
+        $this->assertCount(4, $grid, 'the repeated header row on page 2 is not imported as a category');
+
+        $this->assertSame(['Oficial Administrativo', '22.763,00'], $spreadsheet->getSheetByName('2026')->toArray(null, true, true, false)[2]);
+
+        // Both alterations are recorded verbatim — nothing is quietly rewritten.
+        $notes = $this->notesRows($document);
+        $transform = collect($notes)->filter(fn ($r) => ($r[1] ?? null) === 'year_columns_transform')->values();
+        $this->assertCount(2, $transform, 'one note per year sheet');
+        $this->assertStringContainsString('page(s) 1, 2', $transform[0][3]);
+        $this->assertStringContainsString('No monthly figure is written', $transform[0][3]);
+        $cleanup = collect($notes)->first(fn ($r) => ($r[1] ?? null) === 'year_columns_value_cleanup');
+        $this->assertNotNull($cleanup);
+        $this->assertStringContainsString('6 value cell(s)', $cleanup[3]);
+
+        // "Salario anual" is already canonical, so there is nothing left to map.
+        $this->assertStringContainsString('already matches', $output);
+    }
+
+    private function writeTempXlsx(string $bytes): string
+    {
+        $path = tempnam(sys_get_temp_dir(), 'derived').'.xlsx';
+        file_put_contents($path, $bytes);
+
+        return $path;
+    }
 }
 
 /**
@@ -499,8 +572,13 @@ class FakeSalaryOcrExtractionClient extends ExtractionClient
         $spreadsheet = $reader->load($this->writeTemp($bytes));
         $tables = [];
         $warnings = [];
+        $diagnostics = [];
         foreach ($spreadsheet->getSheetNames() as $name) {
             if ($name === 'Notes') {
+                // What the real parser does with a notes sheet: no grid header,
+                // benignly skipped — NOT an import failure (Correction-salary-01).
+                $diagnostics[] = ['sheet' => $name, 'status' => 'no_header', 'typed_fields' => [], 'rows' => 0];
+
                 continue;
             }
             $sheet = $spreadsheet->getSheetByName($name);
@@ -515,6 +593,25 @@ class FakeSalaryOcrExtractionClient extends ExtractionClient
                 if (in_array($h, ['precio hora', 'hora', '€/hora'], true)) {
                     $hourlyIdx = $i;
                     break;
+                }
+            }
+            // salary.py's `_MONTHLY` / `_GROSS`, same trimming: the monthly
+            // figure is READ off a monthly column, never derived from the
+            // annual (Correction-salary-01).
+            $monthlyIdx = false;
+            $grossIdx = false;
+            foreach ($header as $i => $h) {
+                if ($monthlyIdx === false && in_array($h, ['salario base', 'sb', 'salario base mensual'], true)) {
+                    $monthlyIdx = $i;
+                }
+                if ($grossIdx === false && in_array($h, ['salario anual', 'bruto anual', 'total anual'], true)) {
+                    $grossIdx = $i;
+                }
+            }
+            $pagas = null;
+            foreach ($header as $h) {
+                if (preg_match('/\b(\d{1,2})\s*pagas\b/', $h, $m)) {
+                    $pagas = (int) $m[1];
                 }
             }
             $out = [];
@@ -540,21 +637,41 @@ class FakeSalaryOcrExtractionClient extends ExtractionClient
                 $out[] = [
                     'job_category_name' => (string) $row[0],
                     'group_code' => null,
-                    'gross_annual' => null,
-                    'base_salary_monthly' => null,
+                    'gross_annual' => $this->cellNumber($row, $grossIdx),
+                    'base_salary_monthly' => $this->cellNumber($row, $monthlyIdx),
                     'extra_pay' => null,
-                    'num_payments' => null,
+                    'pagas_count' => $pagas,
                     'hourly_rate' => $hourly,
                     'night_plus' => null,
                     'raw_values' => $raw,
                 ];
             }
+            $diagnostics[] = [
+                'sheet' => $name,
+                'status' => $out === [] ? 'header_but_no_rows' : 'ok',
+                'typed_fields' => $hourlyIdx === false && $monthlyIdx === false && $grossIdx === false ? [] : ['hourly_rate'],
+                'rows' => count($out),
+            ];
             if ($out !== []) {
-                $tables[] = ['year' => 2025, 'validity_start' => null, 'validity_end' => null, 'rows' => $out];
+                // salary.py's `_year_from_sheet_name()`: the year comes from the
+                // SHEET NAME, which is why the derived sheets carry it.
+                $year = preg_match('/(19|20)\d{2}/', $name, $m) ? (int) $m[0] : 2025;
+                $tables[] = ['year' => $year, 'validity_start' => null, 'validity_end' => null, 'rows' => $out];
             }
         }
 
-        return ['tables' => $tables, 'warnings' => $warnings];
+        return ['tables' => $tables, 'warnings' => $warnings, 'sheet_diagnostics' => $diagnostics];
+    }
+
+    /** A numeric cell as the real parser reads it (Spanish decimal comma), or null. */
+    private function cellNumber(array $row, $index): ?float
+    {
+        if ($index === false || ! isset($row[$index]) || $row[$index] === '') {
+            return null;
+        }
+        $value = str_replace(',', '.', str_replace('.', '', (string) $row[$index]));
+
+        return is_numeric($value) ? round((float) $value, 2) : null;
     }
 
     private function writeTemp(string $bytes): string
