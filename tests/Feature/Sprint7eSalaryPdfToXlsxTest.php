@@ -2,19 +2,21 @@
 
 namespace Tests\Feature;
 
+use App\Console\Commands\SalaryPdfToXlsx;
 use App\Models\AnswerModelSetting;
 use App\Models\Convenio;
 use App\Models\Document;
 use App\Models\DocumentPage;
 use App\Models\DocumentType;
-use App\Models\Sector;
 use App\Models\SalaryTable;
 use App\Models\SalaryTableRow;
+use App\Models\Sector;
 use App\Models\Territory;
 use App\Services\ExtractionClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Storage;
+use PhpOffice\PhpSpreadsheet\IOFactory;
 use Tests\TestCase;
 
 /**
@@ -230,9 +232,9 @@ class Sprint7eSalaryPdfToXlsxTest extends TestCase
         $output = Artisan::output();
 
         $derived = Document::where('derived_from_document_id', $document->id)->first();
-        $spreadsheet = \PhpOffice\PhpSpreadsheet\IOFactory::createReader('Xlsx')
+        $spreadsheet = IOFactory::createReader('Xlsx')
             ->load(storage_path("app/salary-derived/{$document->uuid}/salary.xlsx"));
-        $sheet = $spreadsheet->getSheetByName('Page 1');
+        $sheet = $spreadsheet->getSheetByName('2025 (page 1)');
         $grid = $sheet->toArray(null, true, true, false);
         $this->assertSame(['Categoría', 'Salario (€)'], $grid[0], 'row 0 of the kept sheet must be the es header, eu rows dropped');
         $this->assertCount(2, $grid, 'only the es header + es data row survive');
@@ -279,18 +281,18 @@ class Sprint7eSalaryPdfToXlsxTest extends TestCase
 
         // Proposed, printed, NOT applied yet — the xlsx header cells are still verbatim.
         $this->assertStringContainsString('Salario base', $proposeOutput);
-        $unchanged = \PhpOffice\PhpSpreadsheet\IOFactory::createReader('Xlsx')
+        $unchanged = IOFactory::createReader('Xlsx')
             ->load(storage_path("app/salary-derived/{$document->uuid}/salary.xlsx"))
-            ->getSheetByName('Page 1')->toArray(null, true, true, false)[0];
+            ->getSheetByName('2025 (page 1)')->toArray(null, true, true, false)[0];
         $this->assertSame("Salario base (mes)\n(€)", $unchanged[1], 'default run must never mutate the header — verbatim until an explicit approved apply');
 
         Artisan::call('salary:pdf-to-xlsx', ['--document' => $document->uuid, '--apply-header-mapping' => true]);
         $applyOutput = Artisan::output();
         $this->assertStringContainsString('Applied', $applyOutput);
 
-        $applied = \PhpOffice\PhpSpreadsheet\IOFactory::createReader('Xlsx')
+        $applied = IOFactory::createReader('Xlsx')
             ->load(storage_path("app/salary-derived/{$document->uuid}/salary.xlsx"))
-            ->getSheetByName('Page 1')->toArray(null, true, true, false)[0];
+            ->getSheetByName('2025 (page 1)')->toArray(null, true, true, false)[0];
         $this->assertSame('Categoría', $applied[0], 'label column untouched');
         $this->assertSame('Salario base', $applied[1]);
         $this->assertSame('Pagas extras', $applied[2]);
@@ -303,6 +305,125 @@ class Sprint7eSalaryPdfToXlsxTest extends TestCase
     }
 
     /**
+     * The approval condition (Pedram, round 3): a mapped column must still
+     * carry its ORIGINAL, verbatim source header in `raw_values`, and the
+     * qualifiers the mapping dropped must be recorded on the Notes sheet.
+     *
+     * `salary.py` keys `raw_values` by the normalized header cell it reads, so
+     * after `--apply-header-mapping` the DB would only know `"hora"` — the
+     * source's "(sin antigüedad)" caveat would exist nowhere. `--mark-provenance`
+     * puts the original text back as an additional key, without touching
+     * `salary:import` or the key the importer itself wrote.
+     */
+    public function test_mark_provenance_restores_the_verbatim_source_header_in_raw_values(): void
+    {
+        Storage::fake('s3');
+        $document = $this->makeSalaryPdfDocument();
+        $this->fake->ocrPageResponse = ['text' => '', 'layout' => 'table', 'bilingual' => false, 'quality' => 0.91, 'cost_usd' => 0.04, 'sec_per_page' => 20, 'engine' => 'claude-opus-5'];
+        Artisan::call('salary:pdf-to-xlsx', ['--document' => $document->uuid]);
+
+        $verbatimHourly = "Valor hora (sin antigüedad)\n(€/hora)";
+        Storage::disk('s3')->put("documents/{$document->uuid}/ocr/0001.json", json_encode([
+            'layout' => 'table',
+            'columns' => [],
+            'table_rows' => [
+                ['Categoría', "Salario base (mes)\n(€)", 'Pagas extras (€)', 'Salario anual (€)', $verbatimHourly],
+                ['Grupo I. Jefes de Área', '2.160,38', '2.160,38', '32.405,77', '20,35'],
+            ],
+            'article_headers' => ['TABLAS SALARIALES 2025'],
+        ]));
+
+        Artisan::call('salary:pdf-to-xlsx', ['--document' => $document->uuid]);
+        $buildOutput = Artisan::output();
+
+        // The year comes from the page's own OCR'd title and lands in the SHEET
+        // NAME, because that is the only place salary:import reads it from.
+        $this->assertStringContainsString('2025 (page 1)', $buildOutput);
+        $this->assertStringContainsString('2025', $buildOutput);
+
+        Artisan::call('salary:pdf-to-xlsx', ['--document' => $document->uuid, '--apply-header-mapping' => true]);
+        $this->assertStringContainsString('Applied', Artisan::output());
+
+        $notes = $this->notesRows($document);
+        $yearNote = collect($notes)->first(fn ($r) => ($r[1] ?? null) === 'sheet_year_provenance');
+        $this->assertNotNull($yearNote);
+        $this->assertStringContainsString('TABLAS SALARIALES 2025', $yearNote[3]);
+
+        // The dropped qualifiers are recorded, per column, in full.
+        $appliedNotes = collect($notes)->filter(fn ($r) => ($r[1] ?? null) === 'header_mapping_applied')->values();
+        $this->assertCount(4, $appliedNotes, 'four money columns are mapped; the label column is not');
+        $hourlyNote = $appliedNotes->first(fn ($r) => str_contains($r[3], 'Valor hora'));
+        $this->assertStringContainsString('(sin antigüedad) [semantic]', $hourlyNote[3]);
+        $this->assertStringContainsString('(€/hora) [currency]', $hourlyNote[3]);
+        $this->assertNotNull(collect($notes)->first(fn ($r) => ($r[1] ?? null) === 'header_mapping_manifest'));
+
+        // ---- import (real, unmodified) ------------------------------------
+        $derived = Document::where('derived_from_document_id', $document->id)->first();
+        $this->fake->xlsxBytesToParse = Storage::disk('s3')->get($derived->storage_path);
+        Artisan::call('salary:import', ['--document' => $derived->uuid]);
+
+        $row = SalaryTableRow::whereIn('salary_table_id', SalaryTable::where('source_document_id', $derived->id)->pluck('id'))->firstOrFail();
+        $this->assertEqualsWithDelta(20.35, $row->hourly_rate, 0.001, 'the mapped header is what makes the column typed at all');
+        $this->assertArrayHasKey('hora', $row->raw_values, "the importer's own normalized key");
+        $this->assertArrayNotHasKey($verbatimHourly, $row->raw_values, 'the source wording is NOT in the DB until --mark-provenance restores it');
+
+        // ---- --mark-provenance: the condition ----------------------------
+        Artisan::call('salary:pdf-to-xlsx', ['--document' => $document->uuid, '--mark-provenance' => true]);
+        $this->assertStringContainsString('Restored the verbatim source header', Artisan::output());
+
+        $row->refresh();
+        $this->assertSame('20,35', $row->raw_values[$verbatimHourly], 'the original header text, verbatim, keying the same verbatim value');
+        $this->assertSame('20,35', $row->raw_values['hora'], "the importer's own key is never removed or rewritten");
+        $this->assertSame('2.160,38', $row->raw_values["Salario base (mes)\n(€)"], 'every mapped column, not just the hourly one');
+        $this->assertSame('2.160,38', $row->raw_values['Pagas extras (€)']);
+        $this->assertSame('32.405,77', $row->raw_values['Salario anual (€)']);
+
+        // Idempotent: a second run adds nothing.
+        $before = $row->raw_values;
+        Artisan::call('salary:pdf-to-xlsx', ['--document' => $document->uuid, '--mark-provenance' => true]);
+        $row->refresh();
+        $this->assertSame($before, $row->raw_values);
+    }
+
+    /**
+     * `salary:import` keys `salary_tables` on (convenio_id, year) and reads
+     * that year from the sheet NAME, so two sheets resolving to the same year
+     * means the second silently replaces the first. Warned, never implicit.
+     */
+    public function test_two_sheets_resolving_to_the_same_year_are_warned_about(): void
+    {
+        Storage::fake('s3');
+        $document = $this->makeSalaryPdfDocument();
+        DocumentPage::create([
+            'document_id' => $document->id, 'page_number' => 2, 'text' => '',
+            'image_path' => "documents/{$document->uuid}/pages/0002.jpg", 'extraction_source' => 'ocr',
+        ]);
+        $document->pages()->where('page_number', 1)->update(['extraction_source' => 'ocr']);
+
+        $grid = [
+            'layout' => 'table', 'columns' => [],
+            'table_rows' => [['Categoría', 'Salario anual (€)'], ['Grupo I', '32.405,77']],
+            'article_headers' => ['TABLAS SALARIALES 2025'],
+        ];
+        Storage::disk('s3')->put("documents/{$document->uuid}/ocr/0001.json", json_encode($grid));
+        Storage::disk('s3')->put("documents/{$document->uuid}/ocr/0002.json", json_encode($grid));
+
+        Artisan::call('salary:pdf-to-xlsx', ['--document' => $document->uuid]);
+        $output = Artisan::output();
+        $this->assertStringContainsString('all resolve to year 2025', $output);
+        $this->assertStringContainsString('would keep only the LAST of them', $output);
+    }
+
+    /** @return array<int,array<int,mixed>> the derived .xlsx's Notes sheet, as rows */
+    private function notesRows(Document $document): array
+    {
+        $spreadsheet = IOFactory::createReader('Xlsx')
+            ->load(storage_path("app/salary-derived/{$document->uuid}/salary.xlsx"));
+
+        return $spreadsheet->getSheetByName('Notes')->toArray(null, true, true, false);
+    }
+
+    /**
      * The safety rule the "(mes)/(año)" instruction is really protecting:
      * a MONTHLY figure must never be silently proposed onto the strictly
      * ANNUAL `gross_annual` field just because dropping "(mes)" would
@@ -310,7 +431,7 @@ class Sprint7eSalaryPdfToXlsxTest extends TestCase
      */
     public function test_monthly_qualifier_onto_annual_field_is_flagged_unsafe_not_proposed(): void
     {
-        $cmd = new \App\Console\Commands\SalaryPdfToXlsx;
+        $cmd = new SalaryPdfToXlsx;
         $ref = new \ReflectionMethod($cmd, 'proposeHeaderMapping');
         $ref->setAccessible(true);
 
@@ -374,7 +495,7 @@ class FakeSalaryOcrExtractionClient extends ExtractionClient
             return ['tables' => [], 'warnings' => ['no xlsx bytes provided to the fake']];
         }
 
-        $reader = \PhpOffice\PhpSpreadsheet\IOFactory::createReader('Xlsx');
+        $reader = IOFactory::createReader('Xlsx');
         $spreadsheet = $reader->load($this->writeTemp($bytes));
         $tables = [];
         $warnings = [];
@@ -384,9 +505,18 @@ class FakeSalaryOcrExtractionClient extends ExtractionClient
             }
             $sheet = $spreadsheet->getSheetByName($name);
             $grid = $sheet->toArray(null, true, true, false);
-            $header = array_map(fn ($h) => mb_strtolower(trim((string) $h)), $grid[0] ?? []);
+            $header = array_map(fn ($h) => mb_strtolower(trim(str_replace("\n", ' ', (string) $h))), $grid[0] ?? []);
             $rows = array_slice($grid, 1);
-            $hourlyIdx = array_search('precio hora', $header, true);
+            // salary.py's `_HOURLY` set, trimmed to the members these fixtures
+            // use — the point being that the MAPPED header ("Hora") is what
+            // makes the column typed at all, exactly as in the real parser.
+            $hourlyIdx = false;
+            foreach ($header as $i => $h) {
+                if (in_array($h, ['precio hora', 'hora', '€/hora'], true)) {
+                    $hourlyIdx = $i;
+                    break;
+                }
+            }
             $out = [];
             foreach ($rows as $row) {
                 if (($row[0] ?? '') === '') {

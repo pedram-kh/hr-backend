@@ -5,10 +5,13 @@ namespace App\Console\Commands;
 use App\Models\Document;
 use App\Models\DocumentPage;
 use App\Models\SalaryTable;
+use App\Models\SalaryTableRow;
 use App\Services\ExtractionClient;
 use App\Services\OcrService;
 use Illuminate\Console\Command;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
+use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\Cell\DataType;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
@@ -55,8 +58,16 @@ use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
  * `--apply-header-mapping`: A SEPARATE, human-approved invocation. Mutates
  * ONLY the header row (row 1) of each already-written sheet in the derived
  * `.xlsx` already on S3/local — replacing a cell ONLY where step 3 proposed
- * one — and logs original → proposed to the `Notes` sheet. Data rows are
- * NEVER touched by this or any other flag.
+ * one — and logs original → proposed, the exact qualifiers dropped, and a
+ * machine-readable manifest to the `Notes` sheet. Data rows are NEVER touched
+ * by this or any other flag.
+ *
+ * Sheet names carry the YEAR, not the page ("2025 (page 2)"): `salary.py`'s
+ * `_year_from_sheet_name()` is where `salary:import` gets the year it keys
+ * `salary_tables` on, and a year-less name makes every table of one convenio
+ * collide onto a single row (a 2026 import silently deleting the 2025 rows).
+ * The year is read from the page's own OCR'd title first, never inferred from
+ * the numbers, and where it came from is recorded on the `Notes` sheet.
  *
  * `--verify`: read-only. Calls `ExtractionClient::extractSalary()` (the same
  * hr-ai call `salary:import` itself makes) against the derived `.xlsx` and
@@ -65,7 +76,11 @@ use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
  *
  * `--mark-provenance`: the FOURTH, separate, human-gated step. Run only
  * AFTER a reviewed `salary:import` has already written rows for the derived
- * document — stamps `salary_tables.source = 'ocr_pdf'` on exactly those rows.
+ * document — stamps `salary_tables.source = 'ocr_pdf'` on exactly those rows,
+ * AND restores each mapped column's ORIGINAL, verbatim source header text as
+ * an additional `raw_values` key on every imported row (the importer's own
+ * normalized key is left in place). Without this, a mapped column's source
+ * wording — e.g. the "(sin antigüedad)" caveat — exists nowhere in the DB.
  *
  * This command itself NEVER calls `salary:import` and NEVER writes a
  * `salary_tables`/`salary_table_rows` row.
@@ -193,6 +208,7 @@ class SalaryPdfToXlsx extends Command
 
         // ---- step 2: read back each page's sidecar, drop a bilingual dup -----
         $sheets = [];   // page_number => table_rows (post-dedup)
+        $years = [];    // page_number => [year|null, provenance]
         $notes = [];    // [page, type, lang, text]
         $skippedPages = [];
         foreach ($pages as $page) {
@@ -224,6 +240,7 @@ class SalaryPdfToXlsx extends Command
 
             $tableRows = $this->dropBilingualDuplicateRows($tableRows, $page->page_number, $notes);
             $sheets[$page->page_number] = $tableRows;
+            $years[$page->page_number] = $this->resolveSheetYear($document, $sidecar);
         }
 
         foreach ($skippedPages as $s) {
@@ -240,11 +257,13 @@ class SalaryPdfToXlsx extends Command
         $spreadsheet = new Spreadsheet;
         $spreadsheet->removeSheetByIndex(0);
         $reviewRows = [];
-        $mappingProposals = []; // page_number => [ per-column proposal ]
+        $mappingProposals = []; // sheet name => [ per-column proposal ]
 
         foreach ($sheets as $pageNumber => $tableRows) {
+            [$year, $yearFrom] = $years[$pageNumber] ?? [null, null];
+            $sheetName = $this->sheetName($pageNumber, $year);
             $sheet = $spreadsheet->createSheet();
-            $sheet->setTitle("Page {$pageNumber}");
+            $sheet->setTitle($sheetName);
 
             foreach ($tableRows as $r => $row) {
                 foreach ($row as $c => $cell) {
@@ -259,6 +278,8 @@ class SalaryPdfToXlsx extends Command
             $header = $tableRows[0] ?? [];
             $reviewRows[] = [
                 'page' => $pageNumber,
+                'sheet' => $sheetName,
+                'year' => $year ?? '⚠ none',
                 'rows' => count($tableRows),
                 'cols' => count($header),
                 'quality' => $pageStatus[$pageNumber]['quality'] ?? ($page?->ocr_quality ?? '—'),
@@ -266,8 +287,25 @@ class SalaryPdfToXlsx extends Command
                 'image_url' => $page ? $this->pageImageUrl($page) : null,
             ];
 
-            $mappingProposals[$pageNumber] = array_map(fn ($h) => $this->proposeHeaderMapping((string) $h), $header);
+            // The year is NEVER invented: it comes from the page's own OCR'd
+            // title, else the document's own title/filename/validity — and
+            // where it came from is recorded on the Notes sheet, because
+            // `salary:import` keys `salary_tables` on (convenio_id, year) and
+            // reads that year from the SHEET NAME (salary.py's
+            // `_year_from_sheet_name`), not from anything inside the grid.
+            $notes[] = [
+                'page' => $pageNumber,
+                'type' => 'sheet_year_provenance',
+                'lang' => null,
+                'text' => $year === null
+                    ? "sheet '{$sheetName}': NO year found on the page title, the document title/filename, or validity_start — salary:import will write this table with year = NULL, which collides with every other year-less table of the same convenio. Fix the source metadata before importing."
+                    : "sheet '{$sheetName}': year {$year}, taken verbatim from {$yearFrom}. salary:import reads the year from this sheet name.",
+            ];
+
+            $mappingProposals[$sheetName] = array_map(fn ($h) => $this->proposeHeaderMapping((string) $h), $header);
         }
+
+        $this->warnOnYearCollisions($reviewRows);
 
         if ($notes !== []) {
             $this->writeNotesSheet($spreadsheet, $notes);
@@ -286,8 +324,8 @@ class SalaryPdfToXlsx extends Command
         $this->info("Derived .xlsx written:\n  s3://{$s3Key}\n  local: {$localPath}");
         $this->newLine();
         $this->info('Review table (compare each page against its image before approving):');
-        $this->table(['page', 'rows', 'cols', 'quality', 'header (verbatim, col 1..N)', 'page image (10-min link)'], array_map(fn ($r) => [
-            $r['page'], $r['rows'], $r['cols'], $r['quality'], mb_strimwidth($r['header'], 0, 90, '…'), $r['image_url'] ?? '—',
+        $this->table(['page', 'sheet', 'year', 'rows', 'cols', 'quality', 'header (verbatim, col 1..N)', 'page image (10-min link)'], array_map(fn ($r) => [
+            $r['page'], $r['sheet'], $r['year'], $r['rows'], $r['cols'], $r['quality'], mb_strimwidth($r['header'], 0, 90, '…'), $r['image_url'] ?? '—',
         ], $reviewRows));
 
         if ($skippedPages !== []) {
@@ -349,6 +387,73 @@ class SalaryPdfToXlsx extends Command
         ];
 
         return $kept;
+    }
+
+    /**
+     * The year `salary:import` will file this sheet's table under — read from
+     * the page's OWN OCR'd title first (the source's own declaration for that
+     * grid, e.g. "TABLAS SALARIALES 2025"), then the document's title, its
+     * source filename, and finally `validity_start`. Never inferred from the
+     * grid's numbers, never defaulted to "now": if none of those carry a year,
+     * this returns null and the command says so loudly, because `salary.py`'s
+     * `_year_from_sheet_name()` would then hand `salary:import` a NULL year —
+     * and `SalaryTable::updateOrCreate(['convenio_id','year'])` makes every
+     * year-less table of one convenio the SAME row (the 2026 import would
+     * delete the 2025 rows).
+     *
+     * @return array{0:int|null,1:string|null} [year, where it came from]
+     */
+    private function resolveSheetYear(Document $document, array $sidecar): array
+    {
+        // Same pattern salary.py's own `_year_from_sheet_name()` uses, so what
+        // this reads and what the importer reads can never disagree.
+        $find = fn (?string $haystack) => preg_match('/(19|20)\d{2}/', (string) $haystack, $m) ? (int) $m[0] : null;
+
+        foreach ($sidecar['article_headers'] ?? [] as $header) {
+            if ($year = $find((string) $header)) {
+                return [$year, "the page's own OCR'd title \"{$header}\""];
+            }
+        }
+        if ($year = $find($document->title)) {
+            return [$year, "the document title \"{$document->title}\""];
+        }
+        if ($year = $find($document->source_filename)) {
+            return [$year, "the source filename \"{$document->source_filename}\""];
+        }
+        if ($document->validity_start) {
+            return [(int) $document->validity_start->format('Y'), 'documents.validity_start'];
+        }
+
+        return [null, null];
+    }
+
+    /** "2025 (page 2)" — the year first, because salary.py reads it out of this string. */
+    private function sheetName(int $pageNumber, ?int $year): string
+    {
+        return $year === null ? "Page {$pageNumber}" : "{$year} (page {$pageNumber})";
+    }
+
+    /**
+     * Two sheets of one workbook resolving to the SAME year is not fatal here,
+     * but it IS silent data loss at import time (`updateOrCreate` on
+     * (convenio_id, year) makes them one row, and the second sheet's rows
+     * replace the first's) — so it is warned about, never left implicit.
+     */
+    private function warnOnYearCollisions(array $reviewRows): void
+    {
+        $byYear = [];
+        foreach ($reviewRows as $r) {
+            $byYear[(string) $r['year']][] = $r['sheet'];
+        }
+        foreach ($byYear as $year => $sheetNames) {
+            if (count($sheetNames) > 1) {
+                $this->warn(sprintf(
+                    '  Sheets %s all resolve to year %s — salary:import keys salary_tables on (convenio_id, year), so importing this workbook as-is would keep only the LAST of them. Split or re-label before importing.',
+                    implode(', ', array_map(fn ($s) => "'{$s}'", $sheetNames)),
+                    $year,
+                ));
+            }
+        }
     }
 
     /**
@@ -542,8 +647,8 @@ class SalaryPdfToXlsx extends Command
     {
         $this->newLine();
         $this->info('Header-mapping proposal (salary.py itself is NEVER changed — this only proposes what to write into the header ROW of the .xlsx before import; --apply-header-mapping applies it, on your approval):');
-        foreach ($mappingProposals as $pageNumber => $columns) {
-            $this->line("  Page {$pageNumber}:");
+        foreach ($mappingProposals as $sheetName => $columns) {
+            $this->line("  Sheet '{$sheetName}':");
             $this->table(['OCR\'d header cell (verbatim)', 'proposed', 'target field', 'dropped', 'note'], array_map(fn ($p) => [
                 $p['original'],
                 $p['matches_as_is'] ? '(unchanged)' : ($p['proposed'] ?? '—'),
@@ -626,30 +731,22 @@ class SalaryPdfToXlsx extends Command
             return self::FAILURE;
         }
 
-        $localPath = $this->localPath($document->uuid);
-        if (! is_file($localPath)) {
-            $bytes = Storage::disk('s3')->get($this->s3Key($document->uuid));
-            if ($bytes === null) {
-                $this->error('No derived .xlsx found locally or in S3 — run `salary:pdf-to-xlsx --document='.$document->uuid.'` first.');
+        $spreadsheet = $this->loadDerivedSpreadsheet($document);
+        if ($spreadsheet === null) {
+            $this->error('No derived .xlsx found locally or in S3 — run `salary:pdf-to-xlsx --document='.$document->uuid.'` first.');
 
-                return self::FAILURE;
-            }
-            $dir = dirname($localPath);
-            if (! is_dir($dir)) {
-                mkdir($dir, 0755, true);
-            }
-            file_put_contents($localPath, $bytes);
+            return self::FAILURE;
         }
-
-        $spreadsheet = IOFactory::createReader('Xlsx')->load($localPath);
+        $localPath = $this->localPath($document->uuid);
         $applied = [];
+        $manifest = [];
         foreach ($spreadsheet->getSheetNames() as $name) {
-            if (! str_starts_with($name, 'Page ')) {
+            if ($name === 'Notes') {
                 continue;
             }
             $sheet = $spreadsheet->getSheetByName($name);
             $highestCol = $sheet->getHighestDataColumn(1);
-            $highestColIdx = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::columnIndexFromString($highestCol);
+            $highestColIdx = Coordinate::columnIndexFromString($highestCol);
             for ($c = 1; $c <= $highestColIdx; $c++) {
                 $cell = $sheet->getCell([$c, 1]);
                 $original = (string) $cell->getValue();
@@ -658,8 +755,40 @@ class SalaryPdfToXlsx extends Command
                     continue; // nothing to apply — already fine, unsafe, or no match.
                 }
                 $sheet->setCellValueExplicit([$c, 1], $proposal['proposed'], DataType::TYPE_STRING);
-                $applied[] = ['page' => $name, 'type' => 'header_mapping_applied', 'lang' => null, 'text' => "col {$c}: \"{$original}\" -> \"{$proposal['proposed']}\" (target={$proposal['target_field']})"];
-                $this->line("  {$name} col {$c}: \"{$original}\" -> \"{$proposal['proposed']}\"");
+
+                // The approval condition (Pedram, round 3): the qualifiers this
+                // mapping drops are recorded here in full, and the ORIGINAL
+                // header text is carried in the manifest below so
+                // `--mark-provenance` can put it back into every imported row's
+                // `raw_values` verbatim. Nothing about the source header is
+                // recoverable from the xlsx alone once row 1 is rewritten —
+                // this is what makes it recoverable.
+                $applied[] = [
+                    'page' => $name,
+                    'type' => 'header_mapping_applied',
+                    'lang' => null,
+                    'text' => sprintf(
+                        'col %d: "%s" -> "%s" (target=%s). Dropped qualifiers: %s. The original text above is preserved verbatim as a raw_values key by `--mark-provenance`.',
+                        $c,
+                        str_replace("\n", '\n', $original),
+                        $proposal['proposed'],
+                        $proposal['target_field'],
+                        $proposal['dropped'] === [] ? 'none' : implode(', ', $proposal['dropped']),
+                    ),
+                ];
+                $manifest[] = [
+                    'sheet' => $name,
+                    'col' => $c,
+                    'original' => $original,
+                    'proposed' => $proposal['proposed'],
+                    // The exact key salary.py will use in raw_values for this
+                    // column: it keys raw_values by the NORMALIZED header text
+                    // (`_norm()`), not the raw cell.
+                    'normalized_key' => $this->normalizeHeaderText($proposal['proposed']),
+                    'target_field' => $proposal['target_field'],
+                    'dropped' => $proposal['dropped'],
+                ];
+                $this->line("  {$name} col {$c}: \"".str_replace("\n", '\n', $original)."\" -> \"{$proposal['proposed']}\"");
             }
         }
 
@@ -669,6 +798,12 @@ class SalaryPdfToXlsx extends Command
             return self::SUCCESS;
         }
 
+        $applied[] = [
+            'page' => '',
+            'type' => 'header_mapping_manifest',
+            'lang' => null,
+            'text' => json_encode($manifest, JSON_UNESCAPED_UNICODE),
+        ];
         $this->writeNotesSheet($spreadsheet, $applied, append: true);
         (new Xlsx($spreadsheet))->save($localPath);
         Storage::disk('s3')->put($this->s3Key($document->uuid), file_get_contents($localPath));
@@ -735,7 +870,122 @@ class SalaryPdfToXlsx extends Command
             $tables->count(), $derived->id, $document->id, $document->uuid, $document->source_filename,
         ));
 
+        $backfill = $this->restoreVerbatimHeadersInRawValues($document, $tables);
+        if ($backfill['manifest'] === 0) {
+            $this->line('  No header mapping was applied to this document — every raw_values key is already the source header verbatim, nothing to restore.');
+        } else {
+            $this->info(sprintf(
+                '  Restored the verbatim source header on %d key(s) across %d salary_table_rows row(s), from %d mapped column(s): %s',
+                $backfill['keys'], $backfill['rows'], $backfill['manifest'],
+                implode('; ', array_map(fn ($m) => '"'.str_replace("\n", '\n', $m['original']).'" alongside "'.$m['normalized_key'].'"', $backfill['columns'])),
+            ));
+            $this->line('  (A later `salary:import` re-run rewrites raw_values from the sheet again — re-run --mark-provenance after any re-import to restore these keys.)');
+        }
+
         return self::SUCCESS;
+    }
+
+    /**
+     * The approval condition (Pedram, round 3): a mapped header column must
+     * still carry its ORIGINAL, verbatim source header text in `raw_values`.
+     *
+     * `salary.py` keys `raw_values` by the NORMALIZED header cell it reads
+     * (`_norm(header[c])`), so once `--apply-header-mapping` rewrites row 1 to
+     * "Hora", the imported row only knows `"hora"` — the source's own
+     * "Valor hora (sin antigüedad)\n(€/hora)", and with it the "excludes
+     * seniority" caveat, is gone. This adds the original text back as an
+     * ADDITIONAL key holding the same verbatim value (the importer's own key is
+     * never removed or rewritten), using the manifest `--apply-header-mapping`
+     * wrote to the Notes sheet. `salary:import` and `salary.py` stay untouched;
+     * this runs after them, in the step that already exists for provenance.
+     *
+     * @param  Collection<int,SalaryTable>  $tables
+     * @return array{rows:int,keys:int,manifest:int,columns:array<int,array<string,mixed>>}
+     */
+    private function restoreVerbatimHeadersInRawValues(Document $document, $tables): array
+    {
+        $empty = ['rows' => 0, 'keys' => 0, 'manifest' => 0, 'columns' => []];
+
+        $spreadsheet = $this->loadDerivedSpreadsheet($document);
+        if ($spreadsheet === null) {
+            return $empty;
+        }
+
+        // Dedupe by original text: re-applying the mapping appends a fresh
+        // manifest rather than rewriting the old one, and the same column must
+        // only ever be restored once.
+        $byOriginal = [];
+        foreach ($this->readHeaderMappingManifest($spreadsheet) as $entry) {
+            if (! empty($entry['original']) && ! empty($entry['normalized_key'])) {
+                $byOriginal[$entry['original']] = $entry;
+            }
+        }
+        $manifest = array_values($byOriginal);
+        if ($manifest === []) {
+            return $empty;
+        }
+
+        $rowsTouched = 0;
+        $keysAdded = 0;
+        foreach ($tables as $table) {
+            foreach (SalaryTableRow::where('salary_table_id', $table->id)->get() as $row) {
+                $raw = $row->raw_values ?? [];
+                $changed = false;
+                foreach ($manifest as $entry) {
+                    if (array_key_exists($entry['original'], $raw)) {
+                        continue; // already verbatim (idempotent re-run)
+                    }
+                    if (! array_key_exists($entry['normalized_key'], $raw)) {
+                        continue; // this row had no value in that column
+                    }
+                    $raw[$entry['original']] = $raw[$entry['normalized_key']];
+                    $keysAdded++;
+                    $changed = true;
+                }
+                if ($changed) {
+                    $row->update(['raw_values' => $raw]);
+                    $rowsTouched++;
+                }
+            }
+        }
+
+        return ['rows' => $rowsTouched, 'keys' => $keysAdded, 'manifest' => count($manifest), 'columns' => $manifest];
+    }
+
+    private function loadDerivedSpreadsheet(Document $document): ?Spreadsheet
+    {
+        $localPath = $this->localPath($document->uuid);
+        if (! is_file($localPath)) {
+            $bytes = Storage::disk('s3')->get($this->s3Key($document->uuid));
+            if ($bytes === null) {
+                return null;
+            }
+            file_put_contents($localPath, $bytes);
+        }
+
+        return IOFactory::createReader('Xlsx')->load($localPath);
+    }
+
+    /** @return array<int,array<string,mixed>> the entries `--apply-header-mapping` recorded */
+    private function readHeaderMappingManifest(Spreadsheet $spreadsheet): array
+    {
+        $notes = $spreadsheet->getSheetByName('Notes');
+        if ($notes === null) {
+            return [];
+        }
+
+        $entries = [];
+        foreach ($notes->toArray(null, true, true, false) as $row) {
+            if (($row[1] ?? null) !== 'header_mapping_manifest') {
+                continue;
+            }
+            $decoded = json_decode((string) ($row[3] ?? ''), true);
+            if (is_array($decoded)) {
+                $entries = array_merge($entries, $decoded);
+            }
+        }
+
+        return $entries;
     }
 
     /** The exact key `hr-ai/app/ocr.py`'s `ocr_sidecar_key()` writes to. */
