@@ -38,6 +38,21 @@ return [
         // per-claim grounding check (§5) uses ANSWER_MODEL, not this.
         'router_model' => env('HR_AI_ROUTER_MODEL', 'claude-haiku-4-5'),
         'router_endpoint' => env('HR_AI_ROUTER_ENDPOINT', env('HR_AI_ANSWER_ENDPOINT', 'https://api.anthropic.com')),
+
+        // OCR fallback for scanned/text-less pages (Sprint 7e, ADR-0026, review.md
+        // §1.5/§2.2). Deliberately its OWN config value, NOT aliased to
+        // answer_model — a future chat-quality-driven change to answer_model must
+        // never silently change the OCR engine (review.md §1.5's own reasoning).
+        // Reuses the SAME answer-model key (AnswerModelSetting) — both are Claude
+        // calls against the same configured Anthropic account; there is no
+        // separate OCR key setting. NON-SECRET, same EU-endpoint requirement as
+        // answer_model (deploy.md §1).
+        'ocr_provider' => env('HR_AI_OCR_PROVIDER', 'claude'),
+        'ocr_model' => env('HR_AI_OCR_MODEL', 'claude-opus-5'),
+        'ocr_endpoint' => env('HR_AI_OCR_ENDPOINT', env('HR_AI_ANSWER_ENDPOINT', 'https://api.anthropic.com')),
+        // Per-document page cap (review.md §2.7) — bounds worst-case cost/latency
+        // for one pathological upload. `--ocr-page-cap` overrides this per run.
+        'ocr_page_cap' => (int) env('HR_AI_OCR_PAGE_CAP', 60),
     ],
 
     'resend' => [

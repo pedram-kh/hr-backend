@@ -21,7 +21,10 @@ use Symfony\Component\Finder\Finder;
  */
 class IngestFolder extends Command
 {
-    protected $signature = 'documents:ingest-folder {path? : corpus root (default data/all-files)}';
+    protected $signature = 'documents:ingest-folder
+        {path? : corpus root (default data/all-files)}
+        {--ocr : Sprint 7e (ADR-0026) opt-in OCR fallback for text-less PDF pages (default off)}
+        {--ocr-page-cap= : per-document OCR page cap (default services.hr_ai.ocr_page_cap)}';
 
     protected $description = 'Ingest a province-foldered PDF + salary .xlsx corpus, reusing the Sprint-1 ingestor.';
 
@@ -34,6 +37,16 @@ class IngestFolder extends Command
             return self::FAILURE;
         }
         $root = rtrim($root, '/');
+
+        // Sprint 7e (ADR-0026, review.md §2.7): opt-in, off by default — omitting
+        // --ocr reproduces the exact pre-7e behavior on every PDF page.
+        $ocr = $this->option('ocr');
+        $ocrPageCap = $this->option('ocr-page-cap') !== null
+            ? (int) $this->option('ocr-page-cap')
+            : (int) config('services.hr_ai.ocr_page_cap');
+        if ($ocr) {
+            $this->info("OCR fallback ON — page cap {$ocrPageCap}/document.");
+        }
 
         $finder = (new Finder)->files()->in($root)->ignoreDotFiles(true);
         $vocab = new VocabularyResolver;
@@ -73,6 +86,9 @@ class IngestFolder extends Command
                     $rel,
                     null,
                     $vocab,
+                    false,
+                    $ocr,
+                    $ocrPageCap,
                 );
                 $ingested++;
                 $flag = $result['tagging_status'] === 'under_review' ? ' [UNDER_REVIEW '.$result['review_reason'].']' : '';

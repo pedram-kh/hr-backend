@@ -38,7 +38,11 @@ class DocumentController extends Controller
             ->selectRaw("exists(select 1 from document_review_tasks t where t.document_id = documents.id and t.status = 'open') as has_open_review")
             // Sprint 7a: an unverified-AI proposal exists on this doc (drives the
             // fuchsia --provenance-ai marker — unverified-AI ONLY).
-            ->selectRaw("exists(select 1 from tag_events te where te.entity_type = 'document' and te.entity_id = documents.id and te.source = 'ai_agent') as has_ai_proposal");
+            ->selectRaw("exists(select 1 from tag_events te where te.entity_type = 'document' and te.entity_id = documents.id and te.source = 'ai_agent') as has_ai_proposal")
+            // Sprint 7e (ADR-0026, review.md §2.4): derived, not stored — same
+            // pattern as pages_total/pages_with_text above. Drives the "OCR'd (N
+            // pages)" badge whenever > 0.
+            ->selectRaw("(select count(*) from document_pages dp where dp.document_id = documents.id and dp.extraction_source = 'ocr') as ocr_pages_count");
 
         if ($request->filled('tagging_status')) {
             $query->where('tagging_status', $request->string('tagging_status'));
@@ -131,8 +135,18 @@ class DocumentController extends Controller
                 'text' => $p->text,
                 'has_text' => trim((string) $p->text) !== '',
                 'image_path' => $p->image_path,
+                // Sprint 7e (ADR-0026, review.md §2.4): per-page provenance. The
+                // viewer renders "texto obtenido por OCR" when extraction_source
+                // = 'ocr', and (guidance text only, never a second gate) a
+                // "revisa también la columna en euskera" note when ocr_bilingual.
+                'extraction_source' => $p->extraction_source,
+                'ocr_quality' => $p->ocr_quality,
+                'ocr_bilingual' => (bool) $p->ocr_bilingual,
             ]),
             'empty_text' => $document->pages->isNotEmpty() && $document->pages->every(fn ($p) => trim((string) $p->text) === ''),
+            // Sprint 7e (ADR-0026): document-level derived count, backing the
+            // list badge's detail view (and usable standalone if opened by uuid).
+            'ocr_pages_count' => $document->pages->where('extraction_source', 'ocr')->count(),
             'review_tasks' => $document->reviewTasks->map(fn ($t) => [
                 'type' => $t->type,
                 'reason' => $t->reason,
@@ -601,6 +615,8 @@ class DocumentController extends Controller
             // exists AND the doc has not been verified yet.
             'is_ai_proposed' => (bool) $d->has_ai_proposal && $d->tagging_status === 'under_review',
             'empty_text' => ((int) $d->pages_total) > 0 && ((int) $d->pages_with_text) === 0,
+            // Sprint 7e (ADR-0026): the "⚙ OCR'd (N pages)" badge.
+            'ocr_pages_count' => (int) $d->ocr_pages_count,
         ];
     }
 
