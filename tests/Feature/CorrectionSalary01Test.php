@@ -274,6 +274,29 @@ class CorrectionSalary01Test extends TestCase
     }
 
     /**
+     * A monthly the source prints and no typed column holds is a COVERAGE note,
+     * not a correctness failure — sometimes a gap worth closing, sometimes the
+     * parser rightly refusing an ambiguous figure (a multi-year sheet printing
+     * two "14 pagas" columns settles no year for either). Nothing wrong is
+     * stored, so the command must report it and still exit 0.
+     */
+    public function test_a_stated_monthly_that_is_not_stored_is_reported_but_does_not_fail(): void
+    {
+        $this->row([
+            'gross_annual' => null,
+            'base_salary_monthly' => null,
+            'raw_values' => ['14 pagas' => '2.166,06', '14 pagas (2)' => '2.231,04'],
+        ]);
+
+        $exit = Artisan::call('salary:audit-monthly');
+        $output = Artisan::output();
+
+        $this->assertSame(0, $exit);
+        $this->assertStringContainsString('no typed column holds', $output);
+        $this->assertStringContainsString('Not a failure', $output);
+    }
+
+    /**
      * A sheet that prints "14 pagas" and "12 pagas" side by side states two
      * monthlies; storing either one is sourced, and the audit must not read the
      * mismatch with the other as a discrepancy.

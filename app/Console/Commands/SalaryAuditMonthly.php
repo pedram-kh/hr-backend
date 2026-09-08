@@ -15,15 +15,23 @@ use Illuminate\Support\Str;
  * `raw_values` preserves verbatim, keyed by the normalized header cell) and
  * lists every disagreement with convenio / category / year.
  *
- * Two failure classes, both reported and both exiting non-zero:
+ * Three failure classes, each exiting non-zero — all of them are a STORED
+ * figure that the source does not support:
  *  - `discrepancy` — a stored monthly that contradicts the source's own stated
  *    monthly. Under the old "canonical /14" rule this was every row of every
  *    convenio that does not pay in 14 (convenio 15: gazette 2.232,75 €, stored
  *    2.392,24 €).
- *  - `unsourced` — a stored monthly (or pagas count) with NO stated counterpart
- *    anywhere in `raw_values`: i.e. a derived figure, which ADR-0006 forbids.
- *    After the re-import there must be none, which is what makes this command
- *    a regression guard and not just a one-off script.
+ *  - `unsourced_monthly` / `unsourced_pagas_count` — a stored figure with NO
+ *    stated counterpart anywhere in `raw_values`: i.e. a derived one, which
+ *    ADR-0006 forbids. After the re-import there must be none, which is what
+ *    makes this command a regression guard and not just a one-off script.
+ *
+ * And one COVERAGE class, reported but NOT a failure:
+ *  - `stated_but_not_stored` — the source prints a monthly that no typed column
+ *    holds. Sometimes that is a gap worth closing; sometimes it is the parser
+ *    correctly refusing an ambiguous figure (a multi-year sheet that prints two
+ *    "14 pagas" columns settles no year for either). Either way nothing wrong is
+ *    STORED, so it is a thing to look at, not a thing to fail on.
  *
  * Writes nothing, ever. `--json` for machine use.
  */
@@ -47,6 +55,9 @@ class SalaryAuditMonthly extends Command
 
     /** Tolerance in euros — rounding between a sheet's float and a decimal(10,2) column. */
     private const TOLERANCE = 0.02;
+
+    /** A finding about a STORED figure the source does not support → non-zero exit. */
+    private const FAILING = ['discrepancy', 'unsourced_monthly', 'unsourced_pagas_count'];
 
     public function handle(): int
     {
@@ -118,27 +129,48 @@ class SalaryAuditMonthly extends Command
             }
         }
 
+        $failing = array_values(array_filter($findings, fn ($f) => in_array($f['finding'], self::FAILING, true)));
+        $coverage = array_values(array_filter($findings, fn ($f) => ! in_array($f['finding'], self::FAILING, true)));
+
         if ($this->option('json')) {
             $this->line(json_encode([
                 'rows_audited' => $rowsAudited,
                 'rows_with_a_stated_monthly' => $withStated,
+                'failing' => count($failing),
                 'findings' => $findings,
             ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
 
-            return $findings === [] ? self::SUCCESS : self::FAILURE;
+            return $failing === [] ? self::SUCCESS : self::FAILURE;
         }
 
         $this->info("Audited {$rowsAudited} salary_table_rows across {$tables->count()} tables; {$withStated} carry a monthly figure the source itself states.");
         $this->newLine();
 
-        if ($findings === []) {
+        // Coverage first and compactly: it is context for the failures, not a
+        // list anyone needs row by row.
+        if ($coverage !== []) {
+            $byTable = [];
+            foreach ($coverage as $f) {
+                $key = "{$f['convenio_id']} ".mb_strimwidth($f['convenio'], 0, 30, '…')." · {$f['year']}";
+                $byTable[$key] ??= ['rows' => 0, 'key' => $f['stated_key']];
+                $byTable[$key]['rows']++;
+            }
+            $this->warn('The source states a monthly that no typed column holds — '.count($coverage).' row(s). Not a failure: nothing wrong is stored.');
+            $this->table(['convenio · year', 'rows', 'stated by header'], array_map(
+                fn ($k, $v) => [$k, $v['rows'], $v['key']],
+                array_keys($byTable), array_values($byTable),
+            ));
+            $this->newLine();
+        }
+
+        if ($failing === []) {
             $this->info('No discrepancies: every stored monthly matches a source cell, and no stored figure is unsourced.');
 
             return self::SUCCESS;
         }
 
         $byFinding = [];
-        foreach ($findings as $f) {
+        foreach ($failing as $f) {
             $byFinding[$f['finding']][] = $f;
         }
 
@@ -162,7 +194,7 @@ class SalaryAuditMonthly extends Command
             $this->newLine();
         }
 
-        $this->error(count($findings).' finding(s) — see above. Re-run `salary:import` for the affected documents (and `salary:pdf-to-xlsx --mark-provenance` for the OCR-derived ones) after fixing.');
+        $this->error(count($failing).' stored figure(s) the source does not support — see above. Re-run `salary:import` for the affected documents (and `salary:pdf-to-xlsx --mark-provenance` for the OCR-derived ones) after fixing.');
 
         return self::FAILURE;
     }
