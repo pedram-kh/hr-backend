@@ -200,6 +200,129 @@ class Sprint7eSalaryPdfToXlsxTest extends TestCase
         $this->assertStringContainsString('run `salary:pdf-to-xlsx', Artisan::output());
     }
 
+    /**
+     * The Round-2 finding + Pedram's approved decision (review.md §5
+     * addendum): a page whose grid is the SAME table printed twice —
+     * once `eu`, once `es` — must keep ONLY the `es` rows (from the row
+     * whose first cell is "Categoría" onward); the `eu` rows are dropped
+     * from the grid but logged verbatim to the Notes sheet, never lost.
+     */
+    public function test_bilingual_duplicate_rows_are_dropped_and_logged_to_notes(): void
+    {
+        Storage::fake('s3');
+        $document = $this->makeSalaryPdfDocument();
+        $this->fake->ocrPageResponse = ['text' => '', 'layout' => 'table', 'bilingual' => true, 'quality' => 0.9, 'cost_usd' => 0.04, 'sec_per_page' => 20, 'engine' => 'claude-opus-5'];
+        Artisan::call('salary:pdf-to-xlsx', ['--document' => $document->uuid]);
+
+        Storage::disk('s3')->put("documents/{$document->uuid}/ocr/0001.json", json_encode([
+            'layout' => 'table',
+            'columns' => [],
+            'table_rows' => [
+                ['Kategoria', 'Soldata (€)'],
+                ['1. Taldea', '1.968,28'],
+                ['Categoría', 'Salario (€)'],
+                ['Grupo 1', '1.968,28'],
+            ],
+            'article_headers' => [],
+        ]));
+
+        Artisan::call('salary:pdf-to-xlsx', ['--document' => $document->uuid]);
+        $output = Artisan::output();
+
+        $derived = Document::where('derived_from_document_id', $document->id)->first();
+        $spreadsheet = \PhpOffice\PhpSpreadsheet\IOFactory::createReader('Xlsx')
+            ->load(storage_path("app/salary-derived/{$document->uuid}/salary.xlsx"));
+        $sheet = $spreadsheet->getSheetByName('Page 1');
+        $grid = $sheet->toArray(null, true, true, false);
+        $this->assertSame(['Categoría', 'Salario (€)'], $grid[0], 'row 0 of the kept sheet must be the es header, eu rows dropped');
+        $this->assertCount(2, $grid, 'only the es header + es data row survive');
+
+        $notesSheet = $spreadsheet->getSheetByName('Notes');
+        $notesGrid = $notesSheet->toArray(null, true, true, false);
+        $noteTypes = array_column(array_slice($notesGrid, 1), 1);
+        $this->assertContains('dropped_bilingual_duplicate', $noteTypes);
+        $droppedNote = collect($notesGrid)->first(fn ($r) => ($r[1] ?? null) === 'dropped_bilingual_duplicate');
+        $this->assertStringContainsString('Kategoria', $droppedNote[3]);
+        $this->assertStringContainsString('1. Taldea', $droppedNote[3]);
+
+        $this->assertNotNull($derived);
+        $this->assertStringContainsString('Header-mapping proposal', $output);
+    }
+
+    /**
+     * The Round-2 finding + Pedram's approved decision: never patch
+     * `salary.py`'s header matching. Instead PROPOSE a mapping (printed,
+     * for a human to approve) and, on a SEPARATE `--apply-header-mapping`
+     * invocation, mutate ONLY the header row of the already-written xlsx.
+     * A "(mes)" figure mapped onto the strictly-ANNUAL `gross_annual` field
+     * must be refused (`unsafe`), never silently applied.
+     */
+    public function test_header_mapping_is_proposed_then_applied_on_a_separate_approved_step(): void
+    {
+        Storage::fake('s3');
+        $document = $this->makeSalaryPdfDocument();
+        $this->fake->ocrPageResponse = ['text' => '', 'layout' => 'table', 'bilingual' => false, 'quality' => 0.9, 'cost_usd' => 0.04, 'sec_per_page' => 20, 'engine' => 'claude-opus-5'];
+        Artisan::call('salary:pdf-to-xlsx', ['--document' => $document->uuid]);
+
+        Storage::disk('s3')->put("documents/{$document->uuid}/ocr/0001.json", json_encode([
+            'layout' => 'table',
+            'columns' => [],
+            'table_rows' => [
+                ['Categoría', "Salario base (mes)\n(€)", 'Pagas extras (€)', 'Salario anual (€)', "Valor hora (sin antigüedad)\n(€/hora)"],
+                ['Grupo 1', '1.500,00', '2', '25.000,00', '15,50'],
+            ],
+            'article_headers' => [],
+        ]));
+
+        Artisan::call('salary:pdf-to-xlsx', ['--document' => $document->uuid]);
+        $proposeOutput = Artisan::output();
+
+        // Proposed, printed, NOT applied yet — the xlsx header cells are still verbatim.
+        $this->assertStringContainsString('Salario base', $proposeOutput);
+        $unchanged = \PhpOffice\PhpSpreadsheet\IOFactory::createReader('Xlsx')
+            ->load(storage_path("app/salary-derived/{$document->uuid}/salary.xlsx"))
+            ->getSheetByName('Page 1')->toArray(null, true, true, false)[0];
+        $this->assertSame("Salario base (mes)\n(€)", $unchanged[1], 'default run must never mutate the header — verbatim until an explicit approved apply');
+
+        Artisan::call('salary:pdf-to-xlsx', ['--document' => $document->uuid, '--apply-header-mapping' => true]);
+        $applyOutput = Artisan::output();
+        $this->assertStringContainsString('Applied', $applyOutput);
+
+        $applied = \PhpOffice\PhpSpreadsheet\IOFactory::createReader('Xlsx')
+            ->load(storage_path("app/salary-derived/{$document->uuid}/salary.xlsx"))
+            ->getSheetByName('Page 1')->toArray(null, true, true, false)[0];
+        $this->assertSame('Categoría', $applied[0], 'label column untouched');
+        $this->assertSame('Salario base', $applied[1]);
+        $this->assertSame('Pagas extras', $applied[2]);
+        $this->assertSame('Salario anual', $applied[3], '"anual" preserved — this is the gross_annual-typed column');
+        $this->assertSame('Hora', $applied[4]);
+
+        // Re-applying is idempotent — nothing left to change.
+        Artisan::call('salary:pdf-to-xlsx', ['--document' => $document->uuid, '--apply-header-mapping' => true]);
+        $this->assertStringContainsString('No header cell needed a change', Artisan::output());
+    }
+
+    /**
+     * The safety rule the "(mes)/(año)" instruction is really protecting:
+     * a MONTHLY figure must never be silently proposed onto the strictly
+     * ANNUAL `gross_annual` field just because dropping "(mes)" would
+     * otherwise produce an exact canonical match.
+     */
+    public function test_monthly_qualifier_onto_annual_field_is_flagged_unsafe_not_proposed(): void
+    {
+        $cmd = new \App\Console\Commands\SalaryPdfToXlsx;
+        $ref = new \ReflectionMethod($cmd, 'proposeHeaderMapping');
+        $ref->setAccessible(true);
+
+        // "Total (mes) (€)" would, after stripping BOTH parens, read "Total"
+        // — an exact match for gross_annual's "total" synonym. Because the
+        // dropped qualifier is "(mes)", that must be refused, not proposed.
+        $proposal = $ref->invoke($cmd, 'Total (mes) (€)');
+        $this->assertTrue($proposal['unsafe']);
+        $this->assertNull($proposal['proposed']);
+        $this->assertSame('gross_annual', $proposal['target_field']);
+    }
+
     public function test_native_xlsx_document_is_rejected(): void
     {
         Storage::fake('s3');

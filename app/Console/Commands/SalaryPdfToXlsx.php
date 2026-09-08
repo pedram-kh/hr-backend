@@ -5,10 +5,12 @@ namespace App\Console\Commands;
 use App\Models\Document;
 use App\Models\DocumentPage;
 use App\Models\SalaryTable;
+use App\Services\ExtractionClient;
 use App\Services\OcrService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Storage;
 use PhpOffice\PhpSpreadsheet\Cell\DataType;
+use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
@@ -26,41 +28,83 @@ use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
  *  1. OCRs every page of the PDF that isn't already OCR'd (reusing
  *     `OcrService::ocrOnePage()` — same call, same pinned table contract,
  *     same S3 sidecar `documents/{uuid}/ocr/{page:04d}.json` as the prose
- *     fallback; ADR-0026 §2.2/§2.3). Table pages under the pinned contract
- *     (review.md §1.6) put the title ONLY in `article_headers`, a footnote/
- *     plus-line block ONLY in one `columns` `es` entry, and ONLY the grid in
- *     `table_rows` — so reading `table_rows` back out never picks up a title
- *     or a footnote as a spurious row/column.
- *  2. Writes each page's `table_rows` VERBATIM (no normalization, no type
- *     coercion — every cell is an explicit STRING, so "1.968,28" round-trips
- *     exactly as OCR read it) to one sheet per page of a NEW `.xlsx`, at
- *     `documents/{uuid}/derived/salary.xlsx` (S3) + a local path. Titles and
- *     footnote/plus-line text go to a `Notes` sheet, never into the grid.
+ *     fallback; ADR-0026 §2.2/§2.3).
+ *  2. Reads each page's `table_rows` back out. When a page's grid is a
+ *     genuine BILINGUAL DUPLICATE of the same table (found live on docs
+ *     12/27/57 — the source gazette prints the identical categories twice,
+ *     once `eu` once `es`, stacked in one grid), drops the rows preceding
+ *     the `es` table's own header row (Pedram's approved decision, review.md
+ *     §5 addendum) — logged verbatim to the `Notes` sheet, never silently
+ *     discarded. Every surviving cell is written EXPLICIT STRING, verbatim
+ *     — no normalization, no type coercion — to one sheet per page of a
+ *     derived `.xlsx` at `documents/{uuid}/derived/salary.xlsx` (S3 + local).
  *  3. Prints a per-page review table (row/col counts, header preview, a
- *     10-minute pre-signed link to that page's source image) for a HUMAN to
- *     check the `.xlsx` against the original PDF before anything is
- *     imported.
+ *     10-minute pre-signed link to that page's source image) AND a header-
+ *     mapping PROPOSAL (this header cell vs. `salary.py`'s existing exact-
+ *     match canonical vocabulary, §`CANONICAL_VOCAB` below — a READ-ONLY
+ *     mirror kept only to PROPOSE a mapping to a human; `salary.py` itself
+ *     is never touched, never made fuzzier). Proposes nothing where doing so
+ *     would misrepresent a MONTHLY figure as the ANNUAL field `salary.py`
+ *     computes `base_salary_monthly` FROM (the `gross_annual`/14 rule) —
+ *     flagged `unsafe`, not proposed, a human call.
  *  4. Creates (or reuses) ONE `documents` row for the derived `.xlsx`
- *     artifact — same convenio/document_type/validity as the original PDF,
- *     linked back via `derived_from_document_id` — so the EXISTING,
- *     UNMODIFIED `salary:import --document=<derived-uuid>` picks it up via
- *     its own `storage_path like '%.xlsx'` query, no code change required.
+ *     artifact — linked back via `derived_from_document_id` — so the
+ *     EXISTING, UNMODIFIED `salary:import --document=<derived-uuid>` finds
+ *     it via its own `storage_path like '%.xlsx'` query, no code change.
  *
- * Step 2 of the workflow (human review) and step 3 (running `salary:import`
- * on approval) happen OUTSIDE this command, exactly as designed — this
- * command never calls `salary:import` itself and never writes a
- * `salary_tables`/`salary_table_rows` row. `--mark-provenance` is the FOURTH,
- * separate, human-gated step: run only AFTER a reviewed `salary:import` has
- * already written rows for the derived document — it stamps
- * `salary_tables.source = 'ocr_pdf'` on exactly those rows.
+ * `--apply-header-mapping`: A SEPARATE, human-approved invocation. Mutates
+ * ONLY the header row (row 1) of each already-written sheet in the derived
+ * `.xlsx` already on S3/local — replacing a cell ONLY where step 3 proposed
+ * one — and logs original → proposed to the `Notes` sheet. Data rows are
+ * NEVER touched by this or any other flag.
+ *
+ * `--verify`: read-only. Calls `ExtractionClient::extractSalary()` (the same
+ * hr-ai call `salary:import` itself makes) against the derived `.xlsx` and
+ * prints its `tables`/`warnings` — proving whether the grid is now detected,
+ * WITHOUT writing a single DB row.
+ *
+ * `--mark-provenance`: the FOURTH, separate, human-gated step. Run only
+ * AFTER a reviewed `salary:import` has already written rows for the derived
+ * document — stamps `salary_tables.source = 'ocr_pdf'` on exactly those rows.
+ *
+ * This command itself NEVER calls `salary:import` and NEVER writes a
+ * `salary_tables`/`salary_table_rows` row.
  */
 class SalaryPdfToXlsx extends Command
 {
     protected $signature = 'salary:pdf-to-xlsx
         {--document= : the salary_tables PDF document uuid}
+        {--apply-header-mapping : mutate ONLY the header row of the already-written derived .xlsx per the proposed mapping (human-approved)}
+        {--verify : read-only — call hr-ai\'s extract-salary against the derived xlsx and print tables/warnings, no DB write}
         {--mark-provenance : after a human-approved salary:import run against the derived xlsx, stamp its salary_tables row(s) source=ocr_pdf}';
 
     protected $description = 'OCR a salary_tables PDF\'s table pages and write a derived .xlsx for the existing salary:import path (Sprint 7e follow-up, Option A). Never imports, never writes salary_tables rows itself.';
+
+    /**
+     * READ-ONLY mirror of hr-ai's `app/salary.py` `_GROSS`/`_HOURLY`/
+     * `_EXTRA`/`_NIGHT`/`_RAW_MONEY` (its exact-match header-synonym sets) —
+     * kept ONLY so this command can PROPOSE a header-cell mapping to a
+     * human. Never fed back into `salary.py`; if that file's sets ever
+     * change, this mirror can drift stale (a proposal, not a guarantee) —
+     * `--verify` (calling the REAL parser) is the source of truth, not this.
+     */
+    private const CANONICAL_VOCAB = [
+        'gross_annual' => ['total', 'total anual', 'bruto anual', 'bruto ano', 'importe anual', 'salario anual'],
+        'hourly_rate' => ['€/hora', 'e/hora', 'euro/hora', 'euros/hora', 'hora', 'precio hora', 'precio/hora', 'coste hora', '/hora', 'bruto/hora', 'bruto hora', 'salario hora'],
+        'extra_pay' => ['pagas extra', 'paga extra', 'pagas extras', 'paga extras'],
+        'night_plus' => ['plus nocturno', 'nocturnidad', 'plus noche', 'nocturno', 'plus nocturnidad', 'plus hora nocturna', 'plus hora noctur', 'hora nocturna'],
+        // salary.py's own docs: these ANCHOR the money-column boundary (so
+        // the label columns are correctly separated from the numeric grid)
+        // but are NEVER themselves typed onto a salary_table_rows column —
+        // `base_salary_monthly` is COMPUTED elsewhere as `gross_annual / 14`,
+        // never read directly off a "salario base" column.
+        'untyped_anchor' => ['sb', 'sb anual', 'comp', 'comp.', 'comp smi', 'comp. smi', 'comp smi / ano', 'comp smi / mes', '14', '12', 'bruto mes', 'bruto/mes 14 pagas', 'bruto/mes 12 pagas', 'salario base', 'dedica', 'pc', 'paga 16', 'p.p.paga extra', 'plus transporte', 'plus tpte/dia', 'plus tpte/día', '5% mejora sedena', '1,2,3,5 quinquenio', '4 quinquenio', 'quinquenio', 'antiguedad'],
+    ];
+
+    /** Period words whose loss would change a figure's meaning (the "(mes)/(año)" rule). */
+    private const MONTHLY_WORDS = ['mes', 'mensual', 'hil', 'hilabete'];
+
+    private const ANNUAL_WORDS = ['ano', 'anual', 'urteko', 'urtean'];
 
     public function handle(OcrService $ocr): int
     {
@@ -86,6 +130,12 @@ class SalaryPdfToXlsx extends Command
 
         if ($this->option('mark-provenance')) {
             return $this->markProvenance($document);
+        }
+        if ($this->option('verify')) {
+            return $this->verify($document);
+        }
+        if ($this->option('apply-header-mapping')) {
+            return $this->applyHeaderMapping($document);
         }
 
         $ext = strtolower(pathinfo((string) $document->storage_path, PATHINFO_EXTENSION));
@@ -141,9 +191,9 @@ class SalaryPdfToXlsx extends Command
             }
         }
 
-        // ---- step 2 (of this command): read back each page's sidecar ---------
-        $sheets = [];   // page_number => table_rows
-        $notes = [];    // [page, type(title|footnote), lang, text]
+        // ---- step 2: read back each page's sidecar, drop a bilingual dup -----
+        $sheets = [];   // page_number => table_rows (post-dedup)
+        $notes = [];    // [page, type, lang, text]
         $skippedPages = [];
         foreach ($pages as $page) {
             $key = $this->sidecarKey($document->uuid, $page->page_number);
@@ -171,6 +221,8 @@ class SalaryPdfToXlsx extends Command
 
                 continue;
             }
+
+            $tableRows = $this->dropBilingualDuplicateRows($tableRows, $page->page_number, $notes);
             $sheets[$page->page_number] = $tableRows;
         }
 
@@ -184,10 +236,11 @@ class SalaryPdfToXlsx extends Command
             return self::FAILURE;
         }
 
-        // ---- step 3 (of this command): build the .xlsx ------------------------
+        // ---- step 3: build the .xlsx + the header-mapping proposal ------------
         $spreadsheet = new Spreadsheet;
         $spreadsheet->removeSheetByIndex(0);
         $reviewRows = [];
+        $mappingProposals = []; // page_number => [ per-column proposal ]
 
         foreach ($sheets as $pageNumber => $tableRows) {
             $sheet = $spreadsheet->createSheet();
@@ -212,35 +265,320 @@ class SalaryPdfToXlsx extends Command
                 'header' => implode(' | ', array_map(fn ($h) => (string) $h, $header)),
                 'image_url' => $page ? $this->pageImageUrl($page) : null,
             ];
+
+            $mappingProposals[$pageNumber] = array_map(fn ($h) => $this->proposeHeaderMapping((string) $h), $header);
         }
 
         if ($notes !== []) {
+            $this->writeNotesSheet($spreadsheet, $notes);
+        }
+
+        $localPath = $this->localPath($document->uuid);
+        (new Xlsx($spreadsheet))->save($localPath);
+
+        $s3Key = $this->s3Key($document->uuid);
+        Storage::disk('s3')->put($s3Key, file_get_contents($localPath));
+
+        // ---- step 4: the derived `documents` row (idempotent) -----------------
+        $derived = $this->findOrCreateDerivedDocument($document, $s3Key);
+
+        $this->newLine();
+        $this->info("Derived .xlsx written:\n  s3://{$s3Key}\n  local: {$localPath}");
+        $this->newLine();
+        $this->info('Review table (compare each page against its image before approving):');
+        $this->table(['page', 'rows', 'cols', 'quality', 'header (verbatim, col 1..N)', 'page image (10-min link)'], array_map(fn ($r) => [
+            $r['page'], $r['rows'], $r['cols'], $r['quality'], mb_strimwidth($r['header'], 0, 90, '…'), $r['image_url'] ?? '—',
+        ], $reviewRows));
+
+        if ($skippedPages !== []) {
+            $this->newLine();
+            $this->warn('Page(s) NOT written to the .xlsx (see warnings above): '.implode('; ', $skippedPages));
+        }
+
+        $this->printMappingProposals($mappingProposals);
+
+        $this->newLine();
+        $this->line('Next steps (human-gated, not run by this command):');
+        $this->line('  1. Review the .xlsx above against the original PDF (open the page image links) and the header-mapping proposal above.');
+        $this->line("  2. On approval of the mapping:  php artisan salary:pdf-to-xlsx --document={$document->uuid} --apply-header-mapping");
+        $this->line("  3. Confirm it's now detected (read-only):  php artisan salary:pdf-to-xlsx --document={$document->uuid} --verify");
+        $this->line("  4. Then import:  php artisan salary:import --document={$derived->uuid}");
+        $this->line("  5. Then stamp provenance:  php artisan salary:pdf-to-xlsx --document={$document->uuid} --mark-provenance");
+
+        return self::SUCCESS;
+    }
+
+    /**
+     * Pedram's approved decision (review.md §5 addendum): when a page's grid
+     * is the SAME table printed twice — once in another language, once in
+     * `es` — keep only the `es` table (the rows from its own header row,
+     * whose first cell normalizes to exactly "categoria", onward). Rows
+     * before that point are DROPPED from the grid but never silently lost —
+     * logged verbatim to the `Notes` sheet. A no-op whenever no second
+     * "categoria" row exists (the normal, non-duplicated case, e.g. a sheet
+     * that was already `es`-only from row 0).
+     */
+    private function dropBilingualDuplicateRows(array $tableRows, int $pageNumber, array &$notes): array
+    {
+        $splitAt = null;
+        foreach ($tableRows as $i => $row) {
+            if ($i === 0) {
+                continue; // row 0 is itself a header candidate — only a SECOND occurrence marks a duplicate.
+            }
+            if ($this->normalizeHeaderText((string) ($row[0] ?? '')) === 'categoria') {
+                $splitAt = $i;
+                break;
+            }
+        }
+
+        if ($splitAt === null) {
+            return $tableRows;
+        }
+
+        $dropped = array_slice($tableRows, 0, $splitAt);
+        $kept = array_slice($tableRows, $splitAt);
+        $notes[] = [
+            'page' => $pageNumber,
+            'type' => 'dropped_bilingual_duplicate',
+            'lang' => null,
+            'text' => sprintf(
+                'Dropped %d row(s) preceding the es table (kept only from "Categoría" onward — approved decision, review.md §5): %s',
+                count($dropped),
+                json_encode($dropped, JSON_UNESCAPED_UNICODE),
+            ),
+        ];
+
+        return $kept;
+    }
+
+    /**
+     * Propose a mapping from an OCR'd header cell to `salary.py`'s existing
+     * exact-match canonical vocabulary — NEVER applied here, only computed
+     * and returned for a human to see (§3 above) or, once approved, for
+     * `--apply-header-mapping` to apply verbatim to the SAME cell.
+     *
+     * Cascade: (0) already an exact match — nothing to propose. (1) strip
+     * ONLY currency/unit parens (e.g. "(€)", "(€/hora)") and re-check. (2)
+     * strip ALL parens (currency + semantic, e.g. "(mes)", "(sin
+     * antigüedad)") and re-check — flagged when a semantic qualifier is
+     * dropped. (3) does any canonical term appear as a substring/token of
+     * the fully-stripped text (longest term wins)? (4) no match — stays
+     * untyped either way.
+     *
+     * Safety rule (the "(mes)/(año) meaning" instruction): a proposal that
+     * would drop a MONTHLY qualifier while mapping onto `gross_annual`
+     * (which `salary.py` treats as strictly annual — it's the figure
+     * `base_salary_monthly` is computed FROM, via /14) is never proposed —
+     * returned `unsafe`, a human call, not this command's.
+     */
+    private function proposeHeaderMapping(string $raw): array
+    {
+        $normalized = $this->normalizeHeaderText($raw);
+        if ($normalized === '') {
+            return $this->noProposal($raw, 'empty header cell.');
+        }
+
+        if ($field = $this->matchCanonicalExact($normalized)) {
+            return [
+                'original' => $raw, 'matches_as_is' => true, 'proposed' => null,
+                'target_field' => $field, 'dropped' => [], 'unsafe' => false,
+                'note' => "already matches hr-ai's existing exact-match header detection ({$field}) — no change needed.",
+            ];
+        }
+
+        preg_match_all('/\(([^)]*)\)/u', $raw, $m);
+        $groups = array_map(fn ($g) => [
+            'text' => "({$g})",
+            'kind' => $this->isCurrencyOrUnitParen($g) ? 'currency' : 'semantic',
+        ], $m[1] ?? []);
+
+        // Tier 1: strip currency/unit parens only.
+        $currencyOnly = array_values(array_filter($groups, fn ($g) => $g['kind'] === 'currency'));
+        if ($currencyOnly !== []) {
+            $stripped = $this->stripParenGroups($raw, $currencyOnly);
+            if ($field = $this->matchCanonicalExact($this->normalizeHeaderText($stripped))) {
+                return $this->finalizeProposal($raw, $stripped, $field, $currencyOnly);
+            }
+        }
+
+        // Tier 2: strip every paren (currency + semantic).
+        if ($groups !== []) {
+            $stripped = $this->stripParenGroups($raw, $groups);
+            if ($field = $this->matchCanonicalExact($this->normalizeHeaderText($stripped))) {
+                return $this->finalizeProposal($raw, $stripped, $field, $groups);
+            }
+
+            // Tier 3: does a canonical term appear as a substring of the fully-stripped text?
+            $normStripped = $this->normalizeHeaderText($stripped);
+            if ($term = $this->longestCanonicalSubstring($normStripped)) {
+                [$field, $text] = $term;
+
+                return $this->finalizeProposal($raw, $this->titleCase($text), $field, $groups);
+            }
+        }
+
+        return $this->noProposal($raw, 'no canonical vocabulary term found, even after stripping units/qualifiers — stays untyped (raw_values only) either way.');
+    }
+
+    private function noProposal(string $raw, string $note): array
+    {
+        return ['original' => $raw, 'matches_as_is' => false, 'proposed' => null, 'target_field' => null, 'dropped' => [], 'unsafe' => false, 'note' => $note];
+    }
+
+    private function finalizeProposal(string $raw, string $proposedText, string $field, array $droppedGroups): array
+    {
+        $proposedText = trim($proposedText);
+        $droppedSemanticNorm = array_map(
+            fn ($g) => $this->normalizeHeaderText($g['text']),
+            array_values(array_filter($droppedGroups, fn ($g) => $g['kind'] === 'semantic')),
+        );
+
+        $unsafe = false;
+        if ($field === 'gross_annual') {
+            foreach ($droppedSemanticNorm as $d) {
+                foreach (self::MONTHLY_WORDS as $mw) {
+                    if (str_contains($d, $mw)) {
+                        $unsafe = true;
+                    }
+                }
+            }
+        }
+
+        $droppedTexts = array_map(fn ($g) => "{$g['text']} [{$g['kind']}]", $droppedGroups);
+
+        if ($unsafe) {
+            return [
+                'original' => $raw, 'matches_as_is' => false, 'proposed' => null,
+                'target_field' => $field, 'dropped' => $droppedTexts, 'unsafe' => true,
+                'note' => "UNSAFE, NOT proposed: dropping a MONTHLY qualifier would map a monthly figure onto '{$field}', which salary.py treats as strictly ANNUAL. A human call, not this command's.",
+            ];
+        }
+
+        $note = $droppedGroups === []
+            ? 'exact match after normalization alone (nothing dropped).'
+            : 'drops '.implode(', ', $droppedTexts).' to reach an exact canonical match on hr-ai\'s existing detector.';
+
+        return [
+            'original' => $raw, 'matches_as_is' => false, 'proposed' => $proposedText,
+            'target_field' => $field, 'dropped' => $droppedTexts, 'unsafe' => false, 'note' => $note,
+        ];
+    }
+
+    /** A currency/unit-symbol parenthetical (e.g. "€", "€/hora", "€/orduko") vs. a semantic qualifier (e.g. "mes", "sin antigüedad"). */
+    private function isCurrencyOrUnitParen(string $inner): bool
+    {
+        $t = trim($inner);
+
+        return str_contains($t, '€') || (bool) preg_match('/^[\/\p{L}]*hora[\/\p{L}]*$/ui', $t);
+    }
+
+    private function stripParenGroups(string $raw, array $groups): string
+    {
+        $out = $raw;
+        foreach ($groups as $g) {
+            $out = str_replace($g['text'], '', $out);
+        }
+        $out = str_replace("\n", ' ', $out);
+        $out = preg_replace('/\s+/u', ' ', $out);
+
+        return trim((string) $out);
+    }
+
+    private function matchCanonicalExact(string $normalized): ?string
+    {
+        foreach (self::CANONICAL_VOCAB as $field => $terms) {
+            foreach ($terms as $term) {
+                if ($normalized === $this->normalizeHeaderText($term)) {
+                    return $field;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /** @return array{0:string,1:string}|null [field, matched_term] — longest term wins. */
+    private function longestCanonicalSubstring(string $normalized): ?array
+    {
+        $candidates = [];
+        foreach (self::CANONICAL_VOCAB as $field => $terms) {
+            foreach ($terms as $term) {
+                $normTerm = $this->normalizeHeaderText($term);
+                if ($normTerm !== '' && str_contains($normalized, $normTerm)) {
+                    $candidates[] = [$field, $normTerm];
+                }
+            }
+        }
+        if ($candidates === []) {
+            return null;
+        }
+        usort($candidates, fn ($a, $b) => mb_strlen($b[1]) - mb_strlen($a[1]));
+
+        return $candidates[0];
+    }
+
+    private function titleCase(string $s): string
+    {
+        return mb_strtoupper(mb_substr($s, 0, 1)).mb_substr($s, 1);
+    }
+
+    /** Mirrors hr-ai's `salary.py::_norm()` exactly (accent-strip, lowercase, collapse whitespace, trim). */
+    private function normalizeHeaderText(?string $raw): string
+    {
+        if ($raw === null || $raw === '') {
+            return '';
+        }
+        $s = str_replace("\n", ' ', $raw);
+        $decomposed = \Normalizer::normalize($s, \Normalizer::FORM_D);
+        $s = $decomposed !== false ? $decomposed : $s;
+        $s = preg_replace('/[\x{0300}-\x{036f}]/u', '', $s);
+        $s = preg_replace('/\s+/u', ' ', (string) $s);
+        $s = mb_strtolower(trim((string) $s));
+
+        return trim($s, " .:\u{00b7}-");
+    }
+
+    private function printMappingProposals(array $mappingProposals): void
+    {
+        $this->newLine();
+        $this->info('Header-mapping proposal (salary.py itself is NEVER changed — this only proposes what to write into the header ROW of the .xlsx before import; --apply-header-mapping applies it, on your approval):');
+        foreach ($mappingProposals as $pageNumber => $columns) {
+            $this->line("  Page {$pageNumber}:");
+            $this->table(['OCR\'d header cell (verbatim)', 'proposed', 'target field', 'dropped', 'note'], array_map(fn ($p) => [
+                $p['original'],
+                $p['matches_as_is'] ? '(unchanged)' : ($p['proposed'] ?? '—'),
+                $p['target_field'] ?? '—',
+                $p['dropped'] === [] ? '—' : implode(', ', $p['dropped']),
+                $p['unsafe'] ? '⚠ '.$p['note'] : $p['note'],
+            ], $columns));
+        }
+    }
+
+    private function writeNotesSheet(Spreadsheet $spreadsheet, array $notes, bool $append = false): void
+    {
+        $notesSheet = $spreadsheet->getSheetByName('Notes');
+        $startRow = 2;
+        if ($notesSheet === null) {
             $notesSheet = $spreadsheet->createSheet();
             $notesSheet->setTitle('Notes');
             $notesSheet->setCellValueExplicit('A1', 'page', DataType::TYPE_STRING);
             $notesSheet->setCellValueExplicit('B1', 'type', DataType::TYPE_STRING);
             $notesSheet->setCellValueExplicit('C1', 'language', DataType::TYPE_STRING);
             $notesSheet->setCellValueExplicit('D1', 'text', DataType::TYPE_STRING);
-            foreach ($notes as $i => $n) {
-                $row = $i + 2;
-                $notesSheet->setCellValueExplicit("A{$row}", (string) $n['page'], DataType::TYPE_STRING);
-                $notesSheet->setCellValueExplicit("B{$row}", (string) $n['type'], DataType::TYPE_STRING);
-                $notesSheet->setCellValueExplicit("C{$row}", (string) ($n['lang'] ?? ''), DataType::TYPE_STRING);
-                $notesSheet->setCellValueExplicit("D{$row}", (string) $n['text'], DataType::TYPE_STRING);
-            }
+        } elseif ($append) {
+            $startRow = $notesSheet->getHighestRow() + 1;
         }
-
-        $localDir = storage_path("app/salary-derived/{$document->uuid}");
-        if (! is_dir($localDir)) {
-            mkdir($localDir, 0755, true);
+        foreach ($notes as $i => $n) {
+            $row = $startRow + $i;
+            $notesSheet->setCellValueExplicit("A{$row}", (string) $n['page'], DataType::TYPE_STRING);
+            $notesSheet->setCellValueExplicit("B{$row}", (string) $n['type'], DataType::TYPE_STRING);
+            $notesSheet->setCellValueExplicit("C{$row}", (string) ($n['lang'] ?? ''), DataType::TYPE_STRING);
+            $notesSheet->setCellValueExplicit("D{$row}", (string) $n['text'], DataType::TYPE_STRING);
         }
-        $localPath = "{$localDir}/salary.xlsx";
-        (new Xlsx($spreadsheet))->save($localPath);
+    }
 
-        $s3Key = "documents/{$document->uuid}/derived/salary.xlsx";
-        Storage::disk('s3')->put($s3Key, file_get_contents($localPath));
-
-        // ---- step 4: the derived `documents` row (idempotent) -----------------
+    private function findOrCreateDerivedDocument(Document $document, string $s3Key): Document
+    {
         $derived = Document::where('derived_from_document_id', $document->id)->first();
         if ($derived === null) {
             $derived = Document::create([
@@ -268,26 +606,105 @@ class SalaryPdfToXlsx extends Command
             $this->info("Reusing existing derived document [{$derived->id}] uuid={$derived->uuid} — .xlsx overwritten in place.");
         }
 
-        $this->newLine();
-        $this->info("Derived .xlsx written:\n  s3://{$s3Key}\n  local: {$localPath}");
-        $this->newLine();
-        $this->info('Review table (compare each page against its image before approving):');
-        $this->table(['page', 'rows', 'cols', 'quality', 'header (verbatim, col 1..N)', 'page image (10-min link)'], array_map(fn ($r) => [
-            $r['page'], $r['rows'], $r['cols'], $r['quality'], mb_strimwidth($r['header'], 0, 90, '…'), $r['image_url'] ?? '—',
-        ], $reviewRows));
+        return $derived;
+    }
 
-        if ($skippedPages !== []) {
-            $this->newLine();
-            $this->warn('Page(s) NOT written to the .xlsx (see warnings above): '.implode('; ', $skippedPages));
+    /**
+     * Human-approved, SEPARATE step: mutate ONLY the header row (row 1) of
+     * each "Page N" sheet in the ALREADY-WRITTEN derived .xlsx, replacing a
+     * cell ONLY where {@see proposeHeaderMapping()} found a (safe) proposal
+     * — re-derives the SAME deterministic proposal from the cell's current
+     * text, so this is idempotent (re-running after an apply is a no-op:
+     * every proposed cell now `matches_as_is`). Data rows are never touched.
+     */
+    private function applyHeaderMapping(Document $document): int
+    {
+        $derived = Document::where('derived_from_document_id', $document->id)->first();
+        if ($derived === null) {
+            $this->error("No derived .xlsx document found for {$document->uuid} — run `salary:pdf-to-xlsx --document={$document->uuid}` first.");
+
+            return self::FAILURE;
         }
 
-        $this->newLine();
-        $this->line('Next steps (human-gated, not run by this command):');
-        $this->line("  1. Review the .xlsx above against the original PDF (open the page image links).");
-        $this->line("  2. On approval:  php artisan salary:import --document={$derived->uuid}");
-        $this->line("  3. Then stamp provenance:  php artisan salary:pdf-to-xlsx --document={$document->uuid} --mark-provenance");
+        $localPath = $this->localPath($document->uuid);
+        if (! is_file($localPath)) {
+            $bytes = Storage::disk('s3')->get($this->s3Key($document->uuid));
+            if ($bytes === null) {
+                $this->error('No derived .xlsx found locally or in S3 — run `salary:pdf-to-xlsx --document='.$document->uuid.'` first.');
+
+                return self::FAILURE;
+            }
+            $dir = dirname($localPath);
+            if (! is_dir($dir)) {
+                mkdir($dir, 0755, true);
+            }
+            file_put_contents($localPath, $bytes);
+        }
+
+        $spreadsheet = IOFactory::createReader('Xlsx')->load($localPath);
+        $applied = [];
+        foreach ($spreadsheet->getSheetNames() as $name) {
+            if (! str_starts_with($name, 'Page ')) {
+                continue;
+            }
+            $sheet = $spreadsheet->getSheetByName($name);
+            $highestCol = $sheet->getHighestDataColumn(1);
+            $highestColIdx = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::columnIndexFromString($highestCol);
+            for ($c = 1; $c <= $highestColIdx; $c++) {
+                $cell = $sheet->getCell([$c, 1]);
+                $original = (string) $cell->getValue();
+                $proposal = $this->proposeHeaderMapping($original);
+                if ($proposal['matches_as_is'] || $proposal['proposed'] === null) {
+                    continue; // nothing to apply — already fine, unsafe, or no match.
+                }
+                $sheet->setCellValueExplicit([$c, 1], $proposal['proposed'], DataType::TYPE_STRING);
+                $applied[] = ['page' => $name, 'type' => 'header_mapping_applied', 'lang' => null, 'text' => "col {$c}: \"{$original}\" -> \"{$proposal['proposed']}\" (target={$proposal['target_field']})"];
+                $this->line("  {$name} col {$c}: \"{$original}\" -> \"{$proposal['proposed']}\"");
+            }
+        }
+
+        if ($applied === []) {
+            $this->warn('No header cell needed a change (already matches, unsafe, or no match found) — .xlsx left untouched.');
+
+            return self::SUCCESS;
+        }
+
+        $this->writeNotesSheet($spreadsheet, $applied, append: true);
+        (new Xlsx($spreadsheet))->save($localPath);
+        Storage::disk('s3')->put($this->s3Key($document->uuid), file_get_contents($localPath));
+
+        $this->info(sprintf('Applied %d header-cell change(s) to s3://%s and the local copy. Next: --verify, then salary:import --document=%s.', count($applied), $this->s3Key($document->uuid), $derived->uuid));
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Read-only. Calls the SAME hr-ai endpoint `salary:import` itself calls
+     * (`ExtractionClient::extractSalary()`) against the derived .xlsx and
+     * prints its `tables`/`warnings` verbatim. Writes NOTHING to the DB —
+     * `extractSalary()` is hr-ai's extract-and-RETURN call (ADR-0010); only
+     * `salary:import` ever persists its result.
+     */
+    private function verify(Document $document): int
+    {
+        $derived = Document::where('derived_from_document_id', $document->id)->first();
+        if ($derived === null) {
+            $this->error("No derived .xlsx document found for {$document->uuid} — run `salary:pdf-to-xlsx --document={$document->uuid}` first.");
+
+            return self::FAILURE;
+        }
+
+        $result = app(ExtractionClient::class)->extractSalary($derived->storage_path, $derived->uuid);
+        $tables = $result['tables'] ?? [];
+        $this->info(sprintf('Read-only check via hr-ai\'s extractSalary() (NO db write): %d table(s) detected.', count($tables)));
+        foreach ($tables as $t) {
+            $this->line(sprintf("  sheet '%s': year=%s, %d row(s)", $t['sheet'] ?? '?', $t['year'] ?? '—', count($t['rows'] ?? [])));
+        }
+        foreach ($result['warnings'] ?? [] as $w) {
+            $this->line("    · {$w}");
+        }
+
+        return $tables === [] ? self::FAILURE : self::SUCCESS;
     }
 
     /**
@@ -314,7 +731,7 @@ class SalaryPdfToXlsx extends Command
 
         $tables->each(fn (SalaryTable $t) => $t->update(['source' => 'ocr_pdf']));
         $this->info(sprintf(
-            "Marked %d salary_tables row(s) source=ocr_pdf (source_document_id=%d, derived from original document [%d] %s / %s).",
+            'Marked %d salary_tables row(s) source=ocr_pdf (source_document_id=%d, derived from original document [%d] %s / %s).',
             $tables->count(), $derived->id, $document->id, $document->uuid, $document->source_filename,
         ));
 
@@ -325,6 +742,21 @@ class SalaryPdfToXlsx extends Command
     private function sidecarKey(string $documentUuid, int $pageNumber): string
     {
         return sprintf('documents/%s/ocr/%04d.json', $documentUuid, $pageNumber);
+    }
+
+    private function s3Key(string $documentUuid): string
+    {
+        return "documents/{$documentUuid}/derived/salary.xlsx";
+    }
+
+    private function localPath(string $documentUuid): string
+    {
+        $dir = storage_path("app/salary-derived/{$documentUuid}");
+        if (! is_dir($dir)) {
+            mkdir($dir, 0755, true);
+        }
+
+        return "{$dir}/salary.xlsx";
     }
 
     /**
