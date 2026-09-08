@@ -798,6 +798,7 @@ class SalaryPdfToXlsx extends Command
             return self::SUCCESS;
         }
 
+        $changeCount = count($applied);
         $applied[] = [
             'page' => '',
             'type' => 'header_mapping_manifest',
@@ -808,7 +809,7 @@ class SalaryPdfToXlsx extends Command
         (new Xlsx($spreadsheet))->save($localPath);
         Storage::disk('s3')->put($this->s3Key($document->uuid), file_get_contents($localPath));
 
-        $this->info(sprintf('Applied %d header-cell change(s) to s3://%s and the local copy. Next: --verify, then salary:import --document=%s.', count($applied), $this->s3Key($document->uuid), $derived->uuid));
+        $this->info(sprintf('Applied %d header-cell change(s) to s3://%s and the local copy. Next: --verify, then salary:import --document=%s.', $changeCount, $this->s3Key($document->uuid), $derived->uuid));
 
         return self::SUCCESS;
     }
