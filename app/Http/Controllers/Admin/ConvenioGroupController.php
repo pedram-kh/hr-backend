@@ -125,6 +125,18 @@ class ConvenioGroupController extends Controller
                 ->filter(fn (ConvenioGroup $n) => $n->parent_id !== null && ! $roots->contains('id', $n->parent_id))
                 ->map(fn (ConvenioGroup $n) => $this->nodeRow($n, collect(), $memberships, $plans, $boundByFact))
                 ->values(),
+            // Flat, parent-first, for the manual-binding picker on the unbound
+            // list below: a reviewer choosing a node needs to see "Grupo 2 ›
+            // resto áreas", not a bare label that could belong to any group.
+            'approved_nodes' => $approved
+                ->sortBy(fn (ConvenioGroup $n) => [$n->parent_id === null ? 0 : 1, $n->code_normalized])
+                ->map(fn (ConvenioGroup $n) => [
+                    'id' => $n->id,
+                    'path_label' => $n->parent_id !== null
+                        ? (($nodes->firstWhere('id', $n->parent_id)?->label ?? '?').' › '.$n->label)
+                        : $n->label,
+                ])
+                ->values(),
             'unbindable_facts' => $plans
                 ->filter(fn ($p) => $p['status'] !== FactGroupBindingPlanner::STATUS_RESOLVED
                     && $p['status'] !== FactGroupBindingPlanner::STATUS_CONVENIO_WIDE)
@@ -258,47 +270,8 @@ class ConvenioGroupController extends Controller
                     'nodo de grupo aprobado'.(($data['note'] ?? '') !== '' ? ': '.$data['note'] : ''));
             }
 
-            // Re-plan INSIDE the transaction against the now-approved tree. The
-            // reviewer's ids are the authorization; this is the check that each
-            // one actually resolves to this node, so a stale or hand-edited
-            // payload cannot bind a fact whose label points somewhere else.
-            $approved = ConvenioGroup::where('convenio_id', $group->convenio_id)
-                ->where('status', ConvenioGroup::STATUS_APPROVED)
-                ->get();
-            $facts = $this->convenioFacts($group->convenio_id)->whereIn('id', $confirmed);
-            $plans = collect($this->planner->planMany($facts, $approved))->keyBy('fact_id');
-
-            foreach ($confirmed as $factId) {
-                $plan = $plans->get($factId);
-                if ($plan === null
-                    || $plan['status'] !== FactGroupBindingPlanner::STATUS_RESOLVED
-                    || ! in_array($group->id, $plan['node_ids'], true)) {
-                    throw ValidationException::withMessages([
-                        'confirmed_fact_ids' => "El dato {$factId} no se resuelve a este nodo. "
-                            .'Vuelve a cargar el diff de vinculación.',
-                    ]);
-                }
-
-                $bound = ReferenceFactGroupScope::firstOrCreate(
-                    ['reference_fact_id' => $factId, 'convenio_group_id' => $group->id],
-                    ['bound_by' => $adminId, 'bound_at' => now()],
-                );
-
-                if ($bound->wasRecentlyCreated) {
-                    TagEvent::create([
-                        'entity_type' => 'reference_fact',
-                        'entity_id' => $factId,
-                        'facet' => 'group_scope',
-                        'old_value' => null,
-                        'new_value' => 'convenio_group:'.$group->id,
-                        'source' => 'admin_manual',
-                        'actor_id' => $adminId,
-                        'confidence' => null,
-                        'note' => 'dato vinculado al nodo "'.$group->label.'" ('.$group->code_normalized
-                            .') tras confirmar el diff',
-                    ]);
-                }
-            }
+            $this->bindConfirmedFacts($group, $confirmed, $adminId, override: false,
+                context: 'tras confirmar el diff de aprobación');
 
             if (array_key_exists('confirmed_category_ids', $data)) {
                 $this->approveCategories($group, $data['confirmed_category_ids'], $adminId);
@@ -431,6 +404,186 @@ class ConvenioGroupController extends Controller
         });
 
         return response()->json(['status' => 'ok', 'group' => $this->groupSummary($group->fresh())]);
+    }
+
+    /**
+     * Bind facts to an ALREADY-APPROVED node, outside the approval moment.
+     *
+     * Approval used to be the only moment a binding could be created, which
+     * made a reviewer's first pass final: approve a node with a fact unticked
+     * and there was no way back to it. Binding is a separate decision from
+     * approval and now has its own door.
+     *
+     * TWO LANES, and the difference between them is the whole point of this
+     * sprint:
+     *
+     *   GRAMMAR (default) — the planner resolves the fact's `group_label` to
+     *     this node. The reviewer's ids authorize; the grammar still checks.
+     *
+     *   OVERRIDE (`override: true`) — the planner REFUSES the label, and a
+     *     human decides anyway. This is legitimate and expected: "Grupo 2
+     *     excepto área cinco" does mean `resto áreas`, but only because someone
+     *     read the convenio. The planner declining to infer that is correct;
+     *     a human asserting it is also correct. What must never happen is the
+     *     MACHINE inferring it silently, which is what the digit matcher did.
+     *
+     * So override is not a hole in the validation — it is the human authority
+     * the validation exists to defer to, and it is recorded as such: the
+     * `tag_events` row keeps the planner's refusal reason alongside the
+     * decision, so a later reader can see this scope was asserted rather than
+     * read.
+     *
+     * Override is refused when the planner resolves the label to a DIFFERENT
+     * node. That is not a judgement call, it is a contradiction — and the fix
+     * is to correct the fact's label, not to bind past it.
+     */
+    public function bind(Request $request, int $groupId): JsonResponse
+    {
+        $group = ConvenioGroup::findOrFail($groupId);
+        $adminId = $request->user()->id;
+
+        $data = $request->validate([
+            'fact_ids' => ['required', 'array', 'min:1'],
+            'fact_ids.*' => ['integer'],
+            'override' => ['sometimes', 'boolean'],
+            'note' => ['nullable', 'string', 'max:2000'],
+        ]);
+
+        if ($group->status !== ConvenioGroup::STATUS_APPROVED) {
+            throw ValidationException::withMessages([
+                'status' => 'Solo se puede vincular a un nodo aprobado: un nodo pendiente no existe '
+                    .'todavía para el emparejador.',
+            ]);
+        }
+
+        $factIds = array_values(array_unique($data['fact_ids']));
+        $override = (bool) ($data['override'] ?? false);
+
+        $bound = DB::transaction(fn () => $this->bindConfirmedFacts(
+            $group,
+            $factIds,
+            $adminId,
+            $override,
+            context: $override
+                ? 'decisión humana sobre una etiqueta que el analizador no resuelve'
+                : 'vinculación posterior a la aprobación',
+            note: $data['note'] ?? null,
+        ));
+
+        return response()->json([
+            'status' => 'ok',
+            'group' => $this->groupSummary($group->fresh()),
+            'bound_fact_ids' => $bound,
+        ]);
+    }
+
+    /**
+     * Shared by `approve()` and `bind()`. Re-plans INSIDE the caller's
+     * transaction so a stale or hand-edited payload cannot bind a fact whose
+     * label points somewhere else.
+     *
+     * @param  list<int>  $factIds
+     * @return list<int>
+     */
+    private function bindConfirmedFacts(
+        ConvenioGroup $group,
+        array $factIds,
+        int $adminId,
+        bool $override,
+        string $context,
+        ?string $note = null,
+    ): array {
+        if ($factIds === []) {
+            return [];
+        }
+
+        $approved = ConvenioGroup::where('convenio_id', $group->convenio_id)
+            ->where('status', ConvenioGroup::STATUS_APPROVED)
+            ->get();
+        $facts = $this->convenioFacts($group->convenio_id)->whereIn('id', $factIds);
+        $plans = collect($this->planner->planMany($facts, $approved))->keyBy('fact_id');
+
+        $done = [];
+
+        foreach ($factIds as $factId) {
+            $plan = $plans->get($factId);
+
+            if ($plan === null) {
+                // Not a fact of this convenio (or rejected). A scope is only
+                // meaningful within its own convenio.
+                throw ValidationException::withMessages([
+                    'fact_ids' => "El dato {$factId} no pertenece a este convenio.",
+                ]);
+            }
+
+            $resolvesHere = $plan['status'] === FactGroupBindingPlanner::STATUS_RESOLVED
+                && in_array($group->id, $plan['node_ids'], true);
+            $manual = false;
+
+            if (! $resolvesHere) {
+                if (! $override) {
+                    throw ValidationException::withMessages([
+                        'fact_ids' => "El dato {$factId} no se resuelve a este nodo. "
+                            .'Vuelve a cargar el diff, o vincúlalo explícitamente como decisión humana.',
+                    ]);
+                }
+
+                if ($plan['status'] === FactGroupBindingPlanner::STATUS_CONVENIO_WIDE) {
+                    // A convenio-wide fact already answers, at Tier 3. Giving it
+                    // a group would NARROW a rule that applies to everyone.
+                    throw ValidationException::withMessages([
+                        'fact_ids' => "El dato {$factId} es de ámbito convenio: vincularlo a un grupo "
+                            .'restringiría una norma que se aplica a toda la plantilla.',
+                    ]);
+                }
+
+                if ($plan['status'] === FactGroupBindingPlanner::STATUS_RESOLVED) {
+                    // Resolves elsewhere. Not a judgement call — a contradiction.
+                    $others = implode(', ', $plan['node_ids']);
+                    throw ValidationException::withMessages([
+                        'fact_ids' => "La etiqueta del dato {$factId} se resuelve a otro(s) nodo(s) "
+                            ."({$others}), no a este. Corrige la etiqueta del dato en lugar de "
+                            .'forzar la vinculación.',
+                    ]);
+                }
+
+                $manual = true;
+            }
+
+            $row = ReferenceFactGroupScope::firstOrCreate(
+                ['reference_fact_id' => $factId, 'convenio_group_id' => $group->id],
+                ['bound_by' => $adminId, 'bound_at' => now()],
+            );
+            $done[] = $factId;
+
+            if (! $row->wasRecentlyCreated) {
+                continue;
+            }
+
+            $why = 'dato vinculado al nodo "'.$group->label.'" ('.$group->code_normalized.') — '.$context;
+            if ($manual) {
+                // Keep the refusal reason next to the decision, so a later
+                // reader can tell an asserted scope from a read one.
+                $why .= '. El analizador NO resuelve esta etiqueta ('.$plan['kind'].'): '.$plan['reason'];
+            }
+            if (($note ?? '') !== '') {
+                $why .= '. Nota: '.$note;
+            }
+
+            TagEvent::create([
+                'entity_type' => 'reference_fact',
+                'entity_id' => $factId,
+                'facet' => $manual ? 'group_scope_manual' : 'group_scope',
+                'old_value' => null,
+                'new_value' => 'convenio_group:'.$group->id,
+                'source' => 'admin_manual',
+                'actor_id' => $adminId,
+                'confidence' => null,
+                'note' => $why,
+            ]);
+        }
+
+        return $done;
     }
 
     /** Remove one fact↔node binding, with provenance. */

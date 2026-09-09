@@ -209,6 +209,12 @@ Route::middleware(['auth:sanctum', 'admin', 'active'])->prefix('admin')->group(f
     Route::middleware('ability:knowledge.edit')->group(function () {
         Route::post('/convenio-groups/convenio/{convenioId}/propose', [ConvenioGroupController::class, 'propose']);
         Route::post('/convenio-groups/{groupId}/approve', [ConvenioGroupController::class, 'approve']);
+        // Binding is a SEPARATE decision from approval, so it has its own door:
+        // approving a node with a fact unticked must not make that reviewer's
+        // first pass final. `override: true` is the lane for a label the planner
+        // refuses to read and a human decides anyway — recorded as asserted,
+        // never inferred.
+        Route::post('/convenio-groups/{groupId}/bind', [ConvenioGroupController::class, 'bind']);
         Route::patch('/convenio-groups/{groupId}', [ConvenioGroupController::class, 'update']);
         Route::post('/convenio-groups/{groupId}/reject', [ConvenioGroupController::class, 'reject']);
         Route::delete('/convenio-groups/{groupId}/bindings/{factId}', [ConvenioGroupController::class, 'unbind']);

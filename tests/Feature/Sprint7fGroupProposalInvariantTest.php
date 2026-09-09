@@ -411,6 +411,220 @@ class Sprint7fGroupProposalInvariantTest extends TestCase
         $this->assertNotNull($manual[0]['reason']);
     }
 
+    // ── 5b. Binding after approval, and the human-authority lane ────────────
+
+    /**
+     * Found at Checkpoint 2, by Pedram approving the real tree: approval was the
+     * only moment a binding could be created, so approving a node with a fact
+     * unticked left no way back to it. Binding is a separate decision from
+     * approval and needs its own door.
+     */
+    public function test_a_fact_can_be_bound_after_the_node_was_already_approved(): void
+    {
+        $this->serviceReturning($this->navarraTree())->propose($this->convenio);
+        $g1 = $this->findNode('1');
+        $fact = $this->fact('Grupo 1 (todas las áreas)', '90 días');
+
+        // Approved with nothing ticked — the exact situation that was a dead end.
+        $this->postAs($this->admin(), "/admin/convenio-groups/{$g1->id}/approve", [
+            'confirmed_fact_ids' => [],
+        ])->assertStatus(200);
+        $this->assertSame(0, ReferenceFactGroupScope::count());
+
+        $this->postAs($this->admin(), "/admin/convenio-groups/{$g1->id}/bind", [
+            'fact_ids' => [$fact->id],
+        ])->assertStatus(200);
+
+        $this->assertSame(1, ReferenceFactGroupScope::where('convenio_group_id', $g1->id)->count());
+    }
+
+    public function test_binding_twice_is_idempotent_and_logs_once(): void
+    {
+        $this->serviceReturning($this->navarraTree())->propose($this->convenio);
+        $g1 = $this->findNode('1');
+        $this->approveDirectly($g1);
+        $fact = $this->fact('Grupo 1 (todas las áreas)', '90 días');
+
+        foreach ([1, 2] as $_) {
+            $this->postAs($this->admin(), "/admin/convenio-groups/{$g1->id}/bind", [
+                'fact_ids' => [$fact->id],
+            ])->assertStatus(200);
+        }
+
+        $this->assertSame(1, ReferenceFactGroupScope::count());
+        $this->assertSame(1, TagEvent::where('facet', 'group_scope')->count());
+    }
+
+    public function test_a_compound_fact_binds_to_both_of_its_nodes_independently(): void
+    {
+        // Fact 44's real shape. Binding it to Grupo 1 and to Grupo 2 › área 5
+        // are two separate acts, and the join table has to hold both — a fact
+        // bound to only half its scope answers confidently for one group and
+        // silently omits the other.
+        $this->serviceReturning($this->navarraTree())->propose($this->convenio);
+        $g1 = $this->findNode('1');
+        $g2 = $this->findNode('2');
+        $this->approveDirectly($g1);
+        $this->approveDirectly($g2);
+        $area5 = ConvenioGroup::where('parent_id', $g2->id)->where('code_normalized', 'area-5')->first();
+        $this->approveDirectly($area5);
+
+        $fact = $this->fact('Grupo 1 (todas las áreas) y Grupo 2 (área 5)', '90 días');
+
+        foreach ([$g1->id, $area5->id] as $nodeId) {
+            $this->postAs($this->admin(), "/admin/convenio-groups/{$nodeId}/bind", [
+                'fact_ids' => [$fact->id],
+            ])->assertStatus(200);
+        }
+
+        $this->assertEqualsCanonicalizing(
+            [$g1->id, $area5->id],
+            ReferenceFactGroupScope::where('reference_fact_id', $fact->id)
+                ->pluck('convenio_group_id')->all(),
+        );
+    }
+
+    public function test_a_label_the_planner_refuses_needs_an_explicit_human_override(): void
+    {
+        // "Grupo 2 excepto área cinco" DOES mean resto áreas — but only because
+        // someone read the convenio. The planner declining to infer that is
+        // correct; a human asserting it is also correct. The one thing that must
+        // not happen is the machine inferring it silently.
+        $this->serviceReturning($this->navarraTree())->propose($this->convenio);
+        $g2 = $this->findNode('2');
+        $this->approveDirectly($g2);
+        $resto = ConvenioGroup::where('parent_id', $g2->id)->where('code_normalized', 'resto-areas')->first();
+        $this->approveDirectly($resto);
+
+        $fact = $this->fact('Grupo 2 excepto área cinco', '60 días');
+
+        // Without the flag it is refused, and the message points at the lane.
+        $this->postAs($this->admin(), "/admin/convenio-groups/{$resto->id}/bind", [
+            'fact_ids' => [$fact->id],
+        ])->assertStatus(422);
+        $this->assertSame(0, ReferenceFactGroupScope::count());
+
+        $this->postAs($this->admin(), "/admin/convenio-groups/{$resto->id}/bind", [
+            'fact_ids' => [$fact->id], 'override' => true, 'note' => 'Art. 19: el resto del grupo 2.',
+        ])->assertStatus(200);
+
+        $this->assertSame(1, ReferenceFactGroupScope::where('convenio_group_id', $resto->id)->count());
+    }
+
+    public function test_an_overridden_binding_records_that_it_was_asserted_not_read(): void
+    {
+        // The audit has to distinguish a scope a human ASSERTED from one the
+        // grammar READ, or a later reader cannot tell which decisions to trust.
+        $this->serviceReturning($this->navarraTree())->propose($this->convenio);
+        $g2 = $this->findNode('2');
+        $this->approveDirectly($g2);
+        $resto = ConvenioGroup::where('parent_id', $g2->id)->where('code_normalized', 'resto-areas')->first();
+        $this->approveDirectly($resto);
+        $fact = $this->fact('Grupo 2 excepto área cinco', '60 días');
+
+        $this->postAs($this->admin(), "/admin/convenio-groups/{$resto->id}/bind", [
+            'fact_ids' => [$fact->id], 'override' => true, 'note' => 'Art. 19.',
+        ])->assertStatus(200);
+
+        $event = TagEvent::where('facet', 'group_scope_manual')->firstOrFail();
+        $this->assertSame('admin_manual', $event->source);
+        $this->assertSame($this->admin()->id, $event->actor_id);
+        $this->assertStringContainsString('NO resuelve esta etiqueta', (string) $event->note);
+        $this->assertStringContainsString('complement', (string) $event->note);
+        $this->assertStringContainsString('Art. 19.', (string) $event->note);
+    }
+
+    public function test_override_cannot_bind_a_fact_whose_label_resolves_somewhere_else(): void
+    {
+        // Not a judgement call — a contradiction. The fix is to correct the
+        // fact's label, not to bind past it, so override is not a way to
+        // bypass the grammar wholesale.
+        $this->serviceReturning($this->navarraTree())->propose($this->convenio);
+        $g1 = $this->findNode('1');
+        $g3 = $this->findNode('3');
+        $this->approveDirectly($g1);
+        $this->approveDirectly($g3);
+        $fact = $this->fact('Grupo 3 (todas las áreas)', '45 días');
+
+        $this->postAs($this->admin(), "/admin/convenio-groups/{$g1->id}/bind", [
+            'fact_ids' => [$fact->id], 'override' => true,
+        ])->assertStatus(422);
+
+        $this->assertSame(0, ReferenceFactGroupScope::count());
+    }
+
+    public function test_override_cannot_narrow_a_convenio_wide_fact(): void
+    {
+        // A convenio-wide fact already answers, at Tier 3. Giving it a group
+        // would restrict a rule that applies to the whole workforce — the
+        // opposite of the bug this sprint fixes, and just as wrong.
+        $this->serviceReturning($this->navarraTree())->propose($this->convenio);
+        $g1 = $this->findNode('1');
+        $this->approveDirectly($g1);
+        $fact = $this->fact(null, 'dos meses para toda la plantilla');
+
+        $this->postAs($this->admin(), "/admin/convenio-groups/{$g1->id}/bind", [
+            'fact_ids' => [$fact->id], 'override' => true,
+        ])->assertStatus(422);
+
+        $this->assertSame(0, ReferenceFactGroupScope::count());
+    }
+
+    public function test_nothing_can_be_bound_to_a_pending_node(): void
+    {
+        $this->serviceReturning($this->navarraTree())->propose($this->convenio);
+        $g1 = $this->findNode('1');
+        $fact = $this->fact('Grupo 1 (todas las áreas)', '90 días');
+
+        $this->postAs($this->admin(), "/admin/convenio-groups/{$g1->id}/bind", [
+            'fact_ids' => [$fact->id],
+        ])->assertStatus(422);
+
+        $this->assertSame(0, ReferenceFactGroupScope::count());
+    }
+
+    public function test_a_fact_from_another_convenio_cannot_be_bound(): void
+    {
+        $this->serviceReturning($this->navarraTree())->propose($this->convenio);
+        $g1 = $this->findNode('1');
+        $this->approveDirectly($g1);
+
+        $foreign = ReferenceFact::create([
+            'uuid' => (string) \Str::uuid(),
+            'convenio_id' => $this->otherConvenio->id,
+            'topic_id' => $this->topic->id,
+            'group_label' => 'Grupo 1',
+            'value' => 'otra cosa',
+            'authority_level' => ReferenceFact::AUTHORITY_LEVEL,
+            'source' => 'admin_manual',
+            'status' => 'verified',
+            'validity_start' => '2026-01-01',
+        ]);
+
+        $this->postAs($this->admin(), "/admin/convenio-groups/{$g1->id}/bind", [
+            'fact_ids' => [$foreign->id], 'override' => true,
+        ])->assertStatus(422);
+
+        $this->assertSame(0, ReferenceFactGroupScope::count());
+    }
+
+    public function test_the_tree_read_offers_the_approved_nodes_for_manual_binding(): void
+    {
+        // The picker on the unbound list needs a path label: a bare "resto
+        // áreas" could belong to any group.
+        $this->serviceReturning($this->navarraTree())->propose($this->convenio);
+        $g2 = $this->findNode('2');
+        $this->approveDirectly($g2);
+        $resto = ConvenioGroup::where('parent_id', $g2->id)->where('code_normalized', 'resto-areas')->first();
+        $this->approveDirectly($resto);
+
+        $nodes = $this->getAs($this->admin(), '/admin/convenio-groups/convenio/'.$this->convenio->id)
+            ->assertStatus(200)
+            ->json('approved_nodes');
+
+        $this->assertSame(['Grupo 2', 'Grupo 2 › resto áreas'], array_column($nodes, 'path_label'));
+    }
+
     // ── 6. Structure in use cannot be pulled away ───────────────────────────
 
     public function test_a_sub_area_cannot_be_approved_before_its_parent(): void
