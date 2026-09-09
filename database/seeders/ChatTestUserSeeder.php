@@ -93,6 +93,23 @@ class ChatTestUserSeeder extends Seeder
             jobCategoryId: $this->categoryWithSalaryRow($ocioAlava),
         );
 
+        // The two convenios bound to an OCR'd scan after Sprint 7e: the Navarra
+        // gestión deportiva successor (a full convenio text) and the estatal
+        // instalaciones deportivas Art. 22 amendment (a partial_agreement whose
+        // base convenio text is NOT in the corpus — this profile is how we see
+        // what an amendment-only convenio can and cannot answer).
+        $this->seedEmployee(
+            email: 'test-deporte-navarra@example.com',
+            name: 'Test Gestión Deportiva Navarra (convenio 20)',
+            convenio: $this->byNumero('31008235012003') ?? $this->byName('DEPORTIVA', 'Navarra'),
+        );
+
+        $this->seedEmployee(
+            email: 'test-deporte-estatal@example.com',
+            name: 'Test Instalaciones Deportivas Estatal (convenio 9)',
+            convenio: $this->byNumero('99015105012005') ?? $this->byName('INSTALACIONES DEPORTIVAS', 'Estatal'),
+        );
+
         // A generic active-convenio employee for the sensitive-topic + floor gates.
         $this->seedEmployee(
             email: 'test-any@example.com',
