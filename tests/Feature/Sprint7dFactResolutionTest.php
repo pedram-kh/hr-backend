@@ -66,6 +66,45 @@ class Sprint7dFactResolutionTest extends TestCase
         $this->admin->assignRole('super_admin');
     }
 
+    /**
+     * Sprint 7f: a group is an approved node, not a digit in a label. These three
+     * helpers exist so the two answer-path tests below keep exercising the real
+     * group tier.
+     */
+    private function groupNode(string $label, string $code): \App\Models\ConvenioGroup
+    {
+        return \App\Models\ConvenioGroup::create([
+            'convenio_id' => $this->convenio->id,
+            'label' => $label,
+            'code_normalized' => $code,
+            'normalization_rule' => 'test',
+            'status' => \App\Models\ConvenioGroup::STATUS_APPROVED,
+            'source' => 'admin_manual',
+        ]);
+    }
+
+    private function employeeOnNode(string $email, \App\Models\ConvenioGroup $node): \App\Models\Employee
+    {
+        return \App\Models\Employee::create([
+            'email' => $email, 'full_name' => 'Empleada G2',
+            'convenio_id' => $this->convenio->id,
+            'convenio_group_id' => $node->id,
+            'territory_id' => $this->convenio->territory_id,
+            'employment_type' => 'full_time', 'status' => 'active',
+        ]);
+    }
+
+    private function bindTo(ReferenceFact $fact, \App\Models\ConvenioGroup $node): ReferenceFact
+    {
+        \App\Models\ReferenceFactGroupScope::create([
+            'reference_fact_id' => $fact->id,
+            'convenio_group_id' => $node->id,
+            'bound_at' => now(),
+        ]);
+
+        return $fact;
+    }
+
     private function fact(string $group, string $value, ?string $validityStart, ?string $validityEnd = null, string $status = 'verified'): ReferenceFact
     {
         return ReferenceFact::create([
@@ -255,25 +294,20 @@ class Sprint7dFactResolutionTest extends TestCase
      */
     public function test_the_unchanged_7c_rule_stops_escalating_once_the_data_is_corrected(): void
     {
-        // A real employee in the scope, in group 2 — so the answer runs through the
-        // genuine group tier, not a synthetic shortcut.
-        $category = \App\Models\ConvenioJobCategory::create([
-            'convenio_id' => $this->convenio->id, 'name' => 'Educador/a social', 'group_code' => '2',
-        ]);
-        $employee = \App\Models\Employee::create([
-            'email' => 'g2@example.com', 'full_name' => 'Empleada G2',
-            'convenio_id' => $this->convenio->id, 'job_category_id' => $category->id,
-            'territory_id' => $this->convenio->territory_id, 'employment_type' => 'full_time', 'status' => 'active',
-        ]);
+        // A real employee in the scope, on group 2's approved node — so the answer
+        // runs through the genuine group tier, not a synthetic shortcut. (Sprint 7f
+        // re-expressed the scope: an approved node id, where this test used to rely
+        // on a digit found in the fact's label. The invariant it pins is unchanged.)
+        $employee = $this->employeeOnNode('g2@example.com', $g2 = $this->groupNode('Grupo 2', '2'));
 
-        // THE ESCALATING SHAPE. Two verified facts matching group 2 with the SAME
+        // THE ESCALATING SHAPE. Two verified facts bound to group 2 with the SAME
         // validity_start and differing values. This — not a version with a later
         // start date — is what makes the 7c rule escalate: `selectMostRecent` already
         // prefers a later `validity_start`, so an honestly-dated version pair is
         // handled by ordering alone. The pair that stalls a chat turn is the one
         // where the dates carry no ordering.
-        $older = $this->fact('Grupos 1 y 2', 'Seis meses', '2026-01-01');
-        $newer = $this->fact('Grupo 2', 'Cuatro meses', '2026-01-01');
+        $older = $this->bindTo($this->fact('Grupos 1 y 2', 'Seis meses', '2026-01-01'), $g2);
+        $newer = $this->bindTo($this->fact('Grupo 2', 'Cuatro meses', '2026-01-01'), $g2);
         $newer->update(['duplicate_of_id' => $older->id]);
 
         $answers = app(ReferenceFactAnswerService::class);
@@ -325,17 +359,10 @@ class Sprint7dFactResolutionTest extends TestCase
      */
     public function test_a_well_dated_version_pair_already_answers_correctly_before_any_resolution(): void
     {
-        $category = \App\Models\ConvenioJobCategory::create([
-            'convenio_id' => $this->convenio->id, 'name' => 'Educador/a social', 'group_code' => '2',
-        ]);
-        $employee = \App\Models\Employee::create([
-            'email' => 'g2b@example.com', 'full_name' => 'Empleada G2',
-            'convenio_id' => $this->convenio->id, 'job_category_id' => $category->id,
-            'territory_id' => $this->convenio->territory_id, 'employment_type' => 'full_time', 'status' => 'active',
-        ]);
+        $employee = $this->employeeOnNode('g2b@example.com', $g2 = $this->groupNode('Grupo 2', '2'));
 
-        $this->fact('Grupos 1 y 2', 'Seis meses', '2021-01-01');
-        $this->fact('Grupo 2', 'Cuatro meses', '2026-01-01');
+        $this->bindTo($this->fact('Grupos 1 y 2', 'Seis meses', '2021-01-01'), $g2);
+        $this->bindTo($this->fact('Grupo 2', 'Cuatro meses', '2026-01-01'), $g2);
 
         $answers = app(ReferenceFactAnswerService::class);
         $now = $answers->answer($employee, $this->periodo->id, \Illuminate\Support\Carbon::parse('2026-06-01'));

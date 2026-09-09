@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Admin\AdminController;
 use App\Http\Controllers\Admin\AnswerModelController;
+use App\Http\Controllers\Admin\ConvenioGroupController;
 use App\Http\Controllers\Admin\CoverageGapController;
 use App\Http\Controllers\Admin\DocumentController;
 use App\Http\Controllers\Admin\EmployeeDirectoryController;
@@ -60,6 +61,9 @@ Route::middleware(['auth:sanctum', 'admin', 'active'])->prefix('admin')->group(f
     Route::get('/vocabulary/{type}', [VocabularyController::class, 'index']);
     // Convenio-scoped job categories for the directory FK picker (Sprint 5).
     Route::get('/job-categories', [VocabularyController::class, 'jobCategories']);
+    // Convenio-scoped APPROVED group/sub-area tree for the directory FK picker,
+    // plus the category-derived suggestion (Sprint 7f, ADR-0028).
+    Route::get('/groups', [VocabularyController::class, 'groups']);
 
     /*
     | Sprint 5 — Employee directory (ADR-0004). CRUD + search/filter + CSV
@@ -188,6 +192,32 @@ Route::middleware(['auth:sanctum', 'admin', 'active'])->prefix('admin')->group(f
         // the older fact's validity, deletes nothing) | coexist | reject the flag.
         // Human-invoked only; there is no automatic resolver anywhere.
         Route::post('/reference-facts/{uuid}/resolve-duplicate', [ReferenceFactController::class, 'resolveDuplicate']);
+    });
+
+    /*
+    | Sprint 7f — Structured group scope (ADR-0028). The AI proposes a convenio's
+    | group tree; a human approves it node by node. Same posture as the facts
+    | above: READS open to any admin, WRITES gated by knowledge.edit.
+    |
+    | `binding-diff` is a READ and is the load-bearing one: `approve` writes a
+    | `reference_fact_group_scopes` row ONLY for the fact ids the reviewer sends
+    | back from that diff. Approving a node binds nothing by itself.
+    */
+    Route::get('/convenio-groups', [ConvenioGroupController::class, 'index']);
+    Route::get('/convenio-groups/convenio/{convenioId}', [ConvenioGroupController::class, 'show']);
+    Route::get('/convenio-groups/{groupId}/binding-diff', [ConvenioGroupController::class, 'bindingDiff']);
+    Route::middleware('ability:knowledge.edit')->group(function () {
+        Route::post('/convenio-groups/convenio/{convenioId}/propose', [ConvenioGroupController::class, 'propose']);
+        Route::post('/convenio-groups/{groupId}/approve', [ConvenioGroupController::class, 'approve']);
+        // Binding is a SEPARATE decision from approval, so it has its own door:
+        // approving a node with a fact unticked must not make that reviewer's
+        // first pass final. `override: true` is the lane for a label the planner
+        // refuses to read and a human decides anyway — recorded as asserted,
+        // never inferred.
+        Route::post('/convenio-groups/{groupId}/bind', [ConvenioGroupController::class, 'bind']);
+        Route::patch('/convenio-groups/{groupId}', [ConvenioGroupController::class, 'update']);
+        Route::post('/convenio-groups/{groupId}/reject', [ConvenioGroupController::class, 'reject']);
+        Route::delete('/convenio-groups/{groupId}/bindings/{factId}', [ConvenioGroupController::class, 'unbind']);
     });
 
     // Answer-model key handling (Sprint 2b-1, ADR-0015). super_admin enforced in

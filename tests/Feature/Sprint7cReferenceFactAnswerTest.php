@@ -4,11 +4,13 @@ namespace Tests\Feature;
 
 use App\Models\AnswerModelSetting;
 use App\Models\Convenio;
+use App\Models\ConvenioGroup;
 use App\Models\ConvenioJobCategory;
 use App\Models\Document;
 use App\Models\Employee;
 use App\Models\MessageTrace;
 use App\Models\ReferenceFact;
+use App\Models\ReferenceFactGroupScope;
 use App\Models\Sector;
 use App\Models\Territory;
 use App\Models\Topic;
@@ -162,44 +164,263 @@ class Sprint7cReferenceFactAnswerTest extends TestCase
 
     // ---- Q2: most-specific ELSE ESCALATE — never guess a group ---------------
 
-    public function test_per_group_only_fact_with_unresolved_group_escalates_not_guesses(): void
+    /**
+     * The three tests below kept their invariants across Sprint 7f and changed
+     * only how a group is expressed: an approved node id instead of a digit
+     * found in free text. Rewritten, never weakened.
+     */
+    public function test_per_group_only_fact_with_no_employee_group_escalates_not_guesses(): void
     {
-        // Employee has NO job category → group cannot be confidently resolved.
-        $employee = $this->employee(jobCategoryId: null);
+        // Employee has no group node → Tier 2 is skipped entirely.
+        $employee = $this->employee();
+        $g1 = $this->node('Grupo 1', '1');
+        $g2 = $this->node('Grupo 2', '2');
         // Only per-group verified facts exist (no convenio-wide fact).
-        ReferenceFact::create($this->factAttrs(value: 'Grupo 1: 90 días', status: 'verified', groupLabel: 'Grupo 1'));
-        ReferenceFact::create($this->factAttrs(value: 'Grupo 2: 60 días', status: 'verified', groupLabel: 'Grupo 2'));
+        $this->bind($this->verifiedFact('Grupo 1: 90 días', 'Grupo 1', null), $g1);
+        $this->bind($this->verifiedFact('Grupo 2: 60 días', 'Grupo 2', null), $g2);
 
         $out = app(ReferenceFactAnswerService::class)->answer($employee, $this->topic->id, Carbon::today());
         $this->assertSame('escalate', $out['outcome'], 'never answer from a guessed group');
         $this->assertSame('reference_fact_coverage_gap', $out['escalation_reason']);
     }
 
-    public function test_per_group_fact_answers_when_employee_group_resolves(): void
+    public function test_per_group_fact_answers_when_the_employee_sits_on_that_node(): void
     {
-        $cat = ConvenioJobCategory::create(['convenio_id' => $this->convenio->id, 'name' => 'Camarero', 'group_code' => '1']);
-        $employee = $this->employee(jobCategoryId: $cat->id);
-        ReferenceFact::create($this->factAttrs(value: 'Grupo 1: 90 días', status: 'verified', groupLabel: 'Grupo 1'));
-        ReferenceFact::create($this->factAttrs(value: 'Grupo 2: 60 días', status: 'verified', groupLabel: 'Grupo 2'));
+        $g1 = $this->node('Grupo 1', '1');
+        $g2 = $this->node('Grupo 2', '2');
+        $employee = $this->employee(groupId: $g1->id);
+        $this->bind($this->verifiedFact('Grupo 1: 90 días', 'Grupo 1', null), $g1);
+        $this->bind($this->verifiedFact('Grupo 2: 60 días', 'Grupo 2', null), $g2);
 
         $out = app(ReferenceFactAnswerService::class)->answer($employee, $this->topic->id, Carbon::today());
         $this->assertSame('answer', $out['outcome']);
         $this->assertStringContainsString('90 días', $out['answer']);
-        $this->assertSame('group_label', $out['reference_fact']['match_kind']);
+        $this->assertSame('group', $out['reference_fact']['match_kind']);
+        $this->assertSame($g1->id, $out['reference_fact']['group_node_id']);
+        $this->assertSame('Grupo 1', $out['reference_fact']['group_node_label']);
     }
 
     public function test_job_category_fact_is_most_specific_and_wins_over_group_and_wide(): void
     {
         $cat = ConvenioJobCategory::create(['convenio_id' => $this->convenio->id, 'name' => 'Cocinero', 'group_code' => '1']);
-        $employee = $this->employee(jobCategoryId: $cat->id);
+        $g1 = $this->node('Grupo 1', '1');
+        $employee = $this->employee(jobCategoryId: $cat->id, groupId: $g1->id);
         ReferenceFact::create($this->factAttrs(value: 'convenio-wide 70 días', status: 'verified'));
-        ReferenceFact::create($this->factAttrs(value: 'Grupo 1: 80 días', status: 'verified', groupLabel: 'Grupo 1'));
+        $this->bind($this->verifiedFact('Grupo 1: 80 días', 'Grupo 1', null), $g1);
         ReferenceFact::create($this->factAttrs(value: 'categoría: 95 días', status: 'verified', jobCategoryId: $cat->id));
 
         $out = app(ReferenceFactAnswerService::class)->answer($employee, $this->topic->id, Carbon::today());
         $this->assertSame('answer', $out['outcome']);
         $this->assertStringContainsString('95 días', $out['answer']);
         $this->assertSame('job_category', $out['reference_fact']['match_kind']);
+    }
+
+    // ---- Sprint 7f (ADR-0028): the exact matcher, tests (a)–(h) -------------
+    //
+    // Built on a convenio-21-shaped fixture: G1 undivided, G2 split into
+    // "área 5" / "resto áreas", G3 undivided, and NO job categories — the real
+    // shape of the convenio this sprint exists for. The compound fact is the
+    // one that broke the old matcher.
+
+    /**
+     * (a) The bug, stated as a test. The employee is in "resto áreas"; the
+     * 90-day fact's label is "Grupo 1 (todas las áreas) y Grupo 2 (área 5)".
+     * The old digit matcher found "2" in that string and answered 90 días to
+     * someone the convenio gives 60. Confident, cited, wrong.
+     */
+    public function test_a_employee_in_resto_areas_gets_60_never_the_area_5_value(): void
+    {
+        $f = $this->navarra();
+        $employee = $this->employee(groupId: $f['resto']->id);
+
+        $out = app(ReferenceFactAnswerService::class)->answer($employee, $this->topic->id, Carbon::today());
+
+        $this->assertSame('answer', $out['outcome']);
+        $this->assertStringContainsString('60 días', $out['answer']);
+        $this->assertStringNotContainsString('90 días', $out['answer'], 'the exact 7b-2 bug');
+        $this->assertSame('group', $out['reference_fact']['match_kind']);
+        $this->assertSame($f['resto']->id, $out['reference_fact']['group_node_id']);
+    }
+
+    /**
+     * (b) The employee is known only to the group level, but the convenio pays
+     * differently by sub-area. There is no answer that is both correct and
+     * specific, so the only honest move is to escalate.
+     */
+    public function test_b_employee_on_a_split_parent_escalates_rather_than_picking_a_slice(): void
+    {
+        $f = $this->navarra();
+        $employee = $this->employee(groupId: $f['g2']->id);
+
+        $out = app(ReferenceFactAnswerService::class)->answer($employee, $this->topic->id, Carbon::today());
+
+        $this->assertSame('escalate', $out['outcome']);
+        $this->assertSame('reference_fact_coverage_gap', $out['escalation_reason']);
+        $this->assertStringContainsString('sub-area', (string) $out['reference_fact']['note']);
+    }
+
+    /**
+     * (c) The case a single `group_id` column on `reference_facts` could not
+     * have served: one fact, two groups, and this employee is in the other one.
+     */
+    public function test_c_employee_in_grupo_1_gets_90_from_the_compound_fact(): void
+    {
+        $f = $this->navarra();
+        $employee = $this->employee(groupId: $f['g1']->id);
+
+        $out = app(ReferenceFactAnswerService::class)->answer($employee, $this->topic->id, Carbon::today());
+
+        $this->assertSame('answer', $out['outcome']);
+        $this->assertStringContainsString('90 días', $out['answer']);
+        $this->assertSame($f['g1']->id, $out['reference_fact']['group_node_id']);
+    }
+
+    /** (d) An undivided group matches on the group alone — same comparison, no special case. */
+    public function test_d_an_undivided_group_matches_on_the_group(): void
+    {
+        $g1 = $this->node('Grupo 1', '1');
+        $employee = $this->employee(groupId: $g1->id);
+        $this->bind($this->verifiedFact('Grupo 1: 30 días', 'Grupo 1', null), $g1);
+
+        $out = app(ReferenceFactAnswerService::class)->answer($employee, $this->topic->id, Carbon::today());
+
+        $this->assertSame('answer', $out['outcome']);
+        $this->assertStringContainsString('30 días', $out['answer']);
+    }
+
+    /**
+     * (e) A `group_label` nobody has bound is a claim nobody has vouched for.
+     * It cannot match Tier 2 (no nodes) and cannot satisfy Tier 3 (which needs
+     * a null label), so it escalates — the label alone never answers.
+     */
+    public function test_e_a_fact_with_a_label_but_no_binding_is_never_group_matchable(): void
+    {
+        $g1 = $this->node('Grupo 1', '1');
+        $employee = $this->employee(groupId: $g1->id);
+        $this->verifiedFact('Grupo 1: 90 días', 'Grupo 1', null); // deliberately unbound
+
+        $out = app(ReferenceFactAnswerService::class)->answer($employee, $this->topic->id, Carbon::today());
+
+        $this->assertSame('escalate', $out['outcome']);
+        $this->assertSame('reference_fact_coverage_gap', $out['escalation_reason']);
+    }
+
+    /** (f) "Grupo 12" is not group 1 and not group 2. The regex that thought otherwise is gone. */
+    public function test_f_grupo_12_matches_neither_grupo_1_nor_grupo_2(): void
+    {
+        $g1 = $this->node('Grupo 1', '1');
+        $g2 = $this->node('Grupo 2', '2');
+        $g12 = $this->node('Grupo 12', '12');
+        $this->bind($this->verifiedFact('Grupo 12: 120 días', 'Grupo 12', null), $g12);
+
+        foreach ([$g1, $g2] as $node) {
+            $out = app(ReferenceFactAnswerService::class)
+                ->answer($this->employee(groupId: $node->id), $this->topic->id, Carbon::today());
+            $this->assertSame('escalate', $out['outcome'], "node {$node->label} must not match Grupo 12");
+        }
+    }
+
+    /**
+     * (g) The compound fact is ONE fact reached from two nodes — not two copies
+     * that could drift apart. Same value, same citation, from either side.
+     */
+    public function test_g_the_compound_fact_reads_identically_from_both_of_its_nodes(): void
+    {
+        $f = $this->navarra();
+
+        $fromG1 = app(ReferenceFactAnswerService::class)
+            ->answer($this->employee(groupId: $f['g1']->id), $this->topic->id, Carbon::today());
+        $fromArea5 = app(ReferenceFactAnswerService::class)
+            ->answer($this->employee(groupId: $f['area5']->id), $this->topic->id, Carbon::today());
+
+        $this->assertSame($fromG1['answer'], $fromArea5['answer']);
+        $this->assertSame($fromG1['citations'], $fromArea5['citations']);
+        $this->assertSame($fromG1['reference_fact']['fact_id'], $fromArea5['reference_fact']['fact_id']);
+        // The node differs — that is the only thing that should.
+        $this->assertNotSame(
+            $fromG1['reference_fact']['group_node_id'],
+            $fromArea5['reference_fact']['group_node_id'],
+        );
+    }
+
+    /**
+     * (h) The no-regression case, and the one that covers every real profile on
+     * the day this ships: with no group node, the ladder behaves exactly as it
+     * did before 7f — Tier 2 is skipped and Tier 3 answers.
+     */
+    public function test_h_an_employee_with_no_group_node_behaves_exactly_as_before(): void
+    {
+        $f = $this->navarra();
+        ReferenceFact::create($this->factAttrs(value: 'convenio-wide 70 días', status: 'verified'));
+        $employee = $this->employee(); // convenio_group_id null, as all 1,500 real profiles are
+
+        $out = app(ReferenceFactAnswerService::class)->answer($employee, $this->topic->id, Carbon::today());
+
+        $this->assertSame('answer', $out['outcome']);
+        $this->assertStringContainsString('70 días', $out['answer']);
+        $this->assertSame('convenio_wide', $out['reference_fact']['match_kind']);
+        $this->assertArrayNotHasKey('group_node_id', $out['reference_fact'],
+            'the trace shape of a non-group answer must not change');
+        $this->assertNotNull($f['g2']); // the tree exists and is simply not consulted
+    }
+
+    /**
+     * Rule (3), the mirror of (b): the employee's sub-area is known, but the
+     * FACT claims a group the convenio has since split. The ambiguity is on the
+     * fact's side this time, and the outcome is the same.
+     */
+    public function test_a_group_level_fact_on_a_split_group_does_not_answer_a_sub_area_employee(): void
+    {
+        $g2 = $this->node('Grupo 2', '2');
+        $area5 = $this->node('área 5', 'area-5', $g2);
+        $this->node('resto áreas', 'resto-areas', $g2);
+        $this->bind($this->verifiedFact('Grupo 2: 60 días', 'Grupo 2', null), $g2);
+        $employee = $this->employee(groupId: $area5->id);
+
+        $out = app(ReferenceFactAnswerService::class)->answer($employee, $this->topic->id, Carbon::today());
+
+        $this->assertSame('escalate', $out['outcome']);
+        $this->assertStringContainsString('ambiguous', (string) $out['reference_fact']['note']);
+    }
+
+    /**
+     * The hard stop, stated on its own: an indeterminate scope must not fall
+     * through to a convenio-wide answer. Tier 3 has a perfectly good fact here
+     * and Tier 2 still refuses — because answering convenio-wide would be less
+     * specific than the evidence, delivered with the same confidence.
+     */
+    public function test_an_indeterminate_group_does_not_fall_through_to_the_convenio_wide_fact(): void
+    {
+        $f = $this->navarra();
+        ReferenceFact::create($this->factAttrs(value: 'convenio-wide 70 días', status: 'verified'));
+        $employee = $this->employee(groupId: $f['g2']->id);
+
+        $out = app(ReferenceFactAnswerService::class)->answer($employee, $this->topic->id, Carbon::today());
+
+        $this->assertSame('escalate', $out['outcome']);
+        $this->assertStringNotContainsString('70 días', (string) ($out['answer'] ?? ''));
+    }
+
+    /**
+     * A node rejected out from under an assigned employee is not a match and
+     * not an escalation: the ladder continues as if no group were set, which is
+     * where a null node already lands. Rejecting a node must not start
+     * escalating turns that used to answer.
+     */
+    public function test_a_rejected_node_lands_where_a_null_node_lands(): void
+    {
+        $g1 = $this->node('Grupo 1', '1');
+        $employee = $this->employee(groupId: $g1->id);
+        $this->bind($this->verifiedFact('Grupo 1: 90 días', 'Grupo 1', null), $g1);
+        ReferenceFact::create($this->factAttrs(value: 'convenio-wide 70 días', status: 'verified'));
+
+        $g1->update(['status' => ConvenioGroup::STATUS_REJECTED]);
+
+        $out = app(ReferenceFactAnswerService::class)->answer($employee, $this->topic->id, Carbon::today());
+
+        $this->assertSame('answer', $out['outcome']);
+        $this->assertStringContainsString('70 días', $out['answer']);
+        $this->assertSame('convenio_wide', $out['reference_fact']['match_kind']);
     }
 
     // ---- Two-verified-match safe rule ---------------------------------------
@@ -231,19 +452,73 @@ class Sprint7cReferenceFactAnswerTest extends TestCase
 
     // ---- helpers ------------------------------------------------------------
 
-    private function employee(?int $jobCategoryId = -1): Employee
+    private function employee(?int $jobCategoryId = null, ?int $groupId = null): Employee
     {
-        // Default: create a category in the convenio so the happy path has a scope;
-        // pass null explicitly to test the unresolved-group path.
-        if ($jobCategoryId === -1) {
-            $jobCategoryId = null;
-        }
-
         return Employee::create([
             'email' => 'emp'.uniqid().'@example.com', 'full_name' => 'Empleada',
             'convenio_id' => $this->convenio->id, 'job_category_id' => $jobCategoryId,
+            'convenio_group_id' => $groupId,
             'territory_id' => $this->territory->id, 'employment_type' => 'full_time', 'status' => 'active',
         ]);
+    }
+
+    /** An APPROVED node — Tier 2 only ever compares against approved structure. */
+    private function node(string $label, string $code, ?ConvenioGroup $parent = null): ConvenioGroup
+    {
+        return ConvenioGroup::create([
+            'convenio_id' => $this->convenio->id,
+            'parent_id' => $parent?->id,
+            'label' => $label,
+            'code_normalized' => $code,
+            'normalization_rule' => 'test',
+            'status' => ConvenioGroup::STATUS_APPROVED,
+            'source' => 'admin_manual',
+        ]);
+    }
+
+    private function bind(ReferenceFact $fact, ConvenioGroup ...$nodes): ReferenceFact
+    {
+        foreach ($nodes as $node) {
+            ReferenceFactGroupScope::create([
+                'reference_fact_id' => $fact->id,
+                'convenio_group_id' => $node->id,
+                'bound_at' => now(),
+            ]);
+        }
+
+        return $fact;
+    }
+
+    /**
+     * Convenio 21's real shape: G1 and G3 undivided, G2 split into "área 5" and
+     * "resto áreas", no job categories. The 90-day fact is COMPOUND — one fact,
+     * bound to G1 and to G2›área 5 — which is why facts bind through a join
+     * table instead of carrying a single group id.
+     *
+     * @return array{g1: ConvenioGroup, g2: ConvenioGroup, g3: ConvenioGroup, area5: ConvenioGroup, resto: ConvenioGroup}
+     */
+    private function navarra(): array
+    {
+        $g1 = $this->node('Grupo 1', '1');
+        $g2 = $this->node('Grupo 2', '2');
+        $g3 = $this->node('Grupo 3', '3');
+        $area5 = $this->node('área 5', 'area-5', $g2);
+        $resto = $this->node('resto áreas', 'resto-areas', $g2);
+
+        $this->bind(
+            $this->verifiedFact('90 días (indefinidos), 75 días (temporales > 3 meses), 60 días (hasta 3 meses)',
+                'Grupo 1 (todas las áreas) y Grupo 2 (área 5)', null),
+            $g1, $area5,
+        );
+        $this->bind(
+            $this->verifiedFact('60 días (indefinidos), 45 días (temporales > 3 meses), 30 días (hasta 3 meses)',
+                'Grupo 2 (resto áreas)', null),
+            $resto,
+        );
+        $this->bind($this->verifiedFact('45 días (indefinidos), 30 días (temporales > 3 meses)',
+            'Grupo 3 (todas las áreas)', null), $g3);
+
+        return ['g1' => $g1, 'g2' => $g2, 'g3' => $g3, 'area5' => $area5, 'resto' => $resto];
     }
 
     private function verifiedFact(string $value, ?string $group, ?int $jobCategory): ReferenceFact

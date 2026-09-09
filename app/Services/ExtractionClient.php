@@ -407,6 +407,55 @@ class ExtractionClient
     }
 
     /**
+     * Propose ONE convenio's group structure (Sprint 7f, ADR-0028). hr-ai READS
+     * the convenio's own text plus its EXISTING categories (a closed set —
+     * `group_code` is evidence only, never truth) plus the `group_label` strings
+     * its verified facts already use, and RETURNS a proposed two-level tree with
+     * a justifying excerpt per node. It writes nothing and never migrates
+     * (ADR-0007).
+     *
+     * hr-backend persists every node as `ai_agent`/`needs_review`, so nothing
+     * proposed here is comparable by the answer path until a human approves it,
+     * and NO AI RUNS AT ANSWER TIME — this is a one-off structural read.
+     *
+     * Returns { groups:[...], trace_fragment } or, on a provider/transport
+     * failure, { groups:[], error } so the caller leaves the convenio without a
+     * proposal. That is the safe state: the existing matcher is untouched until a
+     * human approves a tree, so a failure here degrades to "no structure yet",
+     * never to a wrong scope.
+     *
+     * @param  array<string,mixed>  $convenio  id, name, numero, aliases, territory/sector names
+     *                                         and aliases, and job_categories
+     * @param  list<string>  $observedGroupLabels
+     * @param  array{provider:string,model:string,endpoint:?string}  $providerConfig
+     * @return array<string,mixed>
+     */
+    public function proposeGroups(
+        array $convenio,
+        string $pagesText,
+        array $observedGroupLabels,
+        string $decryptedKey,
+        array $providerConfig,
+    ): array {
+        $response = Http::withHeaders(['X-Internal-Token' => $this->token()])
+            ->timeout(180) // a whole convenio's text is a large prompt
+            ->acceptJson()
+            ->post("{$this->base()}/propose-groups", [
+                'convenio' => $convenio,
+                'pages_text' => $pagesText,
+                'observed_group_labels' => $observedGroupLabels,
+                'provider_api_key' => $decryptedKey,
+                'provider_config' => $providerConfig,
+            ]);
+
+        if (! $response->successful()) {
+            return ['groups' => [], 'error' => 'propose_groups_unavailable', 'detail' => "hr-ai /propose-groups failed ({$response->status()})"];
+        }
+
+        return $response->json();
+    }
+
+    /**
      * OCR one already-rendered page image (Sprint 7e, ADR-0026, review.md §2.1/
      * §2.2). hr-ai reuses the page image already written at `$imageKey` — never
      * re-renders — calls the vision provider, writes the S3 sidecar

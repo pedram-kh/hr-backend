@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Support\Str;
 
 /**
@@ -94,6 +95,23 @@ class ReferenceFact extends Model
     public function jobCategory(): BelongsTo
     {
         return $this->belongsTo(ConvenioJobCategory::class, 'job_category_id');
+    }
+
+    /**
+     * Sprint 7f (ADR-0028) — the structured group scope(s) this fact applies to.
+     *
+     * MANY, not one: fact "Grupo 1 (todas las áreas) y Grupo 2 (área 5)" binds to
+     * two nodes. Tier 2 matches when ANY bound node matches the employee's.
+     *
+     * No rows = UNBOUND, which is every fact's state until a human binds it, and
+     * the state a group-scoped question must escalate on. Note this adds no
+     * column to `reference_facts`: `group_label` is untouched, still the printed
+     * provenance string and still part of `LOGICAL_KEY`.
+     */
+    public function groupScopes(): BelongsToMany
+    {
+        return $this->belongsToMany(ConvenioGroup::class, 'reference_fact_group_scopes', 'reference_fact_id', 'convenio_group_id')
+            ->withPivot(['bound_by', 'bound_at']);
     }
 
     public function topic(): BelongsTo

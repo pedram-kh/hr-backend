@@ -4,9 +4,11 @@ namespace App\Services;
 
 use App\Models\Admin;
 use App\Models\Convenio;
+use App\Models\ConvenioGroup;
 use App\Models\ConvenioJobCategory;
 use App\Models\Employee;
 use App\Models\Territory;
+use App\Support\GroupCodeNormalizer;
 use App\Support\TextNormalizer;
 use Illuminate\Support\Facades\DB;
 
@@ -24,6 +26,85 @@ use Illuminate\Support\Facades\DB;
 class EmployeeCsvImporter
 {
     private const REQUIRED_HEADERS = ['email', 'full_name', 'convenio_numero'];
+
+    /**
+     * Sprint 7f (ADR-0028) — resolve the optional `group` column to ONE approved
+     * node in this convenio.
+     *
+     * A sub-area is addressed as `Grupo 2 > resto áreas`. The `>` separator is
+     * explicit so no delimiter is ever guessed, and either side may be written as
+     * the printed label ("Grupo 2", "resto áreas") or the normalized code ("2",
+     * "resto-areas") — `GroupCodeNormalizer` collapses both onto the same key, so
+     * "Grupo I" and "Grupo 1" address the same node.
+     *
+     * AMBIGUITY IS AN ERROR, NOT A CHOICE. "todas las áreas" can legitimately
+     * exist under Grupo 1 and Grupo 3, and a bare reference to it must fail the
+     * row with both options named rather than silently pick the first. That is
+     * the same discipline as the matcher itself: never guess a scope.
+     *
+     * @return array{0: ?ConvenioGroup, 1: ?string} [node, error message]
+     */
+    private function resolveGroup(Convenio $convenio, string $raw): array
+    {
+        $parts = array_values(array_filter(array_map('trim', explode('>', $raw)), fn ($p) => $p !== ''));
+
+        if ($parts === []) {
+            return [null, "Grupo \"{$raw}\" no válido."];
+        }
+        if (count($parts) > 2) {
+            return [null, "Grupo \"{$raw}\" no válido: solo hay dos niveles (p. ej. \"Grupo 2 > resto áreas\")."];
+        }
+
+        $nodes = ConvenioGroup::approved()
+            ->where('convenio_id', $convenio->id)
+            ->with('parent:id,label')
+            ->get();
+
+        if ($nodes->isEmpty()) {
+            return [null, 'El convenio no tiene grupos aprobados todavía: deja "group" en blanco o aprueba la estructura primero.'];
+        }
+
+        // Match on the normalized CODE or on the printed LABEL — same
+        // normalized-key comparison the `job_category` column already uses.
+        $match = function ($candidates, string $needle) {
+            $code = GroupCodeNormalizer::normalize($needle);
+            $labelKey = TextNormalizer::key($needle);
+
+            return $candidates->filter(fn (ConvenioGroup $g) => ($code !== '' && $g->code_normalized === $code)
+                || TextNormalizer::key($g->label) === $labelKey)->values();
+        };
+
+        if (count($parts) === 2) {
+            $roots = $match($nodes->whereNull('parent_id'), $parts[0]);
+            if ($roots->count() !== 1) {
+                return [null, $roots->isEmpty()
+                    ? "Grupo \"{$parts[0]}\" no existe en el convenio."
+                    : "Grupo \"{$parts[0]}\" es ambiguo en el convenio."];
+            }
+
+            $parent = $roots->first();
+            $children = $match($nodes->where('parent_id', $parent->id), $parts[1]);
+            if ($children->count() !== 1) {
+                return [null, $children->isEmpty()
+                    ? "El área \"{$parts[1]}\" no existe dentro de \"{$parent->label}\"."
+                    : "El área \"{$parts[1]}\" es ambigua dentro de \"{$parent->label}\"."];
+            }
+
+            return [$children->first(), null];
+        }
+
+        $found = $match($nodes, $parts[0]);
+        if ($found->count() === 1) {
+            return [$found->first(), null];
+        }
+        if ($found->isEmpty()) {
+            return [null, "Grupo \"{$raw}\" no existe en el convenio (o no está aprobado)."];
+        }
+
+        $options = $found->map(fn (ConvenioGroup $g) => $g->pathLabel())->implode(' | ');
+
+        return [null, "Grupo \"{$raw}\" es ambiguo ({$options}): indícalo como \"Grupo X > área\"."];
+    }
 
     /** Validate-only (dry run): the full per-row report, writes nothing. */
     public function validate(array $rows): array
@@ -165,6 +246,20 @@ class EmployeeCsvImporter
                 }
             }
 
+            // Sprint 7f (ADR-0028) — group scope: optional; if given, must resolve to
+            // ONE APPROVED node within the convenio. Blank leaves the employee
+            // unresolved, which is the normal state and simply means a group-scoped
+            // question escalates. An unmatched value is a ROW ERROR in the report —
+            // never a silent null, and never a minted group.
+            $groupRaw = $get($row, 'group');
+            $convenioGroup = null;
+            if ($groupRaw !== '' && $convenio !== null) {
+                [$convenioGroup, $groupError] = $this->resolveGroup($convenio, $groupRaw);
+                if ($groupError !== null) {
+                    $errors[] = $groupError;
+                }
+            }
+
             // Employment type: default full_time when blank; validate when present.
             $employmentRaw = strtolower($get($row, 'employment_type'));
             $employmentType = match ($employmentRaw) {
@@ -202,6 +297,7 @@ class EmployeeCsvImporter
                     'employee_external_id' => $get($row, 'employee_external_id') ?: null,
                     'convenio_id' => $convenio->id,
                     'job_category_id' => $jobCategory?->id,
+                    'convenio_group_id' => $convenioGroup?->id,
                     'territory_id' => $territory->id,
                     'work_location' => $get($row, 'work_location') ?: null,
                     'employment_type' => $employmentType,

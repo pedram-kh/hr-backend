@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\Admin;
+use App\Models\ConvenioGroup;
 use App\Models\ConvenioJobCategory;
 use App\Models\Employee;
 use App\Models\EmployeeAuditLog;
@@ -32,7 +34,7 @@ class EmployeeDirectoryController extends Controller
     public function index(Request $request): JsonResponse
     {
         $query = Employee::query()
-            ->with(['convenio:id,numero,name,territory_id,sector_id', 'territory:id,code,name,level', 'jobCategory:id,name,group_code']);
+            ->with(['convenio:id,numero,name,territory_id,sector_id', 'territory:id,code,name,level', 'jobCategory:id,name,group_code', 'convenioGroup:id,parent_id,label,code_normalized', 'convenioGroup.parent:id,label']);
 
         if ($request->filled('q')) {
             $q = trim((string) $request->string('q'));
@@ -63,7 +65,7 @@ class EmployeeDirectoryController extends Controller
     /** Employee detail + the employee_audit_log timeline. */
     public function show(string $uuid): JsonResponse
     {
-        $employee = Employee::with(['convenio:id,numero,name', 'territory:id,code,name,level', 'jobCategory:id,name,group_code'])
+        $employee = Employee::with(['convenio:id,numero,name', 'territory:id,code,name,level', 'jobCategory:id,name,group_code', 'convenioGroup:id,parent_id,label,code_normalized', 'convenioGroup.parent:id,label'])
             ->where('uuid', $uuid)
             ->firstOrFail();
 
@@ -92,7 +94,7 @@ class EmployeeDirectoryController extends Controller
     {
         $data = $this->validatePayload($request, null);
 
-        /** @var \App\Models\Admin $actor */
+        /** @var Admin $actor */
         $actor = $request->user();
 
         $employee = DB::transaction(function () use ($data, $actor) {
@@ -127,7 +129,7 @@ class EmployeeDirectoryController extends Controller
             ], 409);
         }
 
-        /** @var \App\Models\Admin $actor */
+        /** @var Admin $actor */
         $actor = $request->user();
 
         $employee = DB::transaction(function () use ($employee, $data, $actor) {
@@ -159,7 +161,7 @@ class EmployeeDirectoryController extends Controller
     {
         $employee = Employee::where('uuid', $uuid)->firstOrFail();
 
-        /** @var \App\Models\Admin $actor */
+        /** @var Admin $actor */
         $actor = $request->user();
 
         $employee = DB::transaction(function () use ($employee, $actor) {
@@ -193,7 +195,7 @@ class EmployeeDirectoryController extends Controller
             return response()->json(['message' => 'Sube un archivo CSV (campo "file").'], 422);
         }
 
-        /** @var \App\Models\Admin $actor */
+        /** @var Admin $actor */
         $actor = $request->user();
 
         return response()->json($importer->apply($rows, $actor));
@@ -242,6 +244,7 @@ class EmployeeDirectoryController extends Controller
             'employee_external_id' => ['nullable', 'string', 'max:255'],
             'convenio_id' => ['required', 'integer', 'exists:convenios,id'],
             'job_category_id' => ['nullable', 'integer', 'exists:convenio_job_categories,id'],
+            'convenio_group_id' => ['nullable', 'integer', 'exists:convenio_groups,id'],
             'territory_id' => ['required', 'integer', 'exists:territories,id'],
             'work_location' => ['nullable', 'string', 'max:255'],
             'employment_type' => ['required', Rule::in(['full_time', 'part_time'])],
@@ -262,6 +265,29 @@ class EmployeeDirectoryController extends Controller
             }
         }
 
+        // Sprint 7f (ADR-0028) — the group node must belong to the chosen convenio
+        // AND be approved. Same shape as the category rule above, with the extra
+        // status condition: a `needs_review` node is an AI proposal, and binding an
+        // employee to unapproved structure would route around the human gate this
+        // whole sprint is built on.
+        if (! empty($data['convenio_group_id'])) {
+            $group = ConvenioGroup::find($data['convenio_group_id']);
+
+            if ($group === null || $group->convenio_id !== (int) $data['convenio_id']) {
+                abort(response()->json([
+                    'message' => 'El grupo no pertenece al convenio seleccionado.',
+                    'errors' => ['convenio_group_id' => ['El grupo no pertenece al convenio.']],
+                ], 422));
+            }
+
+            if ($group->status !== ConvenioGroup::STATUS_APPROVED) {
+                abort(response()->json([
+                    'message' => 'Ese grupo todavía no está aprobado.',
+                    'errors' => ['convenio_group_id' => ['El grupo debe estar aprobado antes de asignarlo.']],
+                ], 422));
+            }
+        }
+
         return $data;
     }
 
@@ -277,6 +303,7 @@ class EmployeeDirectoryController extends Controller
             'employee_external_id' => $data['employee_external_id'] ?? null,
             'convenio_id' => $data['convenio_id'],
             'job_category_id' => $data['job_category_id'] ?? null,
+            'convenio_group_id' => $data['convenio_group_id'] ?? null,
             'territory_id' => $data['territory_id'],
             'work_location' => $data['work_location'] ?? null,
             'employment_type' => $data['employment_type'],
@@ -296,6 +323,7 @@ class EmployeeDirectoryController extends Controller
             'convenio' => $e->convenio ? ['id' => $e->convenio->id, 'numero' => $e->convenio->numero, 'name' => $e->convenio->name] : null,
             'territory' => $e->territory ? ['id' => $e->territory->id, 'code' => $e->territory->code, 'name' => $e->territory->name] : null,
             'job_category' => $e->jobCategory ? ['id' => $e->jobCategory->id, 'name' => $e->jobCategory->name] : null,
+            'convenio_group' => $this->groupRow($e),
             'employment_type' => $e->employment_type,
             'profile_last_reviewed_at' => $e->profile_last_reviewed_at?->toIso8601String(),
         ];
@@ -311,6 +339,7 @@ class EmployeeDirectoryController extends Controller
             'employee_external_id' => $e->employee_external_id,
             'convenio' => $e->convenio ? ['id' => $e->convenio->id, 'numero' => $e->convenio->numero, 'name' => $e->convenio->name] : null,
             'job_category' => $e->jobCategory ? ['id' => $e->jobCategory->id, 'name' => $e->jobCategory->name, 'group_code' => $e->jobCategory->group_code] : null,
+            'convenio_group' => $this->groupRow($e),
             'territory' => $e->territory ? ['id' => $e->territory->id, 'code' => $e->territory->code, 'name' => $e->territory->name, 'level' => $e->territory->level] : null,
             'work_location' => $e->work_location,
             'employment_type' => $e->employment_type,
@@ -320,7 +349,33 @@ class EmployeeDirectoryController extends Controller
             // Raw FK ids for the edit drawer's pickers.
             'convenio_id' => $e->convenio_id,
             'job_category_id' => $e->job_category_id,
+            'convenio_group_id' => $e->convenio_group_id,
             'territory_id' => $e->territory_id,
+        ];
+    }
+
+    /**
+     * Sprint 7f — the employee's group scope for the list/detail rows.
+     *
+     * Null is the normal, expected state and the UI says so explicitly ("sin
+     * grupo") rather than leaving a blank cell, because unresolved is what makes
+     * a group-scoped question escalate — an admin should be able to see at a
+     * glance which employees that applies to.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function groupRow(Employee $e): ?array
+    {
+        if ($e->convenioGroup === null) {
+            return null;
+        }
+
+        return [
+            'id' => $e->convenioGroup->id,
+            'label' => $e->convenioGroup->label,
+            'path_label' => $e->convenioGroup->pathLabel(),
+            'code_normalized' => $e->convenioGroup->code_normalized,
+            'is_sub_area' => $e->convenioGroup->isSubArea(),
         ];
     }
 }

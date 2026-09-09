@@ -13,7 +13,7 @@ class Employee extends Model
 
     protected $fillable = [
         'uuid', 'email', 'full_name', 'employee_external_id',
-        'convenio_id', 'job_category_id', 'territory_id',
+        'convenio_id', 'job_category_id', 'convenio_group_id', 'territory_id',
         'work_location', 'employment_type', 'start_date', 'status',
         'profile_last_reviewed_at',
     ];
@@ -40,6 +40,19 @@ class Employee extends Model
     public function jobCategory(): BelongsTo
     {
         return $this->belongsTo(ConvenioJobCategory::class, 'job_category_id');
+    }
+
+    /**
+     * Sprint 7f — the employee's structured group scope: a group ("Grupo 1") or a
+     * sub-area of one ("Grupo 2 › resto áreas").
+     *
+     * NULL means UNRESOLVED, and unresolved escalates — the answer path never
+     * guesses a group. It is only ever set by an admin saving the directory form
+     * or by a CSV import row that names a node explicitly; it is never derived.
+     */
+    public function convenioGroup(): BelongsTo
+    {
+        return $this->belongsTo(ConvenioGroup::class, 'convenio_group_id');
     }
 
     public function territory(): BelongsTo
