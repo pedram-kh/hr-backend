@@ -31,4 +31,19 @@ class Convenio extends Model
     {
         return $this->hasMany(ConvenioJobCategory::class);
     }
+
+    /**
+     * Sprint 7f — every node of this convenio's group structure, both levels.
+     * Filter with `->approved()` for anything user-facing; proposals are inert.
+     */
+    public function groups(): HasMany
+    {
+        return $this->hasMany(ConvenioGroup::class);
+    }
+
+    /** Top-level groups only, each with its sub-areas — the shape the picker renders. */
+    public function groupTree(): HasMany
+    {
+        return $this->groups()->whereNull('parent_id')->with('children');
+    }
 }

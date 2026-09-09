@@ -30,6 +30,11 @@ use Illuminate\Support\Facades\Log;
  * converted PDF grid (15 and 3): one whose source prints a monthly, one whose
  * source prints only an annual — the two answer shapes ADR-0027 distinguishes.
  *
+ * Sprint 7f adds the two reference-fact SCOPE profiles (both deliberately with
+ * NO job category): Hostelería Navarra (21) for the group-scoped case that must
+ * escalate before Phase 3 and answer exactly after it, and Actividades
+ * Deportivas Álava (2) for the convenio-wide Tier-3 case.
+ *
  * The super_admin used by the "Answer model" key screen is seeded by
  * TestUserSeeder (admin@example.com).
  */
@@ -108,6 +113,41 @@ class ChatTestUserSeeder extends Seeder
             email: 'test-deporte-estatal@example.com',
             name: 'Test Instalaciones Deportivas Estatal (convenio 9)',
             convenio: $this->byNumero('99015105012005') ?? $this->byName('INSTALACIONES DEPORTIVAS', 'Estatal'),
+        );
+
+        // Sprint 7f — the two reference-fact scope profiles.
+        //
+        // Hostelería Navarra (convenio 21) is THE 7f case: the convenio splits
+        // Grupo 2 into `área 5` (90/75/60 días) and `resto áreas` (60/45/30), a
+        // distinction that lived only as prose inside `group_label` until 7f made
+        // it structured. It has ZERO `convenio_job_categories` (no salary .xlsx
+        // ever minted any), so this employee CANNOT resolve a group through
+        // `job_category.group_code` — which is precisely the point:
+        //  - before Phase 3 it is the group-less baseline: a verified group-scoped
+        //    fact must ESCALATE `reference_fact_coverage_gap`, never guess;
+        //  - after Phase 3 it is the live proof, once an admin sets its structured
+        //    group to Grupo 2 › resto áreas (60/45/30) or Grupo 1 (90/75/60).
+        // `resolveCategory: false` is explicit rather than incidental: nothing may
+        // quietly bind a category here later and make the group resolvable again.
+        $this->seedEmployee(
+            email: 'test-hosteleria-navarra@example.com',
+            name: 'Test Hostelería Navarra (convenio 21)',
+            convenio: $this->byNumero('31003805011981') ?? $this->byName('HOSTELERIA', 'Navarra'),
+            jobCategoryId: null,
+            resolveCategory: false,
+        );
+
+        // Actividades Deportivas Álava (convenio 2) carries a CONVENIO-WIDE periodo
+        // de prueba fact (no group, no category — "no podrá exceder de dos meses en
+        // ningún caso"). It is the Tier-3 counterpart to the profile above: the
+        // check that a convenio-wide verified fact still answers `path:
+        // reference_fact` for an employee with no group at all.
+        $this->seedEmployee(
+            email: 'test-deportivas-alava@example.com',
+            name: 'Test Actividades Deportivas Álava (convenio 2)',
+            convenio: $this->byNumero('01003205012006') ?? $this->byName('ACTIVIDADES DEPORTIVAS', 'lava'),
+            jobCategoryId: null,
+            resolveCategory: false,
         );
 
         // A generic active-convenio employee for the sensitive-topic + floor gates.
