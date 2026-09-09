@@ -2,9 +2,11 @@
 
 namespace App\Services;
 
+use App\Models\ConvenioGroup;
 use App\Models\Document;
 use App\Models\Employee;
 use App\Models\ReferenceFact;
+use App\Models\ReferenceFactGroupScope;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 
@@ -24,7 +26,9 @@ use Illuminate\Support\Collection;
  *
  * SCOPE RESOLUTION (Q2) — MOST-SPECIFIC, ELSE ESCALATE, never guess:
  *   1. a fact matching the employee's job_category_id (the finest scope), else
- *   2. a fact matching the employee's CONFIDENTLY-resolved group, else
+ *   2. a fact bound to the employee's APPROVED group node — an integer id
+ *      comparison, no text parsed at answer time (Sprint 7f, ADR-0028); an
+ *      indeterminate scope escalates here rather than falling to 3, else
  *   3. the convenio-wide fact (null job_category_id AND null group_label), else
  *   4. escalate — a confident wrong-group answer is the exact 7b-2 failure mode;
  *      a coverage-gap escalation is the safe outcome.
@@ -100,12 +104,27 @@ class ReferenceFactAnswerService
             }
         }
 
-        // Tier 2 — the employee's CONFIDENTLY-resolved group (else skip — never guess).
-        $groupCode = $this->resolveEmployeeGroupCode($employee);
-        if ($groupCode !== null) {
-            $byGroup = $candidates->filter(fn (ReferenceFact $f) => $this->factMatchesGroup($f, $groupCode))->values();
-            if ($byGroup->isNotEmpty()) {
-                return $this->resolveAndAnswer($byGroup, $rf, 'group_label', $groupCode);
+        // Tier 2 — the employee's APPROVED group node, compared by id (7f/ADR-0028).
+        // Skipped entirely when the employee has no node, exactly as before: on
+        // day one every real profile has `convenio_group_id = null`, so this tier
+        // is inert until an admin assigns one.
+        if ($employee->convenio_group_id !== null) {
+            $group = $this->matchByGroupNode($candidates, $employee->convenio_group_id);
+
+            // A hard stop, not a skip. Once a bound node proves the employee's
+            // scope indeterminate, falling through to Tier 3 would answer
+            // convenio-wide — less specific than the evidence we can see, and
+            // stated with the same confidence. This is the one place the ladder's
+            // "else continue" shape changes, and it changes toward escalation.
+            if ($group['escalate'] !== null) {
+                $rf['match_kind'] = 'group';
+                $rf['group_node_id'] = $employee->convenio_group_id;
+
+                return $this->escalate($rf, $group['escalate']);
+            }
+
+            if ($group['facts']->isNotEmpty()) {
+                return $this->resolveAndAnswer($group['facts'], $rf, 'group', $group['node']);
             }
         }
 
@@ -124,19 +143,22 @@ class ReferenceFactAnswerService
     /**
      * Apply the two-verified-match safe rule (most-recent validity; else escalate
      * on a genuine same-validity conflict) and compose the answer for the chosen
-     * fact. `$matchKind` ∈ job_category | group_label | convenio_wide.
+     * fact. `$matchKind` ∈ job_category | group | convenio_wide.
      *
      * @param  Collection<int, ReferenceFact>  $tier
      * @param  array<string,mixed>  $rf
      * @return array{outcome:string, answer:string, citations:list<array<string,mixed>>, escalation_reason:?string, reference_fact:array<string,mixed>}
      */
-    private function resolveAndAnswer($tier, array $rf, string $matchKind, ?string $groupCode): array
+    private function resolveAndAnswer($tier, array $rf, string $matchKind, ?ConvenioGroup $node): array
     {
         [$fact, $selection] = $this->selectMostRecent($tier);
 
         if ($fact === null) {
             $rf['validity_selection'] = $selection; // 'ambiguous_conflict'
             $rf['match_kind'] = $matchKind;
+            if ($node !== null) {
+                $rf['group_node_id'] = $node->id;
+            }
 
             return $this->escalate($rf, 'two verified facts with the same most-recent validity and differing values — escalate, do not blend (resolution is 7d)');
         }
@@ -145,7 +167,16 @@ class ReferenceFactAnswerService
         $rf['value'] = $fact->value;
         $rf['validity_selection'] = $selection; // 'single' | 'most_recent_validity'
         $rf['match_kind'] = $matchKind;
-        $rf['group_label'] = $matchKind === 'group_label' ? ($fact->group_label ?? $groupCode) : $fact->group_label;
+        // `group_label` keeps carrying the FACT's printed string, for display and
+        // citation continuity; the node is what the match was actually made on,
+        // and it is recorded separately rather than folded into the label. These
+        // two can legitimately disagree — "Grupo 2 excepto área cinco" bound to
+        // "resto áreas" — and the trace should show both.
+        $rf['group_label'] = $fact->group_label;
+        if ($node !== null) {
+            $rf['group_node_id'] = $node->id;
+            $rf['group_node_label'] = $node->label;
+        }
         $rf['validity_start'] = $fact->validity_start?->toDateString();
         $rf['validity_end'] = $fact->validity_end?->toDateString();
         $rf['outcome'] = 'answer';
@@ -191,28 +222,112 @@ class ReferenceFactAnswerService
         return [$top, 'most_recent_validity'];
     }
 
-    /** The employee's group code (e.g. "1"), or null when it can't be resolved. */
-    private function resolveEmployeeGroupCode(Employee $employee): ?string
-    {
-        $code = $employee->jobCategory?->group_code;
-        $code = $code !== null ? trim((string) $code) : '';
-
-        return $code === '' ? null : $code;
-    }
-
     /**
-     * True when the fact's free-text `group_label` confidently names the
-     * employee's group code as a standalone token ("Grupo 1", "Grupos 1 y 2" both
-     * match code "1"; "Grupo 10" does NOT match code "1"). Conservative — a label
-     * that doesn't clearly name the group is not a match (Tier 4 escalates).
+     * Tier 2's comparison: the employee's approved group node against the nodes
+     * each fact is bound to. Integer equality — no strings are parsed at answer
+     * time, which is the entire point of Sprint 7f.
+     *
+     * What this replaces: `factMatchesGroup()` searched the fact's free-text
+     * `group_label` for the employee's `job_category.group_code` as a bare digit.
+     * Two independent failures, both live: nine of the corpus's 22 `group_code`
+     * values are not group codes at all (§1.2), and "Grupo 2 excepto área cinco"
+     * contains the digit 2 — so an employee in *área 5* matched the fact for
+     * everyone EXCEPT área 5, and got 60 días where the convenio says 90. A
+     * confident, cited, wrong answer, which is the worst kind.
+     *
+     * The rules, per fact, against the employee's node E:
+     *
+     *   (1) a bound node IS E                       → match
+     *   (2) a bound node is a CHILD of E            → escalate: the fact is
+     *       sub-area-specific and we only know the employee's group, so we
+     *       cannot tell which slice they are in
+     *   (3) a bound node is E's PARENT and that
+     *       parent has approved children            → escalate: the fact claims
+     *       a group the convenio has since split, so the FACT's scope is the
+     *       ambiguous one
+     *   (4) otherwise                               → no match, fall through
+     *
+     * Rule (1) is checked across all of a fact's nodes before (2)/(3), so a
+     * compound fact bound to {G1, G2›área 5} answers for an employee at G1 on
+     * the strength of its G1 binding. A fact with ZERO bound nodes can never
+     * match here — it falls to Tier 3, which requires a null `group_label`, so
+     * a group-labelled but unbound fact reaches Tier 4 and escalates. That is
+     * deliberate: an unbound label is a fact nobody has vouched for.
+     *
+     * @param  Collection<int, ReferenceFact>  $candidates
+     * @return array{facts: Collection<int, ReferenceFact>, escalate: ?string, node: ?ConvenioGroup}
      */
-    private function factMatchesGroup(ReferenceFact $fact, string $groupCode): bool
+    private function matchByGroupNode($candidates, int $employeeNodeId): array
     {
-        if ($fact->group_label === null || $fact->group_label === '') {
-            return false;
+        $none = ['facts' => collect(), 'escalate' => null, 'node' => null];
+
+        $employeeNode = ConvenioGroup::find($employeeNodeId);
+        if ($employeeNode === null || $employeeNode->status !== ConvenioGroup::STATUS_APPROVED) {
+            // A node that was rejected out from under an assigned employee. Not
+            // a match and not an escalation: the ladder continues as if no group
+            // were set, which is the same safe place a null node lands in.
+            return $none;
         }
 
-        return (bool) preg_match('/(?<!\d)'.preg_quote($groupCode, '/').'(?!\d)/u', $fact->group_label);
+        $boundByFact = ReferenceFactGroupScope::query()
+            ->whereIn('reference_fact_id', $candidates->pluck('id'))
+            ->get()
+            ->groupBy('reference_fact_id');
+
+        if ($boundByFact->isEmpty()) {
+            return $none;
+        }
+
+        $nodes = ConvenioGroup::whereIn('id', $boundByFact->flatten()->pluck('convenio_group_id')->unique())
+            ->get()
+            ->keyBy('id');
+
+        $matched = collect();
+        $indeterminate = [];
+
+        foreach ($candidates as $fact) {
+            $factNodes = ($boundByFact[$fact->id] ?? collect())
+                ->map(fn (ReferenceFactGroupScope $s) => $nodes->get($s->convenio_group_id))
+                ->filter();
+
+            if ($factNodes->contains(fn (ConvenioGroup $n) => $n->id === $employeeNode->id)) {
+                $matched->push($fact);
+
+                continue;
+            }
+
+            foreach ($factNodes as $n) {
+                if ($n->parent_id === $employeeNode->id) {
+                    $indeterminate[] = "fact {$fact->id} is scoped to sub-area \"{$n->label}\" of the employee's "
+                        ."group \"{$employeeNode->label}\" — the employee's sub-area is unknown";
+                    break;
+                }
+
+                if ($n->id === $employeeNode->parent_id && $this->hasApprovedChildren($n)) {
+                    $indeterminate[] = "fact {$fact->id} is scoped to group \"{$n->label}\", which the convenio "
+                        .'splits into sub-areas that carry different values — the fact\'s own scope is ambiguous';
+                    break;
+                }
+            }
+        }
+
+        if ($indeterminate !== []) {
+            return [
+                'facts' => collect(),
+                'escalate' => 'group scope is indeterminate, escalate rather than answer less specifically than '
+                    .'the evidence: '.implode('; ', $indeterminate),
+                'node' => $employeeNode,
+            ];
+        }
+
+        return ['facts' => $matched->values(), 'escalate' => null, 'node' => $employeeNode];
+    }
+
+    private function hasApprovedChildren(ConvenioGroup $node): bool
+    {
+        return ConvenioGroup::where('parent_id', $node->id)
+            ->where('status', ConvenioGroup::STATUS_APPROVED)
+            ->exists();
     }
 
     /** Compose the exact, quoted reference-fact answer (value + a raw breakdown if useful). */
