@@ -150,6 +150,15 @@ class ConvenioGroupController extends Controller
                     'kind' => $p['kind'],
                     'reason' => $p['reason'],
                     'already_bound' => $boundByFact->has($p['fact_id']),
+                    // A manually bound fact still appears here, because the
+                    // planner still cannot read its label — that is the honest
+                    // state. But it must not read as UNRESOLVED: name the nodes
+                    // a human put it on, or the list looks like a standing
+                    // verdict and someone binds it a second time.
+                    'bound_to' => $boundByFact->get($p['fact_id'], collect())
+                        ->map(fn (ReferenceFactGroupScope $s) => $nodes->firstWhere('id', $s->convenio_group_id)?->label)
+                        ->filter()
+                        ->values(),
                 ])
                 ->values(),
         ]);
