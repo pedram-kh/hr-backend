@@ -28,11 +28,16 @@ class VocabularyProposalController extends Controller
     {
         $status = $request->string('status')->toString() ?: 'proposed';
 
+        // Sprint 7g Item 2 — pagination + visible total (the Documents-page
+        // fix applied here): additive, `->get()` -> `->paginate(50)`. A status
+        // change (the only filter this list has) always means page 1, same as
+        // every other Review tab — enforced by the frontend resetting `page`
+        // whenever it changes `status`, not by anything here.
         $proposals = VocabularyProposal::with(['sourceDocument:id,uuid,title', 'proposer:id,full_name', 'approver:id,full_name'])
             ->where('status', $status)
             ->orderByDesc('id')
-            ->get()
-            ->map(fn (VocabularyProposal $p) => $this->present($p));
+            ->paginate(50)
+            ->through(fn (VocabularyProposal $p) => $this->present($p));
 
         return response()->json([
             'proposals' => $proposals,

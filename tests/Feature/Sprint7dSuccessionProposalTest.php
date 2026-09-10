@@ -413,10 +413,11 @@ class Sprint7dSuccessionProposalTest extends TestCase
         $headers = ['Authorization' => 'Bearer '.$auditor->createToken('t')->plainTextToken, 'Accept' => 'application/json'];
 
         // The queue READ stays open (an auditor browses read-only) and shows the
-        // proposal; the writes are refused.
+        // proposal; the writes are refused. Sprint 7g Item 2: the endpoint now
+        // paginates (additive), so rows live under `tasks.data`, not `tasks`.
         $this->getJson('/admin/review/expiry', $headers)->assertStatus(200)
-            ->assertJsonPath('tasks.0.ai_proposal.relationship', 'successor')
-            ->assertJsonPath('tasks.0.is_ai_proposed', true);
+            ->assertJsonPath('tasks.data.0.ai_proposal.relationship', 'successor')
+            ->assertJsonPath('tasks.data.0.is_ai_proposed', true);
         $this->postJson("/admin/review/expiry/{$task->id}/propose-succession", [], $headers)->assertStatus(403);
         $this->postJson("/admin/review/expiry/{$task->id}/reject-proposal", [], $headers)->assertStatus(403);
 

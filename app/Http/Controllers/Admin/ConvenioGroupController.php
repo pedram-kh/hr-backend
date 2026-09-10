@@ -14,6 +14,7 @@ use App\Support\FactGroupBindingPlanner;
 use App\Support\GroupCodeNormalizer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -146,6 +147,9 @@ class ConvenioGroupController extends Controller
                     'fact_status' => $p['fact_status'],
                     'group_label' => $p['group_label'],
                     'value' => $p['value'],
+                    // Sprint 7g Item 2 — the source line, so a reviewer can
+                    // identify and sanity-check the fact without opening it.
+                    'source_excerpt' => $p['source_excerpt'],
                     'status' => $p['status'],
                     'kind' => $p['kind'],
                     'reason' => $p['reason'],
@@ -198,6 +202,9 @@ class ConvenioGroupController extends Controller
                 'fact_status' => $p['fact_status'],
                 'group_label' => $p['group_label'],
                 'value' => $p['value'],
+                // Sprint 7g Item 2 — same source-line-inline treatment as the
+                // Reference-facts queue.
+                'source_excerpt' => $p['source_excerpt'],
                 'validity_start' => $p['validity_start'],
                 'validity_end' => $p['validity_end'],
                 'kind' => $p['kind'],
@@ -215,6 +222,7 @@ class ConvenioGroupController extends Controller
                     'fact_id' => $p['fact_id'],
                     'group_label' => $p['group_label'],
                     'value' => $p['value'],
+                    'source_excerpt' => $p['source_excerpt'],
                     'kind' => $p['kind'],
                     'reason' => $p['reason'],
                 ])
@@ -640,7 +648,7 @@ class ConvenioGroupController extends Controller
 
     // ── helpers ─────────────────────────────────────────────────────────────
 
-    /** @return \Illuminate\Support\Collection<int,ReferenceFact> */
+    /** @return Collection<int,ReferenceFact> */
     private function convenioFacts(int $convenioId)
     {
         return ReferenceFact::query()
@@ -652,7 +660,7 @@ class ConvenioGroupController extends Controller
     }
 
     /**
-     * @param  \Illuminate\Support\Collection<int,ConvenioGroup>  $children
+     * @param  Collection<int,ConvenioGroup>  $children
      * @return array<string,mixed>
      */
     private function nodeRow(
@@ -682,6 +690,9 @@ class ConvenioGroupController extends Controller
                 'fact_status' => $p['fact_status'],
                 'group_label' => $p['group_label'],
                 'value' => $p['value'],
+                // Sprint 7g Item 2 — same source-line-inline treatment as the
+                // Reference-facts queue and the unbindable-facts list above.
+                'source_excerpt' => $p['source_excerpt'],
                 'kind' => $p['kind'],
                 'bound' => $boundByFact->has($p['fact_id'])
                     && $boundByFact->get($p['fact_id'])->contains('convenio_group_id', $node->id),
