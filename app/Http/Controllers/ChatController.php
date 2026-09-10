@@ -3,8 +3,10 @@
 namespace App\Http\Controllers;
 
 use App\Models\Admin;
+use App\Models\ChatMessage;
 use App\Models\ChatSession;
 use App\Models\Employee;
+use App\Models\MessageFeedback;
 use App\Services\ChatService;
 use App\Services\ConversationPresenter;
 use Illuminate\Http\JsonResponse;
@@ -72,5 +74,39 @@ class ChatController extends Controller
             'session_uuid' => $session->uuid,
             'messages' => $presenter->present($session, ConversationPresenter::AUDIENCE_EMPLOYEE),
         ]);
+    }
+
+    /**
+     * Sprint 8, Step 8 (plan.md §7) — thumbs up/down (+ optional comment) on
+     * an assistant turn. Additive and orthogonal: nothing else reads this
+     * back into any decision (the answer loop is untouched by construction).
+     * Self-scoped exactly like `session()` above: the message must belong to
+     * THIS employee's own session, or the write is rejected — never a
+     * caller-supplied employee_id, never another employee's turn. Upsert on
+     * `message_id` (unique) — a second click replaces, never duplicates.
+     */
+    public function feedback(Request $request, int $messageId): JsonResponse
+    {
+        $account = $request->user();
+        if ($account instanceof Admin || ! $account instanceof Employee) {
+            return response()->json(['message' => 'Chat is for employees.'], 403);
+        }
+
+        $data = $request->validate([
+            'rating' => ['required', 'string', 'in:up,down'],
+            'comment' => ['nullable', 'string', 'max:2000'],
+        ]);
+
+        $message = ChatMessage::where('id', $messageId)->where('role', 'assistant')->first();
+        if ($message === null || $message->session?->employee_id !== $account->id) {
+            return response()->json(['message' => 'Message not found.'], 404);
+        }
+
+        $feedback = MessageFeedback::updateOrCreate(
+            ['message_id' => $message->id],
+            ['employee_id' => $account->id, 'rating' => $data['rating'], 'comment' => $data['comment'] ?? null],
+        );
+
+        return response()->json(['feedback' => $feedback->only(['message_id', 'rating', 'comment'])]);
     }
 }

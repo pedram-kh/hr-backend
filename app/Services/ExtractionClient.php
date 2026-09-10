@@ -21,6 +21,10 @@ use RuntimeException;
  *  - /compare-scope  Sprint 7d (ADR-0024): read-only semantic comparison — embed
  *                    N probe texts, rank a scope's chunks against each with the
  *                    authority band filtered IN THE SQL. No LLM, no write.
+ *  - /embed-batch    Sprint 8 Step 5 (plan.md §1.3, ADR-0030): read-only,
+ *                    string[] -> vector[] (BGE-M3), no DB touch at all. Used
+ *                    ONLY by the nightly question-cluster job — never by the
+ *                    employee answer loop.
  * hr-backend (this app) remains the only writer of every table except
  * document_chunks.
  */
@@ -531,5 +535,35 @@ class ExtractionClient
         }
 
         return $response->json();
+    }
+
+    /**
+     * Sprint 8, Step 5 (plan.md §1.3/§4.2, ADR-0030) — the ONLY hr-ai change
+     * the whole sprint made. Read-only string[] -> vector[] (BGE-M3, unit-
+     * normalized, so cosine similarity IS the dot product). No DB touch at
+     * all on the hr-ai side. Capped server-side at
+     * `EMBED_BATCH_MAX_TEXTS`/`settings.embed_batch_max_texts` (hr-ai,
+     * default 256) — the caller (`QuestionClusteringService`) chunks a
+     * larger distinct-question set into calls of that size itself.
+     *
+     * @param  list<string>  $texts
+     * @return list<list<float>> one 1024-dim unit vector per input string, same order
+     */
+    public function embedBatch(array $texts): array
+    {
+        if ($texts === []) {
+            return [];
+        }
+
+        $response = Http::withHeaders(['X-Internal-Token' => $this->token()])
+            ->timeout(120)
+            ->acceptJson()
+            ->post("{$this->base()}/embed-batch", ['texts' => $texts]);
+
+        if (! $response->successful()) {
+            throw new RuntimeException("hr-ai /embed-batch failed ({$response->status()}): ".$response->body());
+        }
+
+        return $response->json('embeddings') ?? [];
     }
 }

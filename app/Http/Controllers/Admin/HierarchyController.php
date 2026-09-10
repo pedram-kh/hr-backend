@@ -8,6 +8,7 @@ use App\Models\ReferenceFact;
 use App\Models\Sector;
 use App\Models\Territory;
 use App\Models\Topic;
+use App\Support\CorpusCoverageService;
 use App\Support\KnowledgeMap;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -36,7 +37,12 @@ use Illuminate\Support\Str;
  */
 class HierarchyController extends Controller
 {
-    private const LENSES = ['territory', 'sector', 'validity', 'topic'];
+    // Sprint 8 (plan.md §5, §10): 'coverage' is the 5th lens — convenio→
+    // knowledge-type nodes, reusing `CorpusCoverageService::grid()` (the SAME
+    // query the Cobertura screen's ranked list and `corpus:coverage` export
+    // call — one query, §5.6's hard constraint). Grammar:
+    //   coverage: t:{id} → convenio leaf-parents; t:{id}|c:{cid} → 4 knowledge-type leaves.
+    private const LENSES = ['territory', 'sector', 'validity', 'topic', 'coverage'];
 
     public function roots(Request $request): JsonResponse
     {
@@ -53,6 +59,7 @@ class HierarchyController extends Controller
             'sector' => $this->sectorRoots(),
             'validity' => $this->validityRoots(),
             'topic' => $this->topicRoots(),
+            'coverage' => $this->coverageRoots(),
         };
 
         return response()->json(['lens' => $lens, 'nodes' => $nodes]);
@@ -117,6 +124,19 @@ class HierarchyController extends Controller
             $status = substr($parent, 2);
 
             return $this->leaves(Document::query()->where('retrieval_status', $status), $leafGapByDocId);
+        }
+
+        // coverage: t:{id} → convenio leaf-parents; t:{id}|c:{cid} → 4 knowledge-type leaves.
+        if ($lens === 'coverage') {
+            if (str_contains($parent, '|c:')) {
+                [, $cPart] = explode('|c:', $parent, 2);
+                $convenioId = (int) $cPart;
+
+                return response()->json(['nodes' => $this->coverageCellLeaves($convenioId)]);
+            }
+            $territoryId = (int) substr($parent, 2);
+
+            return response()->json(['nodes' => $this->coverageConveniosUnderTerritory($territoryId)]);
         }
 
         // topic: tp:{id} → leaf docs via document_topics + reference facts on the topic
@@ -248,6 +268,91 @@ class HierarchyController extends Controller
                 'count' => (int) ($counts[$tp->id] ?? 0),
                 'child_kind' => 'leaf-parent',
                 'gap_kind' => null,
+            ];
+        }
+
+        return $nodes;
+    }
+
+    /**
+     * Sprint 8 (plan.md §5, §10) — territory roots for the coverage lens,
+     * grouping the SAME `CorpusCoverageService::grid()` rows every other
+     * coverage read uses. `gap_kind` at this level is the FIRST reason code
+     * found among any convenio's cells in the territory (a coarse "this
+     * territory has at least one gap" signal — the real detail lives at the
+     * leaf, per convenio+cell).
+     */
+    private function coverageRoots(): array
+    {
+        $grid = app(CorpusCoverageService::class)->grid();
+        $byTerritory = collect($grid)->groupBy('territory');
+
+        $nodes = [];
+        foreach (Territory::orderByRaw("array_position(array['national','regional','provincial']::text[], level)")->orderBy('name')->get() as $t) {
+            $rows = $byTerritory->get($t->name, collect());
+            if ($rows->isEmpty()) {
+                continue;
+            }
+            $firstGapCode = $rows->map(fn ($r) => $r['prose']['reason_code'] ?? $r['salary']['reason_code'] ?? $r['facts']['reason_code'] ?? $r['rulings']['reason_code'] ?? null)
+                ->filter()->first();
+            $nodes[] = [
+                'key' => "t:{$t->id}",
+                'label' => $t->name,
+                'meta' => $t->level,
+                'count' => $rows->count(),
+                'child_kind' => 'group',
+                'gap_kind' => $firstGapCode,
+            ];
+        }
+
+        return $nodes;
+    }
+
+    /** The convenios under one territory, as leaf-parents (coverage lens level 2). */
+    private function coverageConveniosUnderTerritory(int $territoryId): array
+    {
+        $territory = Territory::find($territoryId);
+        if ($territory === null) {
+            return [];
+        }
+
+        $grid = collect(app(CorpusCoverageService::class)->grid())->where('territory', $territory->name);
+
+        return $grid->map(function ($row) use ($territoryId) {
+            $cells = [$row['prose'], $row['salary'], $row['facts'], $row['rulings']];
+            $gapCount = collect($cells)->reject(fn ($c) => $c['covered'])->count();
+            $firstGapCode = collect($cells)->map(fn ($c) => $c['reason_code'] ?? null)->filter()->first();
+
+            return [
+                'key' => "t:{$territoryId}|c:{$row['convenio_id']}",
+                'label' => "{$row['numero']} {$row['name']}",
+                'meta' => "{$row['sector']} · {$row['headcount']} pers.",
+                'count' => 4 - $gapCount, // covered-cell count, out of 4
+                'child_kind' => 'leaf-parent',
+                'gap_kind' => $gapCount > 0 ? $firstGapCode : null,
+            ];
+        })->values()->all();
+    }
+
+    /** The 4 knowledge-type cells for one convenio, as leaves (coverage lens level 3 — the actual gap detail). */
+    private function coverageCellLeaves(int $convenioId): array
+    {
+        $service = app(CorpusCoverageService::class);
+        $row = collect($service->grid())->firstWhere('convenio_id', $convenioId);
+        if ($row === null) {
+            return [];
+        }
+
+        $cellLabels = ['prose' => 'Prosa', 'salary' => 'Salario', 'facts' => 'Datos', 'rulings' => 'Resoluciones'];
+        $nodes = [];
+        foreach ($cellLabels as $key => $label) {
+            $cell = $row[$key];
+            $nodes[] = [
+                'key' => "cvg:{$convenioId}:{$key}",
+                'label' => $label,
+                'child_kind' => 'leaf',
+                'meta' => $cell['covered'] ? '✓' : '✗',
+                'gap_kind' => $cell['covered'] ? null : ($cell['reason_code'] ?? 'coverage_gap_unclassified'),
             ];
         }
 

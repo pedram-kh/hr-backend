@@ -60,6 +60,13 @@ class EscalationExplainerTest extends TestCase
             'publish.semantic_compare_unavailable' => ['publish', [], 'semantic_compare_unavailable'],
             'publish.semantic_no_text_to_compare' => ['publish', [], 'semantic_no_text_to_compare'],
             'publish.convert_blocked' => ['publish', [], 'convert_blocked'],
+            // Sprint 8, Step 6 (plan.md §6.4): the sub-outcome is the
+            // reviewer's own `failure_kind` pick, passed straight through.
+            'quality_sample_wrong.wrong_scope' => ['quality_sample_wrong', ['quality_sample' => ['failure_kind' => 'wrong_scope', 'employee_uuid' => 'emp-uuid-9']], 'wrong_scope'],
+            'quality_sample_wrong.wrong_figure' => ['quality_sample_wrong', ['quality_sample' => ['failure_kind' => 'wrong_figure', 'fact_uuid' => 'fact-uuid-9']], 'wrong_figure'],
+            'quality_sample_wrong.stale_document' => ['quality_sample_wrong', ['quality_sample' => ['failure_kind' => 'stale_document']], 'stale_document'],
+            'quality_sample_wrong.unclear' => ['quality_sample_wrong', ['quality_sample' => ['failure_kind' => 'unclear']], 'unclear'],
+            'quality_sample_wrong.other' => ['quality_sample_wrong', ['quality_sample' => ['failure_kind' => 'other']], 'other'],
         ];
     }
 
@@ -145,6 +152,35 @@ class EscalationExplainerTest extends TestCase
 
         $this->assertSame('group_structure_not_approved', $facts['sub_outcome']);
         $this->assertSame('#view=review&tab=groups&convenio=18', $facts['fix_link']);
+    }
+
+    public function test_quality_sample_wrong_scope_fix_link_points_at_the_employees_directory_row(): void
+    {
+        $facts = EscalationExplainer::explain('quality_sample_wrong', [
+            'quality_sample' => ['failure_kind' => 'wrong_scope', 'employee_uuid' => 'emp-uuid-9'],
+        ]);
+
+        $this->assertSame('#view=directory&emp=emp-uuid-9', $facts['fix_link']);
+        $this->assertSame('Directorio', $facts['fix_surface']);
+    }
+
+    public function test_quality_sample_stale_document_fix_link_points_at_documents(): void
+    {
+        $facts = EscalationExplainer::explain('quality_sample_wrong', [
+            'quality_sample' => ['failure_kind' => 'stale_document'],
+        ]);
+
+        $this->assertSame('#view=documents', $facts['fix_link']);
+        $this->assertSame('Documentos', $facts['fix_surface']);
+    }
+
+    public function test_quality_sample_wrong_other_has_no_fix_link(): void
+    {
+        $facts = EscalationExplainer::explain('quality_sample_wrong', [
+            'quality_sample' => ['failure_kind' => 'other'],
+        ]);
+
+        $this->assertNull($facts['fix_link']);
     }
 
     public function test_no_pattern_leaks_a_reason_token_or_id_into_the_employee_told_field(): void

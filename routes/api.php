@@ -1,8 +1,10 @@
 <?php
 
 use App\Http\Controllers\Admin\AdminController;
+use App\Http\Controllers\Admin\AnalyticsController;
 use App\Http\Controllers\Admin\AnswerModelController;
 use App\Http\Controllers\Admin\ConvenioGroupController;
+use App\Http\Controllers\Admin\CoverageController;
 use App\Http\Controllers\Admin\CoverageGapController;
 use App\Http\Controllers\Admin\DocumentController;
 use App\Http\Controllers\Admin\EmployeeDirectoryController;
@@ -10,6 +12,7 @@ use App\Http\Controllers\Admin\EscalationController;
 use App\Http\Controllers\Admin\GuardrailsController;
 use App\Http\Controllers\Admin\HierarchyController;
 use App\Http\Controllers\Admin\HistoryController;
+use App\Http\Controllers\Admin\QualitySampleController;
 use App\Http\Controllers\Admin\ReferenceFactController;
 use App\Http\Controllers\Admin\ReviewQueueController;
 use App\Http\Controllers\Admin\SandboxController;
@@ -46,6 +49,12 @@ Route::post('/chat/message', [ChatController::class, 'message'])
 // sees a human (hr_agent) reply land in the chat (hydrate on mount + poll).
 // Self-scoped; employee-only. No session list/picker (that is Sprint 5).
 Route::get('/chat/session', [ChatController::class, 'session'])
+    ->middleware(['auth:sanctum', 'active']);
+
+// Sprint 8, Step 8 (plan.md §7) — thumbs up/down on an assistant turn.
+// Additive/optional; the one item touching the chat surface (self-scoped,
+// upsert on message_id — a second click replaces, never duplicates).
+Route::post('/chat/message/{messageId}/feedback', [ChatController::class, 'feedback'])
     ->middleware(['auth:sanctum', 'active']);
 
 /*
@@ -256,5 +265,44 @@ Route::middleware(['auth:sanctum', 'admin', 'active'])->prefix('admin')->group(f
         Route::post('/guardrails', [GuardrailsController::class, 'store']);
         Route::post('/guardrails/blocked-topics', [GuardrailsController::class, 'addBlockedTopic']);
         Route::delete('/guardrails/blocked-topics/{id}', [GuardrailsController::class, 'disableBlockedTopic']);
+    });
+
+    /*
+    | Sprint 8 — Analítica (§2/§3/§4, ADR-0030). Read-only aggregates; no
+    | `chat_session_id` ever reaches these queries (plan.md §6.3's own framing
+    | of why analytics/coverage are NOT a third conversation-viewing path).
+    | Gated by `analytics.view` (super_admin/hr_agent/auditor, §9/§12 q7).
+    */
+    Route::middleware('ability:analytics.view')->group(function () {
+        Route::get('/analytics/deflection', [AnalyticsController::class, 'deflection']);
+        Route::get('/analytics/escalations-by-fix', [AnalyticsController::class, 'escalationsByFix']);
+        Route::get('/analytics/clusters', [AnalyticsController::class, 'clusters']);
+    });
+
+    /*
+    | Sprint 8 — Cobertura (§5, ADR-0030). Gated by `analytics.view` OR
+    | `knowledge.edit` (plan.md §9/§12 resolved q7 — the one place
+    | `knowledge_editor` reaches a Sprint-8 screen, via its EXISTING ability,
+    | without gaining Analítica or quality-sample review). `CoverageGate` is a
+    | tiny inline closure-style ability check (below), not a new middleware
+    | alias, since it is an OR of two existing gates.
+    */
+    Route::middleware('coverage.view')->group(function () {
+        Route::get('/coverage/gaps', [CoverageController::class, 'gaps']);
+        Route::get('/coverage/export', [CoverageController::class, 'export']);
+        Route::get('/coverage/trend', [CoverageController::class, 'trend']);
+    });
+
+    /*
+    | Sprint 8 — Quality sampling / Calidad tab (§6, ADR-0030). READS open to
+    | any admin (mirrors every other ReviewQueuePage tab's read-open posture);
+    | the ONE decision-writing route (review) is gated by `escalation.work`
+    | (§6.5 — sampling review reuses that exact ability, no new one invented).
+    */
+    Route::get('/quality-samples', [QualitySampleController::class, 'index']);
+    Route::get('/quality-samples/trend', [QualitySampleController::class, 'trend']);
+    Route::get('/quality-samples/{uuid}', [QualitySampleController::class, 'show']);
+    Route::middleware('ability:escalation.work')->group(function () {
+        Route::post('/quality-samples/{uuid}/review', [QualitySampleController::class, 'review']);
     });
 });
