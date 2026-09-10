@@ -24,7 +24,8 @@ class IngestFolder extends Command
     protected $signature = 'documents:ingest-folder
         {path? : corpus root (default data/all-files)}
         {--ocr : Sprint 7e (ADR-0026) opt-in OCR fallback for text-less PDF pages (default off)}
-        {--ocr-page-cap= : per-document OCR page cap (default services.hr_ai.ocr_page_cap)}';
+        {--ocr-page-cap= : per-document OCR page cap (default services.hr_ai.ocr_page_cap)}
+        {--retype : Sprint 7g Item 3 (F-1) — explicitly confirm a checksum-matched file may change document_type/convenio/validity on the existing document. Default off: such a collision is reported and the document is left untouched.}';
 
     protected $description = 'Ingest a province-foldered PDF + salary .xlsx corpus, reusing the Sprint-1 ingestor.';
 
@@ -50,10 +51,12 @@ class IngestFolder extends Command
 
         $finder = (new Finder)->files()->in($root)->ignoreDotFiles(true);
         $vocab = new VocabularyResolver;
+        $retype = $this->option('retype');
 
         $ingested = 0;
         $skipped = 0;
         $errors = 0;
+        $retypeBlocked = 0;
 
         foreach ($finder as $file) {
             $rel = ltrim(str_replace($root, '', $file->getRealPath()), '/');
@@ -89,7 +92,18 @@ class IngestFolder extends Command
                     false,
                     $ocr,
                     $ocrPageCap,
+                    $retype,
                 );
+                // Sprint 7g Item 3 (F-1): a checksum match that would silently
+                // re-type/re-scope the existing document — reported, nothing
+                // written, NOT counted as an error (this is expected, correct
+                // behavior of the safety gate, not a failure).
+                if ($result['confirm_scope_change_required'] ?? false) {
+                    $retypeBlocked++;
+                    $this->warn("  BLOCKED (re-run with --retype to confirm): {$result['message']}");
+
+                    continue;
+                }
                 $ingested++;
                 $flag = $result['tagging_status'] === 'under_review' ? ' [UNDER_REVIEW '.$result['review_reason'].']' : '';
                 $this->line("  ingested ({$result['tagging_status']}{$flag}): {$rel}");
@@ -100,7 +114,7 @@ class IngestFolder extends Command
         }
 
         $this->newLine();
-        $this->info("Ingest complete: {$ingested} ingested, {$skipped} skipped, {$errors} errors.");
+        $this->info("Ingest complete: {$ingested} ingested, {$skipped} skipped, {$retypeBlocked} retype-blocked (checksum match, use --retype to confirm), {$errors} errors.");
 
         return $errors > 0 ? self::FAILURE : self::SUCCESS;
     }

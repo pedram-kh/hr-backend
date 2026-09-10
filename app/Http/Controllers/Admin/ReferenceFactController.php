@@ -6,13 +6,17 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\ResolveFactDuplicateRequest;
 use App\Http\Requests\StoreReferenceFactRequest;
 use App\Http\Requests\UpdateReferenceFactRequest;
+use App\Jobs\SegmentReferenceSource;
 use App\Models\ConvenioJobCategory;
 use App\Models\Document;
 use App\Models\ReferenceFact;
 use App\Models\TagEvent;
 use App\Services\FactResolutionService;
+use App\Support\GroupLabel;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -157,7 +161,7 @@ class ReferenceFactController extends Controller
                 continue;
             }
             $old = $fact->{$field};
-            $oldCmp = $old instanceof \Illuminate\Support\Carbon ? $old->toDateString() : $old;
+            $oldCmp = $old instanceof Carbon ? $old->toDateString() : $old;
             $new = $data[$field];
             if ($field === 'raw_values') {
                 if (json_encode($old) === json_encode($new)) {
@@ -387,7 +391,7 @@ class ReferenceFactController extends Controller
     {
         $fields = [
             'value' => fn (ReferenceFact $f) => trim((string) $f->value),
-            'group_label' => fn (ReferenceFact $f) => \App\Support\GroupLabel::normalize($f->group_label),
+            'group_label' => fn (ReferenceFact $f) => GroupLabel::normalize($f->group_label),
             'job_category' => fn (ReferenceFact $f) => $f->job_category_id,
             'topic' => fn (ReferenceFact $f) => $f->topic_id,
             'convenio' => fn (ReferenceFact $f) => $f->convenio_id,
@@ -460,7 +464,7 @@ class ReferenceFactController extends Controller
             ->where('uuid', $uuid)
             ->firstOrFail();
 
-        \App\Jobs\SegmentReferenceSource::dispatch($doc->id);
+        SegmentReferenceSource::dispatch($doc->id);
 
         return response()->json(['status' => 'queued', 'document_uuid' => $doc->uuid]);
     }
@@ -550,6 +554,11 @@ class ReferenceFactController extends Controller
     private function listRow(ReferenceFact $f): array
     {
         return [
+            // Sprint 7g Item 2 — the numeric id, so a reviewer can identify and
+            // cross-reference a fact from the list (e.g. against a
+            // `facts:scan-duplicates` report, which is id-keyed) without
+            // opening its detail panel first.
+            'id' => $f->id,
             'uuid' => $f->uuid,
             'value' => $f->value,
             'convenio' => $f->convenio?->numero,
@@ -579,7 +588,7 @@ class ReferenceFactController extends Controller
     }
 
     /**
-     * @param  \Illuminate\Support\Collection<int,TagEvent>  $provenance
+     * @param  Collection<int,TagEvent>  $provenance
      * @return array<string,mixed>
      */
     private function card(ReferenceFact $fact, $provenance): array

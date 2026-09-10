@@ -18,10 +18,13 @@ class EscalationCard extends Model
     protected $fillable = [
         'uuid', 'chat_session_id', 'source_message_id', 'employee_id',
         'reason', 'status', 'assigned_to', 'topic_id', 'resolved_at',
+        // Sprint 7g Item 1 (ADR-0029) — the explanation, stored at creation.
+        'explanation_facts', 'explanation_text', 'fix_action', 'fix_surface', 'fix_link',
     ];
 
     protected $casts = [
         'resolved_at' => 'datetime',
+        'explanation_facts' => 'array',
     ];
 
     protected static function booted(): void

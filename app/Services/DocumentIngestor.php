@@ -44,6 +44,14 @@ class DocumentIngestor
      *   calls the OCR model here, it only marks a page `ocr_pending`.
      * @param  int  $ocrPageCap  Per-document page cap (review.md §2.7) — bounds
      *   worst-case cost/latency for one pathological upload.
+     * @param  bool  $confirmScopeChange  Sprint 7g Item 3 (F-1, ADR-0029-adjacent):
+     *   a checksum (content_hash) match is an IDENTITY match — it must never
+     *   silently re-type/re-scope the existing document just because the file
+     *   arrived under a different name or a different `--as-reference` flag.
+     *   Mirrors the exact manual-edit gate ({@see \App\Http\Controllers\Admin\DocumentController::reassignFacet()}):
+     *   default false reports the collision and changes nothing; true applies
+     *   it and records an `admin_manual` provenance event (never `filename_parse`
+     *   for THIS write, since a human explicitly asked for it).
      * @return array<string,mixed> per-file outcome for the batch response
      */
     public function ingest(
@@ -56,6 +64,7 @@ class DocumentIngestor
         bool $asReference = false,
         bool $ocr = false,
         int $ocrPageCap = 60,
+        bool $confirmScopeChange = false,
     ): array {
         $bytes = (string) file_get_contents($tmpPath);
         $hash = hash('sha256', $bytes);
@@ -107,10 +116,40 @@ class DocumentIngestor
         }
 
         // Idempotency: primary = content hash; fallback = filename + convenio.
-        $existing = Document::where('content_hash', $hash)->first()
+        $existingByHash = Document::where('content_hash', $hash)->first();
+        $existing = $existingByHash
             ?? Document::where('source_filename', $sourceFilename)
                 ->where('convenio_id', $tag['convenio_id'])
                 ->first();
+
+        // Sprint 7g Item 3 (F-1): a CHECKSUM match is the strongest possible
+        // identity signal — the bytes are IDENTICAL to an already-ingested
+        // document. It must never silently re-type/re-scope that document just
+        // because this call's filename/`--as-reference` flag parsed to a
+        // different tag than last time (e.g. the same salary .xlsx re-ingested
+        // with `--as-reference`, which would otherwise flip it to
+        // `reference_source` with no gate at all — never embedded, never
+        // salary-queryable again, with no audit trail explaining why). Checked
+        // ONLY on the hash match (not the filename+convenio fallback, which is
+        // a deliberate "same slot, different bytes, same identity" update path
+        // predating this sprint and unaffected by it).
+        $scopeChanges = [];
+        if ($existingByHash !== null) {
+            $scopeChanges = $this->detectScopeChanges($existingByHash, $tag);
+            if ($scopeChanges !== [] && ! $confirmScopeChange) {
+                $typeCode = $existingByHash->documentType?->code ?? 'sin tipo';
+
+                return [
+                    'document_uuid' => $existingByHash->uuid,
+                    'source_filename' => $sourceFilename,
+                    'confirm_scope_change_required' => true,
+                    'scope_changes' => $scopeChanges,
+                    'message' => "Ya existe como documento {$existingByHash->id} (tipo {$typeCode}) — mismo contenido (checksum), pero este archivo se etiquetaría de forma distinta. No se ha cambiado nada. Reenvía con confirm_scope_change=true (o --retype en CLI) para aplicar el retipo.",
+                    'created' => false,
+                    'unchanged' => true,
+                ];
+            }
+        }
 
         $uuid = $existing?->uuid ?? (string) Str::uuid();
         $storageKey = "documents/{$uuid}/original.{$ext}";
@@ -156,7 +195,8 @@ class DocumentIngestor
         );
 
         $document = DB::transaction(function () use (
-            $existing, $uuid, $sourceFilename, $storageKey, $hash, $tag, $pages, $adminId
+            $existing, $uuid, $sourceFilename, $storageKey, $hash, $tag, $pages, $adminId,
+            $scopeChanges, $confirmScopeChange,
         ) {
             $document = $existing ?? new Document(['uuid' => $uuid]);
             $document->fill([
@@ -177,6 +217,27 @@ class DocumentIngestor
                 'ingested_by' => $adminId,
             ]);
             $document->save();
+
+            // Sprint 7g Item 3 (F-1): the explicit confirm path for a checksum-
+            // match retype. One `admin_manual` provenance row per changed facet
+            // — a human (or a CLI operator who typed `--retype`) explicitly
+            // asked for this, so it is never `filename_parse` even though the
+            // NEW value did come from parsing the new filename/flag.
+            if ($confirmScopeChange && $scopeChanges !== []) {
+                foreach ($scopeChanges as $change) {
+                    TagEvent::create([
+                        'entity_type' => 'document',
+                        'entity_id' => $document->id,
+                        'facet' => $change['facet'],
+                        'old_value' => $change['old_display'],
+                        'new_value' => $change['new_display'],
+                        'source' => 'admin_manual',
+                        'actor_id' => $adminId,
+                        'confidence' => null,
+                        'note' => 'checksum-matched re-ingest, explicitly confirmed retype (confirm_scope_change/--retype)',
+                    ]);
+                }
+            }
 
             // Replace pages (re-ingest is idempotent).
             $document->pages()->delete();
@@ -323,6 +384,58 @@ class DocumentIngestor
             'page_count' => count($pages),
             'as_reference' => $asReference,
         ];
+    }
+
+    /**
+     * Sprint 7g Item 3 (F-1) — the four scope-affecting facets a checksum-
+     * matched re-ingest must NEVER silently overwrite: which employees receive
+     * this document (`convenio_id`), what kind of source it is and therefore
+     * how it's used (`document_type_id` — salary SQL vs prose vs reference_source,
+     * embedded vs not), and its eligibility window (`validity_start`/`_end`).
+     * `tagging_status`/`tagging_confidence`/`retrieval_status`/`authority_level`
+     * are NOT gated here — they are DERIVED from the same facets already being
+     * checked, or (retrieval_status) already re-computed by the tagger from
+     * validity on every re-ingest regardless, matching Sprint-1 idempotent
+     * re-ingest behavior for content that didn't change identity.
+     *
+     * @param  array<string,mixed>  $tag
+     * @return list<array{facet:string, old_display:?string, new_display:?string}>
+     */
+    private function detectScopeChanges(Document $existing, array $tag): array
+    {
+        $changes = [];
+
+        if ((int) $existing->document_type_id !== (int) ($tag['document_type_id'] ?? 0)) {
+            $changes[] = [
+                'facet' => 'document_type',
+                'old_display' => $existing->documentType?->code,
+                'new_display' => DocumentType::find($tag['document_type_id'])?->code,
+            ];
+        }
+
+        $existingConvenioId = $existing->convenio_id;
+        $newConvenioId = $tag['convenio_id'] ?? null;
+        if ($existingConvenioId !== $newConvenioId) {
+            $changes[] = [
+                'facet' => 'convenio',
+                'old_display' => $existingConvenioId ? $existing->convenio?->numero : null,
+                'new_display' => $newConvenioId ? \App\Models\Convenio::find($newConvenioId)?->numero : null,
+            ];
+        }
+
+        $oldStart = $existing->validity_start?->toDateString();
+        $newStart = $tag['validity_start'] ?? null;
+        if ($oldStart !== $newStart) {
+            $changes[] = ['facet' => 'validity_start', 'old_display' => $oldStart, 'new_display' => $newStart];
+        }
+
+        $oldEnd = $existing->validity_end?->toDateString();
+        $newEnd = $tag['validity_end'] ?? null;
+        if ($oldEnd !== $newEnd) {
+            $changes[] = ['facet' => 'validity_end', 'old_display' => $oldEnd, 'new_display' => $newEnd];
+        }
+
+        return $changes;
     }
 
     private function deriveTitle(string $sourceFilename): string

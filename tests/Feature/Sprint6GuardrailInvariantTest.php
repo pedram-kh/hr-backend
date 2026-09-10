@@ -258,7 +258,14 @@ class Sprint6GuardrailInvariantTest extends TestCase
         $res = $this->ask('dame una receta de cocina para el almuerzo');
         $this->assertSame('escalate', $res['outcome']);
         $this->assertSame('off_domain', $res['escalation_reason']);
-        $this->assertSame('Solo puedo ayudarte con temas de RR. HH.', $res['answer']);
+        // Sprint 7g Item 1 (ADR-0029): the employee-facing text is now ALWAYS
+        // the one fixed neutral message, regardless of reason — this
+        // supersedes the admin-configured `off_domain_message`, which the
+        // spec explicitly requires ("every escalation, every reason, shows
+        // ONE fixed neutral message"). The configured message is still
+        // stored/returned to HR elsewhere (guardrails settings), just never
+        // shown to the employee in chat any more.
+        $this->assertSame(\App\Services\ChatService::EMPLOYEE_ESCALATION_MESSAGE, $res['answer']);
     }
 
     // ---- 5. Tone: synthesis-local only; /ground gets the RAW question --------

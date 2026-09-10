@@ -136,6 +136,10 @@ class FactGroupBindingPlanner
             'value' => $fact->value,
             'validity_start' => $fact->validity_start?->toDateString(),
             'validity_end' => $fact->validity_end?->toDateString(),
+            // Sprint 7g Item 2 — carried through so the Groups tab's fact lists
+            // can show the source line a reviewer checks a binding against,
+            // same as the Reference-facts queue does.
+            'source_excerpt' => $fact->source_excerpt,
             ...$result,
         ];
     }

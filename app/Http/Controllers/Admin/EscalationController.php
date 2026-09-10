@@ -29,11 +29,23 @@ class EscalationController extends Controller
     private const REASON_LABELS = [
         'low_confidence' => 'Baja confianza',
         'off_domain' => 'Fuera de ámbito',
+        // Sprint 7g Item 1 correction: the live `reason` column value is
+        // `sensitive_topic` (see the CHECK-constraint enum chain in
+        // database/migrations), never bare `sensitive` — that key never
+        // matched and always fell through to the `$card->reason` fallback
+        // below. Kept both keys (harmless) so a future literal `sensitive`
+        // does not silently regress.
         'sensitive' => 'Tema sensible',
+        'sensitive_topic' => 'Tema sensible',
         'legal_medical' => 'Legal / médico',
         'other_employee' => 'Sobre otra persona',
+        'explicit_request' => 'Petición explícita',
+        'conflict' => 'Conflicto dato/convenio',
         'salary_coverage_gap' => 'Hueco en tablas salariales',
         'salary_not_in_chat' => 'Salario no disponible',
+        // Sprint 7g Item 1 correction: added — was missing entirely, so a
+        // reference-fact coverage-gap card displayed its raw reason string.
+        'reference_fact_coverage_gap' => 'Hueco en datos de referencia',
     ];
 
     public function __construct(
@@ -359,6 +371,16 @@ class EscalationController extends Controller
             'topic' => $card->topic !== null ? ['id' => $card->topic->id, 'name' => $card->topic->name] : null,
             'created_at' => $card->created_at?->toIso8601String(),
             'resolved_at' => $card->resolved_at?->toIso8601String(),
+            // Sprint 7g Item 1 (ADR-0029). `explanation_text` is the AI
+            // paragraph when it passed the no-new-claims check, else null —
+            // the frontend falls back to rendering `explanation_facts` as
+            // sentences itself (same deterministic renderer, ported client-
+            // side: `factsToSentences` in `lib/escalationExplanation.ts`).
+            'explanation_facts' => $card->explanation_facts,
+            'explanation_text' => $card->explanation_text,
+            'fix_action' => $card->fix_action,
+            'fix_surface' => $card->fix_surface,
+            'fix_link' => $card->fix_link,
         ];
     }
 }

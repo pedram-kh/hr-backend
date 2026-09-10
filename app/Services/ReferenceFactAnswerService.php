@@ -77,6 +77,13 @@ class ReferenceFactAnswerService
             return $this->escalate($rf, 'no convenio on profile');
         }
 
+        // Sprint 7g Item 1 (ADR-0029): informational only — distinguishes the
+        // escalation-explanation sub-outcomes ("employee's group is unknown" vs
+        // "their assigned node isn't approved") without changing the Tier
+        // 2/3/4 DECISION logic above/below, which reads convenio_group_id and
+        // matchByGroupNode() exactly as before.
+        $rf['employee_group_state'] = $this->employeeGroupState($employee);
+
         // --- The verified, in-scope, in-validity candidate set (Q3) -------------
         // ONLY status = 'verified' (the inert-until-verified gate, ADR-0020/0021).
         // "validity contains as-of": (start null OR ≤ as-of) AND (end null OR ≥ as-of).
@@ -92,6 +99,12 @@ class ReferenceFactAnswerService
             ->get();
 
         if ($candidates->isEmpty()) {
+            // Sprint 7g Item 1: informational breakdown only (which of "nothing
+            // recorded" / "only needs_review" / "verified but out of validity"
+            // this coverage gap is) — read AFTER the same escalate decision below
+            // is already final, changing nothing about it.
+            $rf['coverage_gap_detail'] = $this->diagnoseNoCandidates($convenio->id, $topicId, $asOf);
+
             return $this->escalate($rf, 'no verified in-scope in-validity fact (only unverified / out-of-validity / future-only, or none)');
         }
 
@@ -164,6 +177,7 @@ class ReferenceFactAnswerService
         }
 
         $rf['fact_id'] = $fact->id;
+        $rf['fact_uuid'] = $fact->uuid; // Sprint 7g Item 1: the #fact= deep-link identifier
         $rf['value'] = $fact->value;
         $rf['validity_selection'] = $selection; // 'single' | 'most_recent_validity'
         $rf['match_kind'] = $matchKind;
@@ -321,6 +335,53 @@ class ReferenceFactAnswerService
         }
 
         return ['facts' => $matched->values(), 'escalate' => null, 'node' => $employeeNode];
+    }
+
+    /**
+     * Sprint 7g Item 1 (ADR-0029) — informational classification of the
+     * employee's group assignment, for the escalation explainer only. Does not
+     * feed the Tier 2 match decision above (which reads `convenio_group_id` and
+     * `matchByGroupNode()` directly, unchanged).
+     */
+    private function employeeGroupState(Employee $employee): string
+    {
+        if ($employee->convenio_group_id === null) {
+            return 'unresolved';
+        }
+        $node = ConvenioGroup::find($employee->convenio_group_id);
+        if ($node === null || $node->status !== ConvenioGroup::STATUS_APPROVED) {
+            return 'unapproved_or_missing';
+        }
+
+        return 'approved';
+    }
+
+    /**
+     * Sprint 7g Item 1 — WHY the verified/in-scope/in-validity candidate set was
+     * empty, for the explainer only: nothing recorded for this convenio+topic at
+     * all, only `needs_review` facts exist (a human hasn't verified any of
+     * them), or a verified fact exists but is out of validity as of today
+     * (expired or not-yet-effective). Read-only, no effect on the escalate
+     * decision (which already fired before this runs).
+     *
+     * @return array{case:string}
+     */
+    private function diagnoseNoCandidates(int $convenioId, int $topicId, string $asOf): array
+    {
+        $all = ReferenceFact::where('convenio_id', $convenioId)->where('topic_id', $topicId)->get();
+        if ($all->isEmpty()) {
+            return ['case' => 'none_recorded'];
+        }
+
+        $verified = $all->where('status', 'verified');
+        if ($verified->isEmpty()) {
+            return ['case' => 'only_needs_review'];
+        }
+
+        // All verified rows fail the validity window as of today (checked here
+        // exactly as the main query checks it) — either expired or not yet
+        // effective; both are "out_of_validity" for the explainer's purposes.
+        return ['case' => 'out_of_validity'];
     }
 
     private function hasApprovedChildren(ConvenioGroup $node): bool

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\ProposeSuccession;
 use App\Models\Document;
 use App\Models\DocumentReviewTask;
 use App\Models\TagEvent;
@@ -32,62 +33,63 @@ class ReviewQueueController extends Controller
     /** The expiry queue: open expiry tasks + same-convenio successor candidates. Read — any admin. */
     public function expiry(Request $request): JsonResponse
     {
+        // Sprint 7g Item 2 — pagination + visible total (the Documents-page
+        // fix applied here): additive, `->get()` -> `->paginate(50)`.
         $tasks = DocumentReviewTask::with(['document.convenio', 'document.documentType'])
             ->where('type', 'expiry')
             ->where('status', 'open')
             ->orderBy('due_date')
-            ->get();
+            ->paginate(50)
+            ->through(function (DocumentReviewTask $t) {
+                $doc = $t->document;
 
-        $rows = $tasks->map(function (DocumentReviewTask $t) {
-            $doc = $t->document;
+                // Same-convenio candidate successors (scope-based): other documents in
+                // the same convenio, newest validity first. Different-convenio docs are
+                // NEVER candidates (they coexist).
+                $candidates = collect();
+                if ($doc?->convenio_id !== null) {
+                    $candidates = Document::where('convenio_id', $doc->convenio_id)
+                        ->where('id', '!=', $doc->id)
+                        ->orderByDesc('validity_start')
+                        ->limit(20)
+                        ->get(['uuid', 'title', 'validity_start', 'validity_end', 'retrieval_status'])
+                        ->map(fn ($c) => [
+                            'uuid' => $c->uuid,
+                            'title' => $c->title,
+                            'validity_start' => $c->validity_start?->toDateString(),
+                            'validity_end' => $c->validity_end?->toDateString(),
+                            'retrieval_status' => $c->retrieval_status,
+                        ]);
+                }
 
-            // Same-convenio candidate successors (scope-based): other documents in
-            // the same convenio, newest validity first. Different-convenio docs are
-            // NEVER candidates (they coexist).
-            $candidates = collect();
-            if ($doc?->convenio_id !== null) {
-                $candidates = Document::where('convenio_id', $doc->convenio_id)
-                    ->where('id', '!=', $doc->id)
-                    ->orderByDesc('validity_start')
-                    ->limit(20)
-                    ->get(['uuid', 'title', 'validity_start', 'validity_end', 'retrieval_status'])
-                    ->map(fn ($c) => [
-                        'uuid' => $c->uuid,
-                        'title' => $c->title,
-                        'validity_start' => $c->validity_start?->toDateString(),
-                        'validity_end' => $c->validity_end?->toDateString(),
-                        'retrieval_status' => $c->retrieval_status,
-                    ]);
-            }
+                return [
+                    'task_id' => $t->id,
+                    'due_date' => $t->due_date?->toDateString(),
+                    'past' => $t->due_date !== null && $t->due_date->isPast(),
+                    'document' => $doc ? [
+                        'uuid' => $doc->uuid,
+                        'title' => $doc->title,
+                        'convenio' => $doc->convenio ? ['id' => $doc->convenio->id, 'numero' => $doc->convenio->numero, 'name' => $doc->convenio->name] : null,
+                        'validity_start' => $doc->validity_start?->toDateString(),
+                        'validity_end' => $doc->validity_end?->toDateString(),
+                        'retrieval_status' => $doc->retrieval_status,
+                    ] : null,
+                    'is_unscoped' => $doc?->convenio_id === null,
+                    'successor_candidates' => $candidates->values(),
+                    // Sprint 7d (ADR-0024): the INERT AI succession suggestion, if one was
+                    // made. It is a claim with its evidence attached (the compared passages
+                    // and the score), not an instruction — the human confirms it through the
+                    // unchanged write-side below, or rejects it.
+                    'ai_proposal' => $t->ai_proposal,
+                    'ai_proposal_status' => $t->ai_proposal_status,
+                    'ai_proposed_at' => $t->ai_proposed_at?->toDateTimeString(),
+                    // Fuchsia is unverified-AI ONLY (ADR-0020): a live proposal nobody has
+                    // acted on yet. It goes away the moment a human confirms or rejects.
+                    'is_ai_proposed' => $t->ai_proposal_status === DocumentReviewTask::PROPOSAL_PROPOSED,
+                ];
+            });
 
-            return [
-                'task_id' => $t->id,
-                'due_date' => $t->due_date?->toDateString(),
-                'past' => $t->due_date !== null && $t->due_date->isPast(),
-                'document' => $doc ? [
-                    'uuid' => $doc->uuid,
-                    'title' => $doc->title,
-                    'convenio' => $doc->convenio ? ['id' => $doc->convenio->id, 'numero' => $doc->convenio->numero, 'name' => $doc->convenio->name] : null,
-                    'validity_start' => $doc->validity_start?->toDateString(),
-                    'validity_end' => $doc->validity_end?->toDateString(),
-                    'retrieval_status' => $doc->retrieval_status,
-                ] : null,
-                'is_unscoped' => $doc?->convenio_id === null,
-                'successor_candidates' => $candidates->values(),
-                // Sprint 7d (ADR-0024): the INERT AI succession suggestion, if one was
-                // made. It is a claim with its evidence attached (the compared passages
-                // and the score), not an instruction — the human confirms it through the
-                // unchanged write-side below, or rejects it.
-                'ai_proposal' => $t->ai_proposal,
-                'ai_proposal_status' => $t->ai_proposal_status,
-                'ai_proposed_at' => $t->ai_proposed_at?->toDateTimeString(),
-                // Fuchsia is unverified-AI ONLY (ADR-0020): a live proposal nobody has
-                // acted on yet. It goes away the moment a human confirms or rejects.
-                'is_ai_proposed' => $t->ai_proposal_status === DocumentReviewTask::PROPOSAL_PROPOSED,
-            ];
-        });
-
-        return response()->json(['tasks' => $rows]);
+        return response()->json(['tasks' => $tasks]);
     }
 
     /**
@@ -104,7 +106,7 @@ class ReviewQueueController extends Controller
             return response()->json(['message' => 'This expiry task is already resolved.'], 422);
         }
 
-        \App\Jobs\ProposeSuccession::dispatch($task->id);
+        ProposeSuccession::dispatch($task->id);
 
         return response()->json(['status' => 'queued', 'task_id' => $task->id]);
     }

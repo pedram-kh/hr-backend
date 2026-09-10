@@ -207,6 +207,9 @@ class FactResolutionService
             ->whereNotNull('topic_id')          // the pass is scoped by (convenio, topic)
             ->whereNotNull('convenio_id')
             ->when($convenioId !== null, fn ($q) => $q->where('convenio_id', $convenioId))
+            // Sprint 7g Item 4 (F-2): eager-load bindings once for the whole
+            // scan — relateByBindingOrTokens() below reads them per pair.
+            ->with('groupScopes')
             ->orderBy('id')
             ->get();
 
@@ -227,14 +230,17 @@ class FactResolutionService
                 for ($j = $i + 1; $j < $ordered->count(); $j++) {
                     $other = $ordered[$j];
 
-                    if (GroupLabel::relate($fact->group_label, $other->group_label) !== GroupLabel::OVERLAP) {
+                    // Sprint 7g Item 4 (F-2): binding-aware when both facts have
+                    // one; else the pre-7g label-token heuristic — see
+                    // relateByBindingOrTokens() for the full rule.
+                    $reason = $this->relateByBindingOrTokens($fact, $other);
+                    if ($reason === null) {
                         continue;
                     }
                     if (trim((string) $fact->value) === trim((string) $other->value)) {
                         continue; // same value → not a version, just two ways of saying it
                     }
 
-                    $reason = GroupLabel::describeOverlap($fact->group_label, $other->group_label);
                     $flagged[] = [
                         'fact_id' => $fact->id,
                         'duplicate_of_id' => $other->id,
@@ -281,6 +287,67 @@ class FactResolutionService
         }
 
         return ['scanned' => $facts->count(), 'flagged' => count($flagged), 'pairs' => $flagged, 'dry_run' => $dryRun];
+    }
+
+    /**
+     * Sprint 7g Item 4 (F-2) — binding-aware duplicate detection.
+     *
+     * Sprint 7f (ADR-0028) gave facts a GROUND-TRUTH scope: `groupScopes()`,
+     * bound nodes in a convenio's approved group tree. When BOTH facts in a
+     * pair have at least one binding, compare the NODES directly instead of
+     * the `group_label` TEXT-token overlap {@see \App\Support\GroupLabel::relate()}
+     * has always used:
+     *
+     *   - the SAME node, or one bound node is the PARENT/CHILD of the
+     *     other (ancestor/descendant — e.g. "Grupo 2" vs "Grupo 2 › área 5")
+     *     → a candidate version pair, flagged;
+     *   - SIBLING nodes (two different sub-areas of the same split group,
+     *     e.g. "área 5" vs "resto de áreas") → NOT a duplicate. Binding is
+     *     authoritative once it exists — this does NOT fall through to the
+     *     token pass, which is exactly what over-flagged these before (both
+     *     labels share the "Grupo 2" token).
+     *
+     * Falls back to the token-overlap heuristic ONLY when at least one fact
+     * in the pair is genuinely UNBOUND (has zero rows in
+     * `reference_fact_group_scopes` — every fact's state until a human uses
+     * Sprint 7f's binding UI).
+     *
+     * @return string|null a human-readable reason to flag this pair, or null to skip it
+     */
+    private function relateByBindingOrTokens(ReferenceFact $fact, ReferenceFact $other): ?string
+    {
+        $factNodes = $fact->groupScopes;
+        $otherNodes = $other->groupScopes;
+
+        if ($factNodes->isNotEmpty() && $otherNodes->isNotEmpty()) {
+            foreach ($factNodes as $a) {
+                foreach ($otherNodes as $b) {
+                    if ($a->id === $b->id) {
+                        return "mismo nodo de grupo vinculado ({$a->pathLabel()})";
+                    }
+                    if ($a->parent_id === $b->id) {
+                        return "{$a->pathLabel()} está vinculado como sub-área de {$b->pathLabel()}";
+                    }
+                    if ($b->parent_id === $a->id) {
+                        return "{$b->pathLabel()} está vinculado como sub-área de {$a->pathLabel()}";
+                    }
+                }
+            }
+
+            // Both bound, but no bound-node pair is the same node or an
+            // ancestor/descendant of the other (e.g. two sibling sub-areas of
+            // a split group) — binding is authoritative: NOT a version pair,
+            // and NOT a fallback candidate either.
+            return null;
+        }
+
+        // At least one fact is unbound — the pre-7g label-token heuristic
+        // (7b-2/7d), unchanged.
+        if (GroupLabel::relate($fact->group_label, $other->group_label) !== GroupLabel::OVERLAP) {
+            return null;
+        }
+
+        return GroupLabel::describeOverlap($fact->group_label, $other->group_label);
     }
 
     private function logResolution(ReferenceFact $fact, string $resolution, int $adminId, ?string $note, string $detail): void
