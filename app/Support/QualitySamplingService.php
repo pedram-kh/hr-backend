@@ -190,6 +190,33 @@ class QualitySamplingService
         return $sample;
     }
 
+    /**
+     * The employee's own paired question — the nearest PRECEDING `role=user`
+     * message in the same session, before the sampled assistant turn.
+     * `quality_samples.message_id` always points at the ASSISTANT turn
+     * (§6.1, the drawn population is answered turns), so this is the only
+     * way to recover what the employee actually asked. Public so
+     * `QualitySampleController` can surface it in the list/detail response
+     * (found live, eyes-on 2026-09-10: the Calidad table's "Pregunta" column
+     * was rendering `message.content` directly — the ANSWER, not the
+     * question, since nothing resolved this pairing before now).
+     */
+    public function pairedUserMessage(QualitySample $sample): ?ChatMessage
+    {
+        /** @var ChatMessage|null $assistantMessage */
+        $assistantMessage = $sample->message;
+        if ($assistantMessage === null) {
+            return null;
+        }
+        $session = $assistantMessage->session;
+
+        return $session?->messages()
+            ->where('role', 'user')
+            ->where('id', '<', $assistantMessage->id)
+            ->orderByDesc('id')
+            ->first();
+    }
+
     private function openFixCard(QualitySample $sample, string $failureKind): EscalationCard
     {
         /** @var ChatMessage $assistantMessage */
@@ -200,11 +227,7 @@ class QualitySamplingService
         // The card's source_message_id follows every other creation path's
         // convention (ChatService.php:1571) — the USER turn, not the
         // assistant reply — so it resolves the same way in the board/drawer.
-        $userMessage = $session?->messages()
-            ->where('role', 'user')
-            ->where('id', '<', $assistantMessage->id)
-            ->orderByDesc('id')
-            ->first();
+        $userMessage = $this->pairedUserMessage($sample);
 
         $trace = [
             'quality_sample' => [

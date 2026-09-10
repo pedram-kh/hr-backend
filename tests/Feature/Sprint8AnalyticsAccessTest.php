@@ -208,4 +208,53 @@ class Sprint8AnalyticsAccessTest extends TestCase
 
         $this->assertDatabaseHas('escalation_cards', ['reason' => 'quality_sample_wrong']);
     }
+
+    /**
+     * Calidad eyes-on round 2 (2026-09-11): REVISOR read '—' on all 8
+     * reviewed rows on staging — `reviewed_by` (the raw FK) and the loaded
+     * `reviewedBy` relation collided under the same JSON key, and the
+     * frontend read a third key the backend never sent at all
+     * (`reviewed_by_admin`). An unrecorded/invisible reviewer is an
+     * ADR-0018 audit gap. This proves the acting admin is both WRITTEN
+     * (`reviewed_by`) and VISIBLE (`reviewer`) after a verdict, and stays
+     * visible on subsequent list/detail reads — not just in the write
+     * response.
+     */
+    public function test_review_write_and_subsequent_reads_carry_the_acting_admin_as_reviewer(): void
+    {
+        $hr = $this->adminWithRole('hr_agent');
+
+        $this->postAs($hr, "/admin/quality-samples/{$this->sample->uuid}/review", ['verdict' => 'correct'])
+            ->assertStatus(200)
+            ->assertJsonPath('sample.reviewed_by', $hr->id)
+            ->assertJsonPath('sample.reviewer.id', $hr->id)
+            ->assertJsonPath('sample.reviewer.full_name', $hr->full_name);
+
+        $this->getAs($hr, '/admin/quality-samples')
+            ->assertStatus(200)
+            ->assertJsonPath('samples.data.0.reviewer.id', $hr->id);
+
+        $this->getAs($hr, "/admin/quality-samples/{$this->sample->uuid}")
+            ->assertStatus(200)
+            ->assertJsonPath('sample.reviewer.id', $hr->id);
+    }
+
+    /**
+     * Calidad eyes-on round 2 (2026-09-11): the PREGUNTA column was
+     * rendering the ASSISTANT's answer (`message.content`) — `message_id`
+     * on `quality_samples` always points at the answered turn (§6.1), not
+     * the employee's question. The `question` field must equal the paired
+     * `role=user` message, distinct from the answer.
+     */
+    public function test_question_field_is_the_employee_message_not_the_answer(): void
+    {
+        $admin = $this->adminWithRole('super_admin');
+
+        $detail = $this->getAs($admin, "/admin/quality-samples/{$this->sample->uuid}")->assertStatus(200)->json();
+        $this->assertSame('pregunta de prueba', $detail['sample']['question']);
+        $this->assertSame('respuesta de prueba', $detail['sample']['message']['content']);
+
+        $list = $this->getAs($admin, '/admin/quality-samples')->assertStatus(200)->json();
+        $this->assertSame('pregunta de prueba', $list['samples']['data'][0]['question']);
+    }
 }

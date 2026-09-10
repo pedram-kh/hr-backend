@@ -202,4 +202,61 @@ class Sprint8QualitySampleStratificationTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $service->recordVerdict($sample, $barredAdmin, 'correct', null, null);
     }
+
+    /**
+     * Calidad eyes-on round 2 (2026-09-11) — the PREGUNTA column was showing
+     * the ASSISTANT's answer, because `message_id` always points at the
+     * assistant turn (§6.1). `pairedUserMessage()` must resolve the actual
+     * employee question, not the answer.
+     */
+    public function test_paired_user_message_resolves_the_employee_question_not_the_answer(): void
+    {
+        $service = app(QualitySamplingService::class);
+
+        $service->draw('2026-09', 3, 12345);
+        $sample = QualitySample::where('sampled_for_month', '2026-09')
+            ->where('stratum_path', 'reference_fact')->first();
+
+        $question = $service->pairedUserMessage($sample);
+
+        $this->assertNotNull($question);
+        $this->assertSame('user', $question->role);
+        $this->assertSame('fact q1 from B', $question->content);
+        $this->assertNotSame($sample->message->content, $question->content);
+    }
+
+    /**
+     * Calidad eyes-on round 2 (2026-09-11) — §6.5's monthly summary/trend
+     * requirement: the trend endpoint's grouped rows, aggregated by
+     * (month, verdict) exactly as the frontend's monthly summary line does,
+     * must sum to the real recorded verdict counts.
+     */
+    public function test_monthly_trend_sums_to_the_real_verdict_counts(): void
+    {
+        $service = app(QualitySamplingService::class);
+        $admin = Admin::create(['full_name' => 'QA Trend Reviewer', 'email' => 'qa-trend@example.com', 'status' => 'active']);
+
+        $service->draw('2026-09', 6, 12345);
+        $samples = QualitySample::where('sampled_for_month', '2026-09')->orderBy('id')->get();
+        $this->assertCount(6, $samples, 'the fixture draws all 6 answered turns (5 + 1) at n=6');
+
+        // A known, mixed set: 4 correct, 1 partially, 1 wrong.
+        $verdicts = ['correct', 'correct', 'correct', 'correct', 'partially', 'wrong'];
+        foreach ($samples as $i => $sample) {
+            $verdict = $verdicts[$i];
+            $service->recordVerdict($sample, $admin, $verdict, $verdict === 'correct' ? null : 'unclear', null);
+        }
+
+        $byMonthVerdict = [];
+        foreach ($service->monthlyTrend() as $row) {
+            if ($row['verdict'] === null) {
+                continue;
+            }
+            $byMonthVerdict[$row['month']][$row['verdict']] = ($byMonthVerdict[$row['month']][$row['verdict']] ?? 0) + $row['count'];
+        }
+
+        $this->assertSame(4, $byMonthVerdict['2026-09']['correct']);
+        $this->assertSame(1, $byMonthVerdict['2026-09']['partially']);
+        $this->assertSame(1, $byMonthVerdict['2026-09']['wrong']);
+    }
 }
