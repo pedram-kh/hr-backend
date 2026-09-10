@@ -114,6 +114,12 @@ class AdminController extends Controller
                 'history.view_all' => $admin->can('history.view_all'),
                 'directory.manage' => $admin->can('directory.manage'),
                 'admin.manage' => $admin->can('admin.manage'),
+                'guardrails.manage' => $admin->can('guardrails.manage'),
+                'vocabulary.approve' => $admin->can('vocabulary.approve'),
+                // Sprint 8 (ADR-0030) — kept in lockstep with IdentityPresenter's
+                // own abilities map (same bug found/fixed there: this list had
+                // silently drifted behind every ability added since Sprint 6/7a).
+                'analytics.view' => $admin->can('analytics.view'),
             ],
         ];
     }
