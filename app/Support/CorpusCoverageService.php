@@ -52,6 +52,21 @@ class CorpusCoverageService
     public const REASON_MISTAG = 'MISTAG';
 
     /**
+     * The dev-fixture convenio numero prefix (`TestUserSeeder::FIXTURE_LABEL`
+     * / `RegistryImport`'s own private copy of the same string) — Sprint 0
+     * seeded exactly one such row (`DEV-FIXTURE-0001`) purely to satisfy test
+     * employees' FKs before the real registry import existed. Found live on
+     * staging 2026-09-10: it was showing up in the coverage grid with a real
+     * headcount (1) as if it were a real registry convenio, which it isn't
+     * and never will be (`RegistryImport::migrateFixtureEmployees()` already
+     * re-points any employee on it once the real registry lands). Excluded
+     * from both the grid and headcounts here; also added to `deploy.md`'s
+     * scrub-before-production checklist so a real production run never seeds
+     * or carries this row at all.
+     */
+    public const DEV_FIXTURE_NUMERO_PREFIX = 'DEV-FIXTURE-';
+
+    /**
      * The convenio-level grid — one row per registry convenio, ordered by id
      * (deterministic order is what makes the agreement/byte-stable tests
      * meaningful, §5.6/§11). Pure read; no write, no side effect, ever.
@@ -66,6 +81,7 @@ class CorpusCoverageService
         $convenios = DB::table('convenios as cv')
             ->join('territories as t', 't.id', '=', 'cv.territory_id')
             ->join('sectors as s', 's.id', '=', 'cv.sector_id')
+            ->where('cv.numero', 'not like', self::DEV_FIXTURE_NUMERO_PREFIX.'%')
             ->select('cv.id', 'cv.numero', 'cv.name', 't.name as territory', 's.name as sector')
             ->orderBy('cv.id')
             ->get();
@@ -91,13 +107,24 @@ class CorpusCoverageService
         return $rows;
     }
 
-    /** @return array<int,int> convenio_id => active headcount (plan.md §5.2). */
+    /**
+     * @return array<int,int> convenio_id => active headcount (plan.md §5.2).
+     *
+     * Excludes the dev-fixture convenio (`DEV_FIXTURE_NUMERO_PREFIX`) — its
+     * "headcount" is test-employee FK scaffolding, not a real signal, and
+     * this is the one shared helper both `grid()` and
+     * `QuestionClusteringService::unansweredRanking()`'s headcount-weight
+     * term read, so excluding it here (rather than per-caller) is what keeps
+     * both from re-counting a fixture as if it were a real convenio.
+     */
     public function headcounts(): array
     {
-        return DB::table('employees')
-            ->where('status', 'active')
-            ->select('convenio_id', DB::raw('count(*) as headcount'))
-            ->groupBy('convenio_id')
+        return DB::table('employees as e')
+            ->join('convenios as cv', 'cv.id', '=', 'e.convenio_id')
+            ->where('e.status', 'active')
+            ->where('cv.numero', 'not like', self::DEV_FIXTURE_NUMERO_PREFIX.'%')
+            ->select('e.convenio_id', DB::raw('count(*) as headcount'))
+            ->groupBy('e.convenio_id')
             ->pluck('headcount', 'convenio_id')
             ->map(fn ($v) => (int) $v)
             ->all();
@@ -165,6 +192,45 @@ class CorpusCoverageService
         }
 
         if ($activeZeroChunk !== []) {
+            // Zero chunks has two real, distinguishable causes, and they need
+            // different reason codes (found live on staging, 2026-09-10 —
+            // convenios 11/17: 74/74 and 49/49 pages WITH text, 0 chunks,
+            // tagging_status = under_review): (a) a genuine scan with no
+            // extracted text at all (`chunks:embed` would skip it even if
+            // tagging were verified) — SCAN_NO_TEXT; (b) real, extracted text
+            // that `chunks:embed` has not processed because its own selection
+            // excludes `tagging_status = under_review` (Part 1 flow 1) — the
+            // doc is not a scan problem at all, it is an unverified-tagging
+            // problem — UNDER_REVIEW_SCOPE. Checking page-level text presence
+            // (the same `pages_with_text` definition `DocumentController`
+            // already uses for its own `empty_text` flag) distinguishes them
+            // instead of assuming every zero-chunk active doc is a scan.
+            $hasGenuineScanNoText = false;
+            $hasUnderReviewWithText = false;
+            foreach ($activeZeroChunk as $doc) {
+                $pagesTotal = (int) DB::table('document_pages')->where('document_id', $doc->id)->count();
+                $pagesWithText = (int) DB::table('document_pages')
+                    ->where('document_id', $doc->id)
+                    ->whereRaw("length(btrim(coalesce(text, ''))) > 0")
+                    ->count();
+                if ($pagesTotal > 0 && $pagesWithText === 0) {
+                    $hasGenuineScanNoText = true;
+
+                    continue;
+                }
+                $taggingStatus = DB::table('documents')->where('id', $doc->id)->value('tagging_status');
+                if ($taggingStatus === 'under_review') {
+                    $hasUnderReviewWithText = true;
+                }
+            }
+
+            if ($hasGenuineScanNoText) {
+                return ['covered' => false, 'amendment_only' => false, 'reason_code' => self::REASON_SCAN_NO_TEXT, 'detail' => 'active prose document(s) exist but page-level text extraction found none — a genuine scan with no OCR text'];
+            }
+            if ($hasUnderReviewWithText) {
+                return ['covered' => false, 'amendment_only' => false, 'reason_code' => self::REASON_UNDER_REVIEW_SCOPE, 'detail' => 'prose document(s) have real extracted text but tagging is not yet verified, so chunks:embed has not processed them'];
+            }
+
             return ['covered' => false, 'amendment_only' => false, 'reason_code' => self::REASON_SCAN_NO_TEXT, 'detail' => 'active prose document(s) exist but have 0 chunks'];
         }
 

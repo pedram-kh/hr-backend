@@ -71,6 +71,42 @@ class CorpusCoverageAgreementTest extends TestCase
             'uuid' => (string) \Illuminate\Support\Str::uuid(), 'email' => 'w1@example.com', 'full_name' => 'Worker One',
             'convenio_id' => $convenioA->id, 'territory_id' => $territory->id, 'employment_type' => 'full_time', 'status' => 'active',
         ]);
+
+        // Convenio C — reproduces a real bug found live on staging 2026-09-10
+        // (convenios 11/17, COEAS Estatal + Madrid): an active convenio_text
+        // doc with REAL, fully-extracted page text (chunks:embed's own
+        // selection just excludes tagging_status=under_review — Part 1 flow
+        // 1), so it has 0 chunks despite having 0 text problems. This must
+        // read UNDER_REVIEW_SCOPE, never SCAN_NO_TEXT.
+        $convenioC = Convenio::create(['numero' => '01TESTC003', 'name' => 'Under-review-with-text Convenio', 'territory_id' => $territory->id, 'sector_id' => $sector->id]);
+        $docC = Document::create([
+            'uuid' => (string) \Illuminate\Support\Str::uuid(), 'title' => 'Convenio C text', 'storage_path' => 'x/c.pdf',
+            'convenio_id' => $convenioC->id, 'document_type_id' => \App\Models\DocumentType::where('code', 'convenio_text')->value('id'),
+            'retrieval_status' => 'active', 'authority_level' => 'official_convenio', 'language' => 'es', 'tagging_status' => 'under_review',
+        ]);
+        DB::table('document_pages')->insert(['document_id' => $docC->id, 'page_number' => 1, 'text' => 'real extracted convenio text, plenty of it', 'created_at' => now(), 'updated_at' => now()]);
+        // deliberately NO document_chunks row — chunks:embed never ran on this under_review doc.
+
+        // Convenio D — the genuine-scan-no-text case, kept distinct from C so
+        // the fix doesn't just move the bug the other direction: an active,
+        // NOT-under_review doc whose pages have literally no extracted text
+        // must still read SCAN_NO_TEXT.
+        $convenioD = Convenio::create(['numero' => '01TESTD004', 'name' => 'Genuine Scan Convenio', 'territory_id' => $territory->id, 'sector_id' => $sector->id]);
+        $docD = Document::create([
+            'uuid' => (string) \Illuminate\Support\Str::uuid(), 'title' => 'Convenio D scan', 'storage_path' => 'x/d.pdf',
+            'convenio_id' => $convenioD->id, 'document_type_id' => \App\Models\DocumentType::where('code', 'convenio_text')->value('id'),
+            'retrieval_status' => 'active', 'authority_level' => 'official_convenio', 'language' => 'es', 'tagging_status' => 'auto_proposed',
+        ]);
+        DB::table('document_pages')->insert(['document_id' => $docD->id, 'page_number' => 1, 'text' => '', 'created_at' => now(), 'updated_at' => now()]);
+
+        // Convenio E — the dev-fixture placeholder (real staging shape: found
+        // live 2026-09-10 showing up in the grid with a fake headcount). Must
+        // be excluded from both the grid and headcounts entirely.
+        $convenioE = Convenio::create(['numero' => CorpusCoverageService::DEV_FIXTURE_NUMERO_PREFIX.'0001', 'name' => 'DEV FIXTURE — placeholder', 'territory_id' => $territory->id, 'sector_id' => $sector->id]);
+        Employee::create([
+            'uuid' => (string) \Illuminate\Support\Str::uuid(), 'email' => 'fixture@example.com', 'full_name' => 'Fixture Employee',
+            'convenio_id' => $convenioE->id, 'territory_id' => $territory->id, 'employment_type' => 'full_time', 'status' => 'active',
+        ]);
     }
 
     public function test_grid_is_byte_identical_across_two_calls(): void
@@ -93,6 +129,28 @@ class CorpusCoverageAgreementTest extends TestCase
         $this->assertFalse($byNumero['01TESTB002']['prose']['covered']);
         $this->assertFalse($byNumero['01TESTB002']['salary']['covered']);
         $this->assertFalse($byNumero['01TESTB002']['facts']['covered']);
+
+        // Regression (staging finding, 2026-09-10): 0 chunks + real text +
+        // under_review tagging => UNDER_REVIEW_SCOPE, never SCAN_NO_TEXT.
+        $this->assertFalse($byNumero['01TESTC003']['prose']['covered']);
+        $this->assertSame(CorpusCoverageService::REASON_UNDER_REVIEW_SCOPE, $byNumero['01TESTC003']['prose']['reason_code']);
+
+        // 0 chunks + genuinely empty page text still reads SCAN_NO_TEXT.
+        $this->assertFalse($byNumero['01TESTD004']['prose']['covered']);
+        $this->assertSame(CorpusCoverageService::REASON_SCAN_NO_TEXT, $byNumero['01TESTD004']['prose']['reason_code']);
+
+        // Regression (staging finding, 2026-09-10): the dev-fixture
+        // placeholder convenio must not appear in the grid at all.
+        $this->assertArrayNotHasKey(CorpusCoverageService::DEV_FIXTURE_NUMERO_PREFIX.'0001', $byNumero);
+    }
+
+    public function test_headcounts_exclude_the_dev_fixture_convenio(): void
+    {
+        $service = app(CorpusCoverageService::class);
+        $headcounts = $service->headcounts();
+
+        $fixtureConvenioId = Convenio::where('numero', CorpusCoverageService::DEV_FIXTURE_NUMERO_PREFIX.'0001')->value('id');
+        $this->assertArrayNotHasKey($fixtureConvenioId, $headcounts, 'the dev-fixture convenio must never contribute a headcount.');
     }
 
     public function test_export_markdown_is_byte_stable_across_two_calls(): void
