@@ -21,8 +21,11 @@ use Illuminate\Support\Facades\DB;
  * 3. GREEDY SINGLE-LINK clustering by cosine threshold τ (not k-means — no
  *    k to choose, deterministic, incremental-friendly). Vectors are unit-
  *    normalized (BGE-M3), so cosine similarity IS the dot product.
- * 4. Threshold τ = 0.80 (a starting assumption, not a measurement — plan.md
- *    §12 resolved q3: logged per-cluster, not silently treated as final).
+ * 4. Threshold τ = config('hr.question_cluster_threshold') (default 0.80) —
+ *    CALIBRATED on staging 2026-09-10 against a 20-pair hand-authored set;
+ *    the classes overlap (see config/hr.php's full note), so τ is kept at
+ *    0.80 rather than tuned to that one set, per the sprint's own mandate.
+ *    Logged per-cluster (min/max), never silently treated as final.
  * 5. The label is the MEDOID (highest mean similarity to every other member)
  *    — never an LLM summary (hard constraint).
  * 6. Cadence: nightly, alongside `stats:rollup`/`coverage:snapshot`.
@@ -38,6 +41,12 @@ use Illuminate\Support\Facades\DB;
  */
 class QuestionClusteringService
 {
+    /**
+     * @deprecated kept only so any external reference to the old class
+     * constant still resolves; the live default is now the named config
+     * value `hr.question_cluster_threshold` (ADR-0030 — calibrated, not a
+     * bare literal), so a deploy can retune τ without a code change.
+     */
     public const DEFAULT_THRESHOLD = 0.80;
 
     public function __construct(private readonly ExtractionClient $hrAi)
@@ -51,8 +60,9 @@ class QuestionClusteringService
      *
      * @return array{clusters:int,distinct_texts:int,members:int}
      */
-    public function run(Carbon $periodStart, Carbon $periodEnd, Carbon $runDate, float $threshold = self::DEFAULT_THRESHOLD): array
+    public function run(Carbon $periodStart, Carbon $periodEnd, Carbon $runDate, ?float $threshold = null): array
     {
+        $threshold ??= (float) config('hr.question_cluster_threshold', self::DEFAULT_THRESHOLD);
         $messages = DB::table('chat_messages')
             ->where('role', 'user')
             ->where('created_at', '>=', $periodStart)

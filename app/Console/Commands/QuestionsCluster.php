@@ -18,7 +18,7 @@ class QuestionsCluster extends Command
         {--from= : period start, YYYY-MM-DD (default: 90 days ago)}
         {--to= : period end, YYYY-MM-DD, exclusive (default: today)}
         {--run-date= : the run_date to write under (default: today)}
-        {--threshold= : cosine threshold τ (default: 0.80, plan.md §4.2)}
+        {--threshold= : cosine threshold τ (default: config(hr.question_cluster_threshold), calibrated ADR-0030)}
         {--print : also print the topic breakdown and unanswered ranking (eyes-on use)}';
 
     protected $description = 'Nightly greedy-threshold question clustering (no LLM label — the medoid is the label).';
@@ -28,7 +28,7 @@ class QuestionsCluster extends Command
         $from = $this->option('from') ? Carbon::parse($this->option('from')) : Carbon::today()->subDays(90);
         $to = $this->option('to') ? Carbon::parse($this->option('to')) : Carbon::today();
         $runDate = $this->option('run-date') ? Carbon::parse($this->option('run-date')) : Carbon::today();
-        $threshold = $this->option('threshold') !== null ? (float) $this->option('threshold') : QuestionClusteringService::DEFAULT_THRESHOLD;
+        $threshold = $this->option('threshold') !== null ? (float) $this->option('threshold') : (float) config('hr.question_cluster_threshold', QuestionClusteringService::DEFAULT_THRESHOLD);
 
         $result = $service->run($from, $to, $runDate, $threshold);
 
