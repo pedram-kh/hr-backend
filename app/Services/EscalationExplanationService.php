@@ -15,20 +15,31 @@ use Illuminate\Support\Facades\Log;
  * called an LLM provider directly — architecture.md §2/ADR-0007 route every
  * provider call through hr-ai's HTTP endpoints via {@see ExtractionClient},
  * which passes the decrypted key + `provider_config` in the body per call
- * (the router's own envelope). This service follows that SAME convention: it
- * reuses `ExtractionClient::synthesise()` — hr-ai's EXISTING `/synthesise`
- * endpoint, no new hr-ai endpoint, no new hr-ai code at all — with the cheap
- * `ROUTER_MODEL` (Haiku) in `provider_config`, exactly the way `RouterService`
- * already does for `/route`. hr-ai remains unchanged.
+ * (the router's own envelope). This service follows that SAME convention,
+ * using `ExtractionClient::explain()` — hr-ai's `/explain` endpoint — with the
+ * cheap `ROUTER_MODEL` (Haiku) in `provider_config`, the same model knob
+ * `RouterService` uses for `/route`.
  *
- * The "chunk" handed to /synthesise is not a document passage; it is the
+ * SPRINT 7G FAST-FOLLOW (this version): originally this called `/synthesise`
+ * (hr-ai's existing citation-grounded endpoint), with the rendered facts
+ * posing as a single "chunk". Found live on staging: the model habitually
+ * appended a `[Fuente 1]`-style citation marker to EVERY sentence — an
+ * ingrained habit from that prompt's citation contract, which has nothing to
+ * do with this restatement task — and hr-backend's no-new-claims check
+ * correctly rejected the draft every single time (3/3 live attempts across
+ * two different escalation reasons), so the AI paragraph never survived in
+ * practice. Fixed by moving to `/explain`, a small, DEDICATED hr-ai endpoint
+ * with its own prompt that forbids citation markers and verbatim quoting
+ * outright — see hr-ai's `EXPLAIN_SYSTEM_PROMPT`. {@see EscalationExplanationGuard}
+ * is UNCHANGED: it was correct, and stays the safety net regardless of which
+ * prompt fed it.
+ *
+ * `$factsText` handed to /explain is not a document passage; it is the
  * rendered structured facts (each on its own line, `campo: valor`), and the
- * "question" is a fixed instruction: restate these facts, in plain HR
- * Spanish, add nothing. Nothing here can add a claim the facts don't already
- * carry — hr-ai's /synthesise is a plain "compose text grounded only in the
- * provided content" call, and the deterministic no-new-claims check
- * ({@see EscalationExplanationGuard}) verifies that afterward, independent of
- * whatever hr-ai returned.
+ * instruction is fixed: restate these facts, in plain HR Spanish, add
+ * nothing. Nothing here can add a claim the facts don't already carry — the
+ * deterministic no-new-claims check ({@see EscalationExplanationGuard})
+ * verifies that independently, regardless of whatever hr-ai returned.
  *
  * On ANY failure (no answer-model key configured, provider/transport error,
  * or a failed no-new-claims check) this returns `explanation_text = null` —
@@ -38,15 +49,9 @@ use Illuminate\Support\Facades\Log;
  */
 class EscalationExplanationService
 {
-    /** A synthetic chunk id — never resolved against real document_chunks; this call has no citation to persist. */
-    private const FACTS_CHUNK_ID = 1;
-
-    private const INSTRUCTION = 'Basándote ÚNICAMENTE en los siguientes hechos estructurados sobre una '
-        .'consulta de un/a empleado/a que se ha escalado a Recursos Humanos, escribe UN PÁRRAFO breve '
-        .'(3-5 frases) en español claro, dirigido al equipo de RR.HH. que va a atenderla. Explica qué se '
-        .'preguntó, qué se encontró, por qué se escaló, y cuál es la acción recomendada. No añadas ningún '
-        .'dato, cifra, nombre o hecho que no esté explícitamente en la lista. No inventes nada. No uses '
-        .'markdown ni listas — un párrafo de prosa normal.';
+    private const INSTRUCTION = 'Escribe UN PÁRRAFO breve (3-5 frases) en español claro, dirigido al '
+        .'equipo de RR.HH. que va a atender una consulta de un/a empleado/a que se ha escalado. Explica '
+        .'qué se preguntó, qué se encontró, por qué se escaló, y cuál es la acción recomendada.';
 
     public function __construct(private readonly ExtractionClient $ai) {}
 
@@ -80,15 +85,7 @@ class EscalationExplanationService
         ];
 
         $factsBlock = $this->renderFacts($facts);
-        $synth = $this->ai->synthesise(self::INSTRUCTION, [[
-            'chunk_id' => self::FACTS_CHUNK_ID,
-            'document_id' => 0,
-            'page_from' => null,
-            'page_to' => null,
-            'content' => $factsBlock,
-            'score' => 1.0,
-            'authority_level' => 'structured_reference',
-        ]], $decryptedKey, $providerConfig);
+        $synth = $this->ai->explain(self::INSTRUCTION, $factsBlock, $decryptedKey, $providerConfig);
         unset($decryptedKey);
 
         $costUsd = (float) ($synth['trace_fragment']['cost_usd'] ?? 0.0);

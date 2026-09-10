@@ -15,12 +15,14 @@ use Tests\TestCase;
 
 /**
  * Sprint 7g Item 1 (ADR-0029) — `EscalationExplanationService::generateFor()`.
- * Reuses hr-ai's EXISTING `/synthesise` endpoint (via `ExtractionClient`),
- * with the cheap ROUTER_MODEL. On any failure — no key configured, provider
- * error, or a failed no-new-claims check — `explanation_text` stays null and
- * the card falls back to `EscalationExplainer::factsToSentences()` on
- * display. The fix action/link are NEVER touched by this service (they are
- * set once, deterministically, at card creation).
+ * Calls hr-ai's `/explain` endpoint (via `ExtractionClient`), with the cheap
+ * ROUTER_MODEL. As of the Sprint 7g fast-follow this is `/explain`, NOT
+ * `/synthesise` (moved off it — see the service's own docblock for why). On
+ * any failure — no key configured, provider error, or a failed no-new-claims
+ * check — `explanation_text` stays null and the card falls back to
+ * `EscalationExplainer::factsToSentences()` on display. The fix action/link
+ * are NEVER touched by this service (they are set once, deterministically,
+ * at card creation).
  */
 class EscalationExplanationServiceTest extends TestCase
 {
@@ -72,19 +74,15 @@ class EscalationExplanationServiceTest extends TestCase
 
         $fake = new class extends ExtractionClient
         {
-            public function synthesise(string $q, array $ch, string $k, array $c): array
+            public function explain(string $instruction, string $factsText, string $decryptedKey, array $providerConfig): array
             {
                 return [
-                    // Faithful restatement — including the ADR-0014 reference
-                    // number the facts themselves carry (`stopped_reason`),
-                    // since the guard's "no dropped fact number" check treats
-                    // any digit in the facts, including an ADR citation, as
-                    // one that must be represented.
-                    'answer' => 'El empleado preguntó por su salario, pero no existe ninguna tabla salarial cargada para su convenio. '.
-                        'Por eso se escaló: sin fila estructurada, el sistema nunca adivina una cifra, conforme a ADR-0014, y conviene cargar o convertir la tabla salarial de este convenio.',
-                    'citations' => [],
-                    'confidence' => 0.9,
-                    'authority_used' => [],
+                    // Faithful restatement of the (now HR-plain-language,
+                    // digit-free) salary_coverage_gap.no_table facts — no
+                    // number, no new proper noun.
+                    'answer' => 'El empleado preguntó por su salario, pero no existe ninguna tabla salarial cargada para este convenio, '.
+                        'que posiblemente solo esté en PDF sin convertir. Por eso se escaló: sin esa tabla, el sistema nunca adivina '.
+                        'una cifra, así que conviene cargarla o convertirla.',
                     'trace_fragment' => ['cost_usd' => 0.000123, 'model' => 'claude-haiku-4-5'],
                 ];
             }
@@ -107,7 +105,7 @@ class EscalationExplanationServiceTest extends TestCase
 
         $fake = new class extends ExtractionClient
         {
-            public function synthesise(string $q, array $ch, string $k, array $c): array
+            public function explain(string $instruction, string $factsText, string $decryptedKey, array $providerConfig): array
             {
                 return ['error' => 'provider_error', 'detail' => 'timeout', 'trace_fragment' => []];
             }
@@ -127,11 +125,11 @@ class EscalationExplanationServiceTest extends TestCase
 
         $fake = new class extends ExtractionClient
         {
-            public function synthesise(string $q, array $ch, string $k, array $c): array
+            public function explain(string $instruction, string $factsText, string $decryptedKey, array $providerConfig): array
             {
                 return [
                     'answer' => 'El empleado preguntó por su salario. No existe tabla salarial, pero debería cobrar 1500 euros. Se recomienda cargarla.',
-                    'citations' => [], 'confidence' => 0.9, 'authority_used' => [], 'trace_fragment' => ['cost_usd' => 0.0001],
+                    'trace_fragment' => ['cost_usd' => 0.0001],
                 ];
             }
         };
@@ -143,14 +141,14 @@ class EscalationExplanationServiceTest extends TestCase
         $this->assertNull($card->explanation_text);
     }
 
-    public function test_no_answer_model_configured_never_calls_synthesise_and_leaves_text_null(): void
+    public function test_no_answer_model_configured_never_calls_explain_and_leaves_text_null(): void
     {
         AnswerModelSetting::query()->delete();
         $card = $this->makeCard();
 
         $fake = new class extends ExtractionClient
         {
-            public function synthesise(string $q, array $ch, string $k, array $c): array
+            public function explain(string $instruction, string $factsText, string $decryptedKey, array $providerConfig): array
             {
                 throw new \RuntimeException('must not be called when no answer model is configured');
             }
@@ -163,7 +161,7 @@ class EscalationExplanationServiceTest extends TestCase
         $this->assertNull($card->explanation_text);
     }
 
-    public function test_a_card_with_no_facts_never_calls_synthesise(): void
+    public function test_a_card_with_no_facts_never_calls_explain(): void
     {
         $this->configureAnswerModel();
 
@@ -179,7 +177,7 @@ class EscalationExplanationServiceTest extends TestCase
 
         $fake = new class extends ExtractionClient
         {
-            public function synthesise(string $q, array $ch, string $k, array $c): array
+            public function explain(string $instruction, string $factsText, string $decryptedKey, array $providerConfig): array
             {
                 throw new \RuntimeException('must not be called when the card has no explanation_facts');
             }

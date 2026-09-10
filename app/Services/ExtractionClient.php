@@ -255,6 +255,44 @@ class ExtractionClient
     }
 
     /**
+     * Restate a small, already-verified list of facts as plain prose (Sprint
+     * 7g fast-follow, ADR-0029). Deliberately NOT `synthesise()`: `$factsText`
+     * is never a retrieved document/chunk, and hr-ai's `/explain` prompt
+     * forbids citation markers and verbatim quoting entirely — see
+     * `EscalationExplanationService`, the only caller.
+     *
+     * Returns { answer, trace_fragment } or, on a provider failure,
+     * { error: 'provider_error', detail }. The caller treats either shape of
+     * failure the same way: fall back to the deterministic sentences, never
+     * throw, never guess.
+     *
+     * @param  array{provider:string,model:string,endpoint:?string}  $providerConfig
+     * @return array<string,mixed>
+     */
+    public function explain(string $instruction, string $factsText, string $decryptedKey, array $providerConfig): array
+    {
+        $response = Http::withHeaders(['X-Internal-Token' => $this->token()])
+            ->timeout(60)
+            ->acceptJson()
+            ->post("{$this->base()}/explain", [
+                'instruction' => $instruction,
+                'facts_text' => $factsText,
+                // Decrypted only by the caller just before this call; passed in
+                // the body, never logged, never bound beyond the call stack.
+                'provider_api_key' => $decryptedKey,
+                'provider_config' => $providerConfig,
+            ]);
+
+        if (! $response->successful()) {
+            // A non-2xx is an hr-ai/transport failure (not a provider error, which
+            // comes back as a 200 envelope). Surface as a fallback-triggering signal.
+            return ['error' => 'explain_unavailable', 'detail' => "hr-ai /explain failed ({$response->status()})"];
+        }
+
+        return $response->json();
+    }
+
+    /**
      * Classify a question salary | prose | off_domain and (for a compound
      * question) return decomposed subqueries (Sprint 2b-2, ADR-0016). Uses the
      * SMALL/FAST router model. The decrypted key is passed in the body per call
