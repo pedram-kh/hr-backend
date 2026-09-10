@@ -8,6 +8,7 @@ use App\Models\ReferenceFact;
 use App\Models\Sector;
 use App\Models\Territory;
 use App\Models\Topic;
+use App\Support\AdminLinks;
 use App\Support\CorpusCoverageService;
 use App\Support\KnowledgeMap;
 use Illuminate\Http\JsonResponse;
@@ -334,7 +335,27 @@ class HierarchyController extends Controller
         })->values()->all();
     }
 
-    /** The 4 knowledge-type cells for one convenio, as leaves (coverage lens level 3 — the actual gap detail). */
+    /**
+     * The 4 knowledge-type cells for one convenio, as leaves (coverage lens
+     * level 3 — the actual gap detail). Leaf-opens-card, wired for real
+     * (found live, eyes-on 2026-09-10 — a coverage leaf previously opened
+     * nothing on click, because `CoveragePage.tsx` passed a no-op
+     * `onOpenDocument` and no leaf here ever carried a `doc_uuid`/`fact_uuid`
+     * regardless): every leaf below resolves to exactly one of —
+     *   (a) `doc_uuid`  — a document exists (covering, blocking, or
+     *       historical — `CorpusCoverageService`'s cell methods now return
+     *       it whenever one is the reason a cell is covered/uncovered);
+     *   (b) `fact_uuid` — a reference fact exists (same idea, for `facts`);
+     *   (c) `fix_link`  — genuinely nothing exists yet for this cell, so the
+     *       leaf points at the fix surface instead (Documents pre-filtered
+     *       to this convenio, via `AdminLinks::documents($convenioId)` —
+     *       there is nothing MORE specific to link to when nothing exists).
+     * `rulings` is the one exception: an uncovered rulings cell is not a gap
+     * at all (see `CorpusCoverageService::rulingsCell()`'s own doc-comment)
+     * — no `gap_kind`, no `fix_link`, meta reads a neutral '—' rather than
+     * '✗'. Proven by `CoverageLeafResolutionTest`: every gap leaf resolves to
+     * (a), (b), or (c) — never none of the three.
+     */
     private function coverageCellLeaves(int $convenioId): array
     {
         $service = app(CorpusCoverageService::class);
@@ -347,12 +368,37 @@ class HierarchyController extends Controller
         $nodes = [];
         foreach ($cellLabels as $key => $label) {
             $cell = $row[$key];
+
+            // Rulings: not a gap concept — no badge, no fix link, a neutral dash.
+            if ($key === 'rulings') {
+                $nodes[] = [
+                    'key' => "cvg:{$convenioId}:{$key}",
+                    'label' => $label,
+                    'child_kind' => 'leaf',
+                    'meta' => $cell['covered'] ? '✓' : '—',
+                    'gap_kind' => null,
+                    'knowledge_type' => $cell['doc_uuid'] !== null ? 'document' : null,
+                    'doc_uuid' => $cell['doc_uuid'],
+                ];
+
+                continue;
+            }
+
+            $isFactCell = $key === 'facts';
+            $uuid = $isFactCell ? ($cell['fact_uuid'] ?? null) : ($cell['doc_uuid'] ?? null);
+
             $nodes[] = [
                 'key' => "cvg:{$convenioId}:{$key}",
                 'label' => $label,
                 'child_kind' => 'leaf',
                 'meta' => $cell['covered'] ? '✓' : '✗',
                 'gap_kind' => $cell['covered'] ? null : ($cell['reason_code'] ?? 'coverage_gap_unclassified'),
+                'knowledge_type' => $uuid !== null ? ($isFactCell ? 'reference_fact' : 'document') : null,
+                'doc_uuid' => $isFactCell ? null : $uuid,
+                'fact_uuid' => $isFactCell ? $uuid : null,
+                // Nothing exists at all for this cell — the leaf points at the
+                // fix surface instead of a card that doesn't exist.
+                'fix_link' => $uuid === null ? AdminLinks::documents($convenioId) : null,
             ];
         }
 

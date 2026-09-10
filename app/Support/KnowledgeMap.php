@@ -17,15 +17,30 @@ class KnowledgeMap
     /** Prose / retrievable document types (data-model §5 embedding-eligibility set). */
     public const PROSE_TYPE_CODES = ['convenio_text', 'national_law', 'partial_agreement'];
 
-    /** @return list<int> the document_type ids for the prose-eligible set (cached per request). */
+    /**
+     * @return list<int> the document_type ids for the prose-eligible set.
+     *
+     * Found live, eyes-on 2026-09-10 (surfaced by a new test, not by staging
+     * itself — `document_types` never changes at runtime in production, so
+     * this was latent, not a real prod bug): this used to memoize in a
+     * `static` variable, which the doc-comment called "cached per request"
+     * but is actually cached for the lifetime of the PHP WORKER PROCESS —
+     * across every request an Octane/long-lived worker ever serves, and
+     * across every test method in the same PHPUnit process. Any test that
+     * reseeds `document_types` between methods (`RefreshDatabase` rolls back
+     * rows but Postgres does NOT roll back sequence advances) got silently
+     * stale ids from an earlier test's now-rolled-back rows, which
+     * `proseCell()`'s every `whereIn('document_type_id', $proseIds)` query
+     * then silently matched nothing against — turning a real
+     * UNDER_REVIEW_SCOPE/EXPIRED_NO_SUCCESSOR cell into a false
+     * "no prose document at all" (`CoverageLeafResolutionTest` caught this).
+     * A plain, uncached lookup is correct and cheap enough (3-row indexed
+     * lookup) — this is called once per convenio per `grid()` call, not once
+     * per request.
+     */
     public static function proseTypeIds(): array
     {
-        static $ids = null;
-        if ($ids === null) {
-            $ids = DocumentType::whereIn('code', self::PROSE_TYPE_CODES)->pluck('id')->all();
-        }
-
-        return $ids;
+        return DocumentType::whereIn('code', self::PROSE_TYPE_CODES)->pluck('id')->all();
     }
 
     /**

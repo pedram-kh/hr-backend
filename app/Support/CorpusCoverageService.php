@@ -52,6 +52,20 @@ class CorpusCoverageService
     public const REASON_MISTAG = 'MISTAG';
 
     /**
+     * Found live, eyes-on 2026-09-10: a salary cell with genuinely no source
+     * at all (no table, no PDF, nothing) was falling to `reason_code = null`
+     * in `salaryCell()` — an intentional, documented design choice at the
+     * SERVICE level (`@see` this class's own docblock: "where no code fits,
+     * leave it null"). But `coverageCellLeaves()` then coerced that
+     * legitimate null into a fake `coverage_gap_unclassified` badge, which is
+     * exactly the "needs manual investigation" label this well-understood
+     * case does NOT deserve. One new named code, added deliberately (unlike
+     * the pre-existing 8, which come from the historical hand-run ledger's
+     * own vocabulary) because this is a real, common, unambiguous case.
+     */
+    public const REASON_NO_SALARY_SOURCE = 'NO_SALARY_SOURCE';
+
+    /**
      * The dev-fixture convenio numero prefix (`TestUserSeeder::FIXTURE_LABEL`
      * / `RegistryImport`'s own private copy of the same string) — Sprint 0
      * seeded exactly one such row (`DEV-FIXTURE-0001`) purely to satisfy test
@@ -154,14 +168,14 @@ class CorpusCoverageService
     {
         $proseIds = KnowledgeMap::proseTypeIds();
         if ($proseIds === []) {
-            return ['covered' => false, 'amendment_only' => false, 'reason_code' => null, 'detail' => 'no prose document types configured'];
+            return ['covered' => false, 'amendment_only' => false, 'reason_code' => null, 'detail' => 'no prose document types configured', 'doc_uuid' => null];
         }
 
         $activeDocs = DB::table('documents')
             ->where('convenio_id', $convenioId)
             ->whereIn('document_type_id', $proseIds)
             ->where('retrieval_status', 'active')
-            ->select('id', 'document_type_id')
+            ->select('id', 'uuid', 'document_type_id')
             ->get();
 
         $substantiveTypeIds = DB::table('document_types')
@@ -182,12 +196,20 @@ class CorpusCoverageService
 
         if ($activeWithChunks !== []) {
             $hasSubstantive = collect($activeWithChunks)->contains(fn ($d) => in_array($d->document_type_id, $substantiveTypeIds, true));
+            // Sprint 8 follow-up (eyes-on 2026-09-10): the covering doc's uuid,
+            // so the coverage-lens leaf can open its DocumentDetailPanel —
+            // prefer the substantive one (convenio_text/national_law) over an
+            // amendment when both exist.
+            $covering = $hasSubstantive
+                ? collect($activeWithChunks)->first(fn ($d) => in_array($d->document_type_id, $substantiveTypeIds, true))
+                : $activeWithChunks[0];
 
             return [
                 'covered' => true,
                 'amendment_only' => ! $hasSubstantive,
                 'reason_code' => null,
                 'detail' => $hasSubstantive ? null : 'covered only by a partial_agreement amendment — base text still missing',
+                'doc_uuid' => $covering->uuid,
             ];
         }
 
@@ -205,8 +227,8 @@ class CorpusCoverageService
             // (the same `pages_with_text` definition `DocumentController`
             // already uses for its own `empty_text` flag) distinguishes them
             // instead of assuming every zero-chunk active doc is a scan.
-            $hasGenuineScanNoText = false;
-            $hasUnderReviewWithText = false;
+            $genuineScanDoc = null;
+            $underReviewWithTextDoc = null;
             foreach ($activeZeroChunk as $doc) {
                 $pagesTotal = (int) DB::table('document_pages')->where('document_id', $doc->id)->count();
                 $pagesWithText = (int) DB::table('document_pages')
@@ -214,45 +236,47 @@ class CorpusCoverageService
                     ->whereRaw("length(btrim(coalesce(text, ''))) > 0")
                     ->count();
                 if ($pagesTotal > 0 && $pagesWithText === 0) {
-                    $hasGenuineScanNoText = true;
+                    $genuineScanDoc ??= $doc;
 
                     continue;
                 }
                 $taggingStatus = DB::table('documents')->where('id', $doc->id)->value('tagging_status');
                 if ($taggingStatus === 'under_review') {
-                    $hasUnderReviewWithText = true;
+                    $underReviewWithTextDoc ??= $doc;
                 }
             }
 
-            if ($hasGenuineScanNoText) {
-                return ['covered' => false, 'amendment_only' => false, 'reason_code' => self::REASON_SCAN_NO_TEXT, 'detail' => 'active prose document(s) exist but page-level text extraction found none — a genuine scan with no OCR text'];
+            if ($genuineScanDoc !== null) {
+                return ['covered' => false, 'amendment_only' => false, 'reason_code' => self::REASON_SCAN_NO_TEXT, 'detail' => 'active prose document(s) exist but page-level text extraction found none — a genuine scan with no OCR text', 'doc_uuid' => $genuineScanDoc->uuid];
             }
-            if ($hasUnderReviewWithText) {
-                return ['covered' => false, 'amendment_only' => false, 'reason_code' => self::REASON_UNDER_REVIEW_SCOPE, 'detail' => 'prose document(s) have real extracted text but tagging is not yet verified, so chunks:embed has not processed them'];
+            if ($underReviewWithTextDoc !== null) {
+                return ['covered' => false, 'amendment_only' => false, 'reason_code' => self::REASON_UNDER_REVIEW_SCOPE, 'detail' => 'prose document(s) have real extracted text but tagging is not yet verified, so chunks:embed has not processed them', 'doc_uuid' => $underReviewWithTextDoc->uuid];
             }
 
-            return ['covered' => false, 'amendment_only' => false, 'reason_code' => self::REASON_SCAN_NO_TEXT, 'detail' => 'active prose document(s) exist but have 0 chunks'];
+            return ['covered' => false, 'amendment_only' => false, 'reason_code' => self::REASON_SCAN_NO_TEXT, 'detail' => 'active prose document(s) exist but have 0 chunks', 'doc_uuid' => $activeZeroChunk[0]->uuid];
         }
 
-        $underReview = DB::table('documents')
+        $underReviewDoc = DB::table('documents')
             ->where('convenio_id', $convenioId)
             ->whereIn('document_type_id', $proseIds)
             ->where('tagging_status', 'under_review')
-            ->exists();
-        if ($underReview) {
-            return ['covered' => false, 'amendment_only' => false, 'reason_code' => self::REASON_UNDER_REVIEW_SCOPE, 'detail' => 'prose document(s) exist but tagging is not yet verified'];
+            ->select('uuid')
+            ->first();
+        if ($underReviewDoc !== null) {
+            return ['covered' => false, 'amendment_only' => false, 'reason_code' => self::REASON_UNDER_REVIEW_SCOPE, 'detail' => 'prose document(s) exist but tagging is not yet verified', 'doc_uuid' => $underReviewDoc->uuid];
         }
 
-        $historicalExists = DB::table('documents')
+        $historicalDoc = DB::table('documents')
             ->where('convenio_id', $convenioId)
             ->whereIn('document_type_id', $proseIds)
             ->where('retrieval_status', 'historical')
-            ->exists();
-        if ($historicalExists) {
-            return ['covered' => false, 'amendment_only' => false, 'reason_code' => self::REASON_EXPIRED_NO_SUCCESSOR, 'detail' => 'only historical/expired prose exists, no active successor'];
+            ->select('uuid')
+            ->first();
+        if ($historicalDoc !== null) {
+            return ['covered' => false, 'amendment_only' => false, 'reason_code' => self::REASON_EXPIRED_NO_SUCCESSOR, 'detail' => 'only historical/expired prose exists, no active successor', 'doc_uuid' => $historicalDoc->uuid];
         }
 
-        return ['covered' => false, 'amendment_only' => false, 'reason_code' => null, 'detail' => 'no prose document at all for this convenio'];
+        return ['covered' => false, 'amendment_only' => false, 'reason_code' => null, 'detail' => 'no prose document at all for this convenio', 'doc_uuid' => null];
     }
 
     /**
@@ -267,7 +291,7 @@ class CorpusCoverageService
     {
         $exact = DB::table('salary_tables')->where('convenio_id', $convenioId)->where('year', $year)->exists();
         if ($exact) {
-            return ['covered' => true, 'year' => $year, 'reason_code' => null, 'detail' => null];
+            return ['covered' => true, 'year' => $year, 'reason_code' => null, 'detail' => null, 'doc_uuid' => null];
         }
 
         $mostRecentPastYear = DB::table('salary_tables')
@@ -277,12 +301,12 @@ class CorpusCoverageService
             ->orderByDesc('year')
             ->value('year');
         if ($mostRecentPastYear !== null) {
-            return ['covered' => true, 'year' => $mostRecentPastYear, 'reason_code' => null, 'detail' => "table is {$mostRecentPastYear}, carried forward per SalaryAnswerService's own year-fallback"];
+            return ['covered' => true, 'year' => $mostRecentPastYear, 'reason_code' => null, 'detail' => "table is {$mostRecentPastYear}, carried forward per SalaryAnswerService's own year-fallback", 'doc_uuid' => null];
         }
 
         $futureOnly = DB::table('salary_tables')->where('convenio_id', $convenioId)->whereNotNull('year')->where('year', '>', $year)->exists();
         if ($futureOnly) {
-            return ['covered' => false, 'year' => null, 'reason_code' => null, 'detail' => 'only a not-yet-effective (future) salary table exists'];
+            return ['covered' => false, 'year' => null, 'reason_code' => null, 'detail' => 'only a not-yet-effective (future) salary table exists', 'doc_uuid' => null];
         }
 
         $pdfUnconverted = DB::table('documents as d')
@@ -290,12 +314,16 @@ class CorpusCoverageService
             ->where('d.convenio_id', $convenioId)
             ->where('dt.code', 'salary_tables')
             ->where('d.storage_path', 'like', '%.pdf')
-            ->exists();
-        if ($pdfUnconverted) {
-            return ['covered' => false, 'year' => null, 'reason_code' => self::REASON_SALARY_PDF_NOT_IMPORTED, 'detail' => 'a PDF salary document exists but has not been converted/imported'];
+            ->select('d.uuid')
+            ->first();
+        if ($pdfUnconverted !== null) {
+            return ['covered' => false, 'year' => null, 'reason_code' => self::REASON_SALARY_PDF_NOT_IMPORTED, 'detail' => 'a PDF salary document exists but has not been converted/imported', 'doc_uuid' => $pdfUnconverted->uuid];
         }
 
-        return ['covered' => false, 'year' => null, 'reason_code' => null, 'detail' => 'no salary data at all for this convenio'];
+        // Found live, eyes-on 2026-09-10: genuinely no source at all (no table,
+        // no PDF, nothing) — a real, well-understood case, not an unclassified
+        // one. See REASON_NO_SALARY_SOURCE's own doc-comment.
+        return ['covered' => false, 'year' => null, 'reason_code' => self::REASON_NO_SALARY_SOURCE, 'detail' => 'no salary data at all for this convenio', 'doc_uuid' => null];
     }
 
     /**
@@ -310,36 +338,46 @@ class CorpusCoverageService
         $verified = DB::table('reference_facts')
             ->where('convenio_id', $convenioId)
             ->where('status', 'verified')
-            ->select('job_category_id', 'group_label')
+            ->select('uuid', 'job_category_id', 'group_label')
             ->get();
 
         if ($verified->isNotEmpty()) {
             $groupOnly = $verified->every(fn ($f) => $f->job_category_id !== null || $f->group_label !== null);
 
-            return ['covered' => true, 'group_only' => $groupOnly, 'reason_code' => null, 'detail' => null];
+            return ['covered' => true, 'group_only' => $groupOnly, 'reason_code' => null, 'detail' => null, 'fact_uuid' => $verified->first()->uuid];
         }
 
-        $needsReview = DB::table('reference_facts')->where('convenio_id', $convenioId)->where('status', 'needs_review')->exists();
-        if ($needsReview) {
-            return ['covered' => false, 'group_only' => false, 'reason_code' => self::REASON_FACT_NEEDS_REVIEW, 'detail' => 'a proposed fact exists but no human has verified it yet'];
+        $needsReview = DB::table('reference_facts')->where('convenio_id', $convenioId)->where('status', 'needs_review')->select('uuid')->first();
+        if ($needsReview !== null) {
+            return ['covered' => false, 'group_only' => false, 'reason_code' => self::REASON_FACT_NEEDS_REVIEW, 'detail' => 'a proposed fact exists but no human has verified it yet', 'fact_uuid' => $needsReview->uuid];
         }
 
-        return ['covered' => false, 'group_only' => false, 'reason_code' => null, 'detail' => 'no reference fact at all for this convenio'];
+        return ['covered' => false, 'group_only' => false, 'reason_code' => null, 'detail' => 'no reference fact at all for this convenio', 'fact_uuid' => null];
     }
 
-    /** Rulings ✓/✗ (plan.md §5.1): an active, internal_hr_ruling-authority document.
+    /**
+     * Rulings ✓/✗ (plan.md §5.1): an active, internal_hr_ruling-authority
+     * document. `reason_code` is ALWAYS null and MUST stay that way: an
+     * uncovered rulings cell means "no internal HR ruling has ever been
+     * published for this convenio" — a normal, expected state for most
+     * convenios (rulings are rare and opt-in, unlike prose/salary/facts,
+     * which every convenio is expected to eventually have). It is not a
+     * coverage hole and `coverageCellLeaves()` must not badge it as one
+     * (found live, eyes-on 2026-09-10 — it was falling to a fake
+     * `coverage_gap_unclassified` badge).
      *
      * @return array<string,mixed>
      */
     private function rulingsCell(int $convenioId): array
     {
-        $covered = DB::table('documents')
+        $covering = DB::table('documents')
             ->where('convenio_id', $convenioId)
             ->where('authority_level', 'internal_hr_ruling')
             ->where('retrieval_status', 'active')
-            ->exists();
+            ->select('uuid')
+            ->first();
 
-        return ['covered' => $covered, 'reason_code' => null, 'detail' => null];
+        return ['covered' => $covering !== null, 'reason_code' => null, 'detail' => null, 'doc_uuid' => $covering?->uuid];
     }
 
     /**

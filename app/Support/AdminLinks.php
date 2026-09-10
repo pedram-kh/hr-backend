@@ -47,9 +47,18 @@ final class AdminLinks
         return '#view=review&tab=tagging';
     }
 
-    public static function documents(): string
+    /**
+     * @param  int|null  $convenioId  Sprint 8 follow-up (found live, eyes-on
+     *   2026-09-10): a coverage-lens gap leaf with no underlying document at
+     *   all still needs a fix surface to open — Documents pre-filtered to the
+     *   convenio in question (`DocumentController::index`'s existing
+     *   `convenio_id` filter, `DocumentsPage`'s new `initialConvenioId` prop).
+     */
+    public static function documents(?int $convenioId = null): string
     {
-        return '#view=documents';
+        return $convenioId !== null
+            ? "#view=documents&convenio={$convenioId}"
+            : '#view=documents';
     }
 
     public static function guardrails(): string
