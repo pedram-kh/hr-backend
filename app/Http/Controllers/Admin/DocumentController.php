@@ -214,9 +214,16 @@ class DocumentController extends Controller
             // reference_source .docx/.xlsx is read for content + feeds the manual
             // fact path; it is NEVER salary and NEVER embedded.
             'as_reference' => ['sometimes', 'boolean'],
+            // Sprint 7g Item 3 (F-1) — mirrors the exact manual-edit gate
+            // (reassignFacet/updateLifecycle above): a checksum-matched file
+            // that would change document_type/convenio/validity on the
+            // EXISTING document is reported and left untouched unless the
+            // caller explicitly confirms.
+            'confirm_scope_change' => ['sometimes', 'boolean'],
         ]);
 
         $asReference = $request->boolean('as_reference');
+        $confirmScopeChange = $request->boolean('confirm_scope_change');
         $relativePaths = (array) $request->input('relative_paths', []);
         $adminId = $request->user()->id;
         $vocab = new VocabularyResolver; // one resolver per batch (caches vocab)
@@ -258,6 +265,9 @@ class DocumentController extends Controller
                     $adminId,
                     $vocab,
                     $asReference,
+                    false,
+                    60,
+                    $confirmScopeChange,
                 );
             } catch (\Throwable $e) {
                 $results[] = [
@@ -265,6 +275,17 @@ class DocumentController extends Controller
                     'error' => $e->getMessage(),
                 ];
             }
+        }
+
+        // Sprint 7g Item 3 (F-1): if any file in the batch hit the checksum-
+        // retype gate and confirmation wasn't given, surface it as a 409 (the
+        // same status the manual-edit scope gate uses) — the files that DID
+        // succeed are still reported in `results`; re-sending the SAME batch
+        // with `confirm_scope_change=true` applies only to the blocked one(s)
+        // (the rest are idempotent no-ops, matched by their own content_hash).
+        $blocked = array_values(array_filter($results, fn ($r) => $r['confirm_scope_change_required'] ?? false));
+        if ($blocked !== [] && ! $confirmScopeChange) {
+            return response()->json(['results' => $results, 'scope_affecting' => true], 409);
         }
 
         return response()->json(['results' => $results]);
