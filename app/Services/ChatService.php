@@ -45,6 +45,22 @@ class ChatService
     public const ESCALATION_MESSAGE = 'No estoy seguro de la respuesta a esta pregunta, '
         .'así que la estoy pasando a una persona del equipo de Recursos Humanos.';
 
+    /**
+     * Sprint 7g Item 1 (ADR-0029) — THE ONE fixed neutral message shown to the
+     * employee on EVERY escalation, regardless of reason. `persistTurn()` is
+     * the single point that enforces this: it OVERRIDES whatever per-reason
+     * copy a caller passed in (this constant, AGGREGATION_MESSAGE,
+     * CROSSPATH_MESSAGE, COMPOSITION_CONFLICT_MESSAGE, either
+     * COVERAGE_GAP_MESSAGE, an admin-configured off_domain refusal, …) with
+     * this string before it is persisted or returned. No reason code, no
+     * document id, no convenio/topic name, no other person's name — nothing
+     * that hints at scope or coverage ever reaches the employee. The per-reason
+     * strings above remain as historical/internal call-site documentation of
+     * WHY each path escalates; only THIS constant is ever shown.
+     */
+    public const EMPLOYEE_ESCALATION_MESSAGE = 'Un/a compañero/a de Recursos Humanos revisará tu '
+        .'consulta y te responderá.';
+
     /** Surfaced on a vague "total días libres" aggregation (Correction-03, Fix 2). */
     public const AGGREGATION_MESSAGE = 'Para darte una cifra fiable necesito que me preguntes por un '
         .'tipo concreto de días libres (por ejemplo, las vacaciones, los días de asuntos propios o un '
@@ -1500,7 +1516,16 @@ class ChatService
     ): array {
         $escalate = $outcome === 'escalate';
 
-        return DB::transaction(function () use ($session, $employee, $question, $answer, $citations, $trace, $outcome, $escalate, $escalationReason, $categories) {
+        // Sprint 7g Item 1 (ADR-0029): the SINGLE override point. Every escalate
+        // call site above still passes its own per-reason internal copy (kept as
+        // call-site documentation of why THAT path escalates) — it is discarded
+        // here and replaced with the one fixed neutral message, unconditionally,
+        // regardless of $escalationReason. This is what the guard/scan test
+        // relies on: there is exactly one place in the codebase an employee-
+        // visible escalation string can originate from.
+        $employeeAnswer = $escalate ? self::EMPLOYEE_ESCALATION_MESSAGE : $answer;
+
+        return DB::transaction(function () use ($session, $employee, $question, $employeeAnswer, $citations, $trace, $outcome, $escalate, $escalationReason, $categories) {
             $session->forceFill(['last_activity_at' => now()])->save();
 
             $userMessage = ChatMessage::create([
@@ -1512,7 +1537,7 @@ class ChatService
             $assistantMessage = ChatMessage::create([
                 'session_id' => $session->id,
                 'role' => 'assistant',
-                'content' => $answer,
+                'content' => $employeeAnswer,
             ]);
 
             foreach ($citations as $c) {
@@ -1531,13 +1556,33 @@ class ChatService
 
             $card = null;
             if ($escalate) {
+                $reason = $escalationReason ?? 'low_confidence';
+                // Sprint 7g Item 1 (ADR-0029): the DETERMINISTIC facts are cheap
+                // (a pure function over data already on $trace) and computed
+                // SYNCHRONOUSLY, in the same transaction, so the card is never
+                // seen by HR without them. The fix is always structured here —
+                // never the model's — per the sprint constraint. The AI-written
+                // paragraph ("Resumen IA") is a separate, ASYNCHRONOUS step
+                // (dispatched after commit, below) so a provider call never
+                // holds this transaction open.
+                $explanation = \App\Support\EscalationExplainer::explain($reason, $trace);
                 $card = EscalationCard::create([
                     'chat_session_id' => $session->id,
                     'source_message_id' => $userMessage->id,
                     'employee_id' => $employee->id,
-                    'reason' => $escalationReason ?? 'low_confidence',
+                    'reason' => $reason,
                     'status' => 'new',
+                    'explanation_facts' => $explanation,
+                    'fix_action' => $explanation['fix_action'],
+                    'fix_surface' => $explanation['fix_surface'],
+                    'fix_link' => $explanation['fix_link'],
                 ]);
+
+                // The AI paragraph is a SEPARATE, asynchronous step — ->afterCommit()
+                // (Laravel core) defers the actual dispatch until this transaction
+                // commits, so the job never runs against a card row that isn't
+                // visible yet, without hand-rolling a post-transaction hook here.
+                \App\Jobs\GenerateEscalationExplanationText::dispatch($card->uuid)->afterCommit();
             }
 
             return [
@@ -1547,7 +1592,7 @@ class ChatService
                 'escalated' => $escalate,
                 'escalation_reason' => $escalationReason,
                 'escalation_uuid' => $card?->uuid,
-                'answer' => $answer,
+                'answer' => $employeeAnswer,
                 'citations' => $outcome === 'answer' ? $citations : [],
                 'categories' => $categories,
                 'authority_used' => $trace['floor_decision']['authority_used'] ?? [],

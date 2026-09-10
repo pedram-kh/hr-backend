@@ -148,7 +148,11 @@ class Sprint7cCompositionTest extends TestCase
         $result = app(ChatService::class)->handleMessage($employee, '¿cuál es mi periodo de prueba?');
 
         $this->assertSame('escalate', $result['outcome']);
-        $this->assertSame(ChatService::COMPOSITION_CONFLICT_MESSAGE, $result['answer']);
+        // Sprint 7g Item 1: every escalation shows the ONE fixed neutral
+        // message to the employee now, regardless of reason — never the
+        // per-reason COMPOSITION_CONFLICT_MESSAGE (kept as internal call-site
+        // documentation only; see ChatService::persistTurn()'s override).
+        $this->assertSame(ChatService::EMPLOYEE_ESCALATION_MESSAGE, $result['answer']);
         $this->assertSame([], $result['citations']);
 
         $trace = MessageTrace::firstOrFail()->trace;
@@ -184,7 +188,7 @@ class Sprint7cCompositionTest extends TestCase
         $result = app(ChatService::class)->handleMessage($employee, '¿cuál es mi periodo de prueba?');
 
         $this->assertSame('escalate', $result['outcome']);
-        $this->assertSame(ChatService::ESCALATION_MESSAGE, $result['answer']);
+        $this->assertSame(ChatService::EMPLOYEE_ESCALATION_MESSAGE, $result['answer']);
 
         $trace = MessageTrace::firstOrFail()->trace;
         $this->assertSame('reference_fact_composition', $trace['floor_decision']['path']);
