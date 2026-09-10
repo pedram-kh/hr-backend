@@ -23,6 +23,12 @@ return [
         'url' => env('HR_AI_URL', 'http://localhost:8001'),
         'internal_token' => env('HR_AI_INTERNAL_TOKEN', 'dev-internal-token'),
 
+        // Sprint 8, Step 5 (plan.md §1.3 build-authorization addition): the
+        // caller-side chunk size for `/embed-batch` calls — MUST match (or be
+        // ≤) hr-ai's own `EMBED_BATCH_MAX_TEXTS` (default 256, app/config.py),
+        // which hr-ai enforces server-side regardless of what this value is.
+        'embed_batch_cap' => env('HR_AI_EMBED_BATCH_CAP', 256),
+
         // Non-secret answer-model config passed to hr-ai /synthesise (ADR-0015).
         // The API KEY is NOT here — it is set via the admin screen, encrypted at
         // rest in answer_model_settings, and passed decrypted per call. These MUST

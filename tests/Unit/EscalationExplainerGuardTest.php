@@ -45,6 +45,9 @@ class EscalationExplainerGuardTest extends TestCase
             'conflict', 'salary_coverage_gap', 'reference_fact_coverage_gap',
             // salary_not_in_chat is RETIRED (Correction-02 superseded) — no
             // path emits it any more; deliberately not required here.
+            // Sprint 8, Step 6 (plan.md §6.4): opened by the quality-sample
+            // review screen, not the answer pipeline — still a live reason.
+            'quality_sample_wrong',
         ];
 
         $coveredReasons = array_unique(array_map(

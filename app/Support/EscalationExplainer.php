@@ -79,6 +79,13 @@ final class EscalationExplainer
         'publish.semantic_compare_unavailable',
         'publish.semantic_no_text_to_compare',
         'publish.convert_blocked',
+        // --- Sprint 8, Step 6 (plan.md §6.4) — quality-sample "wrong" verdicts,
+        // one sub-outcome per `quality_samples.failure_kind` value ------------
+        'quality_sample_wrong.wrong_scope',
+        'quality_sample_wrong.wrong_figure',
+        'quality_sample_wrong.stale_document',
+        'quality_sample_wrong.unclear',
+        'quality_sample_wrong.other',
     ];
 
     /**
@@ -148,6 +155,11 @@ final class EscalationExplainer
             'conflict' => 'fact_vs_convenio',
             'salary_coverage_gap' => self::salarySubOutcome($trace),
             'reference_fact_coverage_gap' => self::referenceFactSubOutcome($trace),
+            // Sprint 8, Step 6 (plan.md §6.4): the sub-outcome is already known
+            // directly — the reviewer picked it (`quality_samples.failure_kind`)
+            // — not detected from a floor/router trace shape like every other
+            // reason here.
+            'quality_sample_wrong' => $trace['quality_sample']['failure_kind'] ?? 'other',
             default => 'unspecified',
         };
     }
@@ -267,20 +279,17 @@ final class EscalationExplainer
         // the tab; `#doc=<uuid>` stays the Sprint 7e compat form (bare, implies
         // view=documents); `tab=`/`fact=`/`emp=`/`convenio=` are additive keys
         // on the SAME hash the Review/Directory/Groups surfaces read on mount.
-        $groupsLink = fn (?int $convenioId) => $convenioId !== null
-            ? "#view=review&tab=groups&convenio={$convenioId}"
-            : '#view=review&tab=groups';
-        $factLink = fn (?string $uuid) => $uuid !== null
-            ? "#view=review&tab=reference-facts&fact={$uuid}"
-            : '#view=review&tab=reference-facts';
-        $empLink = fn (?string $uuid) => $uuid !== null
-            ? "#view=directory&emp={$uuid}"
-            : '#view=directory';
-        $vocabLink = fn () => '#view=review&tab=vocabulary';
-        $taggingLink = fn () => '#view=review&tab=tagging';
-        $documentsLink = fn () => '#view=documents';
-        $guardrailsLink = fn () => '#view=guardrails';
-        $settingsLink = fn () => '#view=settings';
+        // Sprint 8 (plan.md §5.4): these builders now live in `AdminLinks`,
+        // shared with `CorpusCoverageService`'s reason-code unblocking links,
+        // rather than being redefined a second time for coverage gaps.
+        $groupsLink = fn (?int $convenioId) => AdminLinks::groups($convenioId);
+        $factLink = fn (?string $uuid) => AdminLinks::fact($uuid);
+        $empLink = fn (?string $uuid) => AdminLinks::employee($uuid);
+        $vocabLink = fn () => AdminLinks::vocabulary();
+        $taggingLink = fn () => AdminLinks::tagging();
+        $documentsLink = fn () => AdminLinks::documents();
+        $guardrailsLink = fn () => AdminLinks::guardrails();
+        $settingsLink = fn () => AdminLinks::settings();
 
         return [
             'sensitive_topic' => [
@@ -612,6 +621,52 @@ final class EscalationExplainer
                     'found' => 'El motivo de la escalada de esta tarjeta no está en el conjunto permitido para convertir (p. ej. un tema sensible nunca se publica).',
                     'stopped_reason' => 'Existe una política que decide qué motivos de escalada pueden convertirse en conocimiento publicado; este motivo no está permitido.',
                     'fix_action' => 'Responder a la persona directamente por otro canal; esta tarjeta no puede convertirse en conocimiento.',
+                    'fix_surface' => 'Escalations (tarjeta)',
+                    'fix_link' => null,
+                ],
+            ],
+            // Sprint 8, Step 6 (plan.md §6.4): opened when a monthly quality
+            // sample is reviewed with verdict='wrong' — one sub-outcome per
+            // `failure_kind`, `fix_link` following the same 3-destination
+            // scheme (fact / documents / directory) the plan text names.
+            'quality_sample_wrong' => [
+                'wrong_scope' => fn (array $t) => [
+                    'asked' => 'Una respuesta ya enviada al empleado, revisada en el muestreo mensual de calidad.',
+                    'found' => 'La respuesta usó un ámbito equivocado (convenio, grupo o sub-área distinto al que corresponde a este empleado).',
+                    'stopped_reason' => 'El ámbito de la respuesta no coincide con el perfil real del empleado — detectado en revisión humana, no automáticamente en el momento de responder.',
+                    'fix_action' => 'Revisar y corregir el convenio/grupo/sub-área asignado al empleado en el Directorio.',
+                    'fix_surface' => 'Directorio',
+                    'fix_link' => $empLink($t['quality_sample']['employee_uuid'] ?? null),
+                ],
+                'wrong_figure' => fn (array $t) => [
+                    'asked' => 'Una respuesta ya enviada al empleado, revisada en el muestreo mensual de calidad.',
+                    'found' => 'La respuesta citaba una cifra incorrecta.',
+                    'stopped_reason' => 'Una cifra incorrecta detectada en revisión humana; la comprobación automática en el momento de responder no lo detectó.',
+                    'fix_action' => 'Revisar y corregir el dato de referencia o la tabla salarial de origen de esta cifra.',
+                    'fix_surface' => 'Reference facts (revisión)',
+                    'fix_link' => $factLink($t['quality_sample']['fact_uuid'] ?? null),
+                ],
+                'stale_document' => fn (array $t) => [
+                    'asked' => 'Una respuesta ya enviada al empleado, revisada en el muestreo mensual de calidad.',
+                    'found' => 'La respuesta se basó en un documento que ya no está vigente (una versión anterior del convenio, por ejemplo).',
+                    'stopped_reason' => 'El documento de origen quedó desactualizado sin que el sistema lo marcara — detectado en revisión humana.',
+                    'fix_action' => 'Cargar/activar la versión vigente del documento y retirar o marcar como caducada la versión anterior.',
+                    'fix_surface' => 'Documentos',
+                    'fix_link' => $documentsLink(),
+                ],
+                'unclear' => fn (array $t) => [
+                    'asked' => 'Una respuesta ya enviada al empleado, revisada en el muestreo mensual de calidad.',
+                    'found' => 'La respuesta no fue clara o fue difícil de entender para la persona empleada, aunque el dato en sí no fuera necesariamente incorrecto.',
+                    'stopped_reason' => 'Claridad insuficiente detectada en revisión humana, no un fallo de exactitud del dato.',
+                    'fix_action' => 'Revisar el documento/dato de origen; si el texto de origen es en sí ambiguo, puede necesitar una redacción más clara o una mejor división del documento.',
+                    'fix_surface' => 'Documentos',
+                    'fix_link' => $documentsLink(),
+                ],
+                'other' => fn (array $t) => [
+                    'asked' => 'Una respuesta ya enviada al empleado, revisada en el muestreo mensual de calidad.',
+                    'found' => 'La persona revisora marcó la respuesta como incorrecta por un motivo que no encaja en las demás categorías.',
+                    'stopped_reason' => 'Motivo libre, registrado en la nota de la revisión.',
+                    'fix_action' => 'Leer la nota de la persona revisora para entender el motivo exacto y decidir la corrección.',
                     'fix_surface' => 'Escalations (tarjeta)',
                     'fix_link' => null,
                 ],

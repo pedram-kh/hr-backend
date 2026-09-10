@@ -79,6 +79,19 @@ class RoleSeeder extends Seeder
         $vocabularyApprove = Permission::findOrCreate('vocabulary.approve', 'web');
         $roles['super_admin']->givePermissionTo($vocabularyApprove);
 
+        // Sprint-8 ability (ADR-0030). Kept in lockstep with
+        // 2026_09_10_100006_seed_analytics_view_permission (the data migration
+        // that lands it on already-migrated databases); both are idempotent.
+        //  - analytics.view : see Analítica/Cobertura (aggregates only) —
+        //    super_admin + hr_agent + auditor. knowledge_editor sees Cobertura
+        //    (coverage) ONLY, via its existing `knowledge.edit` grant, not this
+        //    permission (plan.md §9, §12 resolved q7 — the one new
+        //    access-control primitive this sprint invents).
+        $analyticsView = Permission::findOrCreate('analytics.view', 'web');
+        $roles['super_admin']->givePermissionTo($analyticsView);
+        $roles['hr_agent']->givePermissionTo($analyticsView);
+        $roles['auditor']->givePermissionTo($analyticsView);
+
         app(PermissionRegistrar::class)->forgetCachedPermissions();
     }
 }

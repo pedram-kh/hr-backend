@@ -132,6 +132,42 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Sprint 8 — question-cluster threshold τ (ADR-0030, plan.md §4.2)
+    |--------------------------------------------------------------------------
+    |
+    | CALIBRATED on staging, 2026-09-10, via 20 hand-authored Spanish question
+    | pairs (10 true paraphrases + 10 hard non-pairs — same topic, different
+    | intent — across 5 topics: vacaciones, salario, periodo_de_prueba,
+    | permisos, jornada; hr-docs/sprints/sprint-08/eval/question-pairs.json),
+    | embedded via the real /embed-batch endpoint (BGE-M3, not scripted):
+    |
+    |   paraphrase sims: min=0.6846 max=0.9451 mean=0.8475 (n=10)
+    |   non-pair sims:   min=0.6061 max=0.7772 mean=0.6960 (n=10)
+    |
+    | THE CLASSES OVERLAP — no threshold separates all 10 paraphrases from all
+    | 10 non-pairs (lowest paraphrase 0.6846 < highest non-pair 0.7772). Per
+    | the sprint's own calibration mandate ("if the classes overlap, keep
+    | τ=0.80, say so, and show the overlap"), τ stays 0.80 rather than being
+    | tuned to this one 20-pair set. τ=0.80 happens to sit ABOVE the entire
+    | overlap band [0.6846, 0.7772] on this set: 0 of 10 non-pairs would ever
+    | wrongly merge (max 0.7772 < 0.80), at the cost of 1 of 10 paraphrases
+    | not clustering (pair 7, "permiso por matrimonio" phrasings, 0.6846 <
+    | 0.80) — i.e. 0.80 favours precision (no false merges) over recall (a
+    | few missed true merges), which is the safer failure mode for a
+    | never-LLM-labelled, medoid-only cluster. A second, independent real
+    | measurement (this build's own review.md, Step 5) found the SAME
+    | dynamic on a different pair ("¿cuántos días de vacaciones tengo?" vs
+    | "vacaciones que me corresponden" — 0.7916, also below τ) — two separate
+    | real measurements, same shape of result, not one fluke.
+    |
+    | Full table + the overlap: hr-docs/sprints/sprint-08/review.md.
+    | Revisit once real traffic gives a larger, naturally-occurring pair set
+    | rather than a hand-authored 20-pair one.
+    */
+    'question_cluster_threshold' => (float) env('HR_QUESTION_CLUSTER_THRESHOLD', 0.80),
+
+    /*
+    |--------------------------------------------------------------------------
     | Sprint 7d — the succession proposal (ADR-0024, part C)
     |--------------------------------------------------------------------------
     |

@@ -69,6 +69,15 @@ class IdentityPresenter
                 // Sprint 7a (ADR-0011/0020): approve a vocabulary proposal into the
                 // controlled vocabulary — super_admin only (the most-guarded write).
                 'vocabulary.approve' => $account->can('vocabulary.approve'),
+                // Sprint 8 (ADR-0030). BUG found live, eyes-on 2026-09-10: this key
+                // was never added when analytics.view was introduced, so
+                // `canViewAnalytics`/`canViewCoverage` on the frontend always read
+                // `undefined` here regardless of the real Spatie grant —
+                // Analítica's nav entry was unreachable for EVERY role, and
+                // Cobertura's nav entry silently survived only for roles that
+                // also happen to hold `knowledge.edit` (super_admin), not for
+                // hr_agent/auditor, who hold analytics.view but not knowledge.edit.
+                'analytics.view' => $account->can('analytics.view'),
             ],
         ];
     }
