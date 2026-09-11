@@ -67,6 +67,16 @@ class EscalationExplainerTest extends TestCase
             'quality_sample_wrong.stale_document' => ['quality_sample_wrong', ['quality_sample' => ['failure_kind' => 'stale_document']], 'stale_document'],
             'quality_sample_wrong.unclear' => ['quality_sample_wrong', ['quality_sample' => ['failure_kind' => 'unclear']], 'unclear'],
             'quality_sample_wrong.other' => ['quality_sample_wrong', ['quality_sample' => ['failure_kind' => 'other']], 'other'],
+            // Sprint 10a (ADR-0032): the sub-outcome is the Cobertura prose
+            // reason code, copied onto the trace by ChatService. The last case
+            // is the D3 mid-ingest state and is the reason `pending_embed`
+            // exists as a separate flag: Cobertura reports it as SCAN_NO_TEXT
+            // (its catch-all), and taking that at face value would tell HR to
+            // re-source a perfectly good document.
+            'estatuto_fallback_gap.expired_no_successor' => ['estatuto_fallback_gap', ['prose_gap' => ['classification' => 'expired_only', 'reason_code' => 'EXPIRED_NO_SUCCESSOR', 'pending_embed' => false]], 'expired_no_successor'],
+            'estatuto_fallback_gap.tagging_under_review' => ['estatuto_fallback_gap', ['prose_gap' => ['classification' => 'expired_only', 'reason_code' => 'UNDER_REVIEW_SCOPE', 'pending_embed' => false]], 'tagging_under_review'],
+            'estatuto_fallback_gap.scan_no_text' => ['estatuto_fallback_gap', ['prose_gap' => ['classification' => 'expired_only', 'reason_code' => 'SCAN_NO_TEXT', 'pending_embed' => false]], 'scan_no_text'],
+            'estatuto_fallback_gap.not_yet_embedded' => ['estatuto_fallback_gap', ['prose_gap' => ['classification' => 'expired_only', 'reason_code' => 'SCAN_NO_TEXT', 'pending_embed' => true]], 'not_yet_embedded'],
         ];
     }
 

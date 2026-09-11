@@ -44,6 +44,22 @@ class ChatController extends Controller
             isset($data['selected_job_category_id']) ? (int) $data['selected_job_category_id'] : null,
         );
 
+        // Sprint 10a — Correction-01 (E3, ADR-0018 spirit: the server is the
+        // boundary, not CSS). This is the EMPLOYEE'S OWN live turn — `trace`
+        // ("Cómo llegué a esto": router confidence, model name, chunk counts)
+        // and citation excerpts (the FUENTES snippet block) are admin material
+        // and never leave hr-backend on this endpoint. `handleMessage()`'s
+        // return value, `$result['trace']`/`$result['citations']`, and
+        // everything persisted to `message_traces`/`message_citations` are
+        // UNCHANGED above this line — this reshapes only the array about to be
+        // serialised as this response, using the exact same helper the
+        // employee's session-hydration endpoint uses (ConversationPresenter),
+        // so "one source line, one place it's computed" holds for both.
+        $sourceLabels = ConversationPresenter::sourceLabels($result['citations'] ?? []);
+        unset($result['trace']);
+        $result['citations'] = [];
+        $result['source_labels'] = $sourceLabels;
+
         return response()->json($result);
     }
 

@@ -80,6 +80,122 @@ class CorpusCoverageService
      */
     public const DEV_FIXTURE_NUMERO_PREFIX = 'DEV-FIXTURE-';
 
+    /** `classifyProseGap()` — at least one active prose doc has chunks; retrieval can see this convenio. */
+    public const PROSE_COVERED = 'covered';
+
+    /**
+     * `classifyProseGap()` — prose material EXISTS for this convenio somewhere in
+     * the system, but none of it is retrievable right now. The fail-closed
+     * bucket (Sprint 10a, ADR-0032 / build D3). It covers four real situations
+     * that all share one property — *there is a convenio text, we just are not
+     * serving it*:
+     *   - expired with no successor (the staging case: convenios 4 and 21, both
+     *     `validity_end = 2025-12-31`, chunks present but `historical`),
+     *   - mid-ingest (an active prose doc whose chunks are not embedded yet),
+     *   - `under_review` tagging (chunks:embed has not processed it),
+     *   - a scan with no extracted text.
+     * The Estatuto fallback must NEVER fire here. An expired convenio generally
+     * stays in ultraactividad (ET art. 86.4), so answering "the legal minimum
+     * applies" would be confidently wrong in the direction that carries legal
+     * weight — and for the other three the text is simply on its way.
+     */
+    public const PROSE_EXPIRED_ONLY = 'expired_only';
+
+    /**
+     * `classifyProseGap()` — this convenio has NO prose document of any
+     * retrieval status AND no chunk of any status. Nothing was ever supplied.
+     * This is the ONLY state in which the Estatuto fallback may fire.
+     */
+    public const PROSE_NEVER_INGESTED = 'never_ingested';
+
+    /**
+     * Does this convenio have zero retrievable prose chunks? (Sprint 10a.)
+     *
+     * THE single definition of the Estatuto-fallback precondition, extracted
+     * verbatim from `proseCell()` rather than re-expressed — `proseCell()` now
+     * calls the same private partition helper, so the Cobertura screen, the
+     * `corpus:coverage` export and the answer loop cannot drift apart. A second
+     * definition of "full gap" is the exact "two definitions of truth" failure
+     * class this sprint's R5 names; `Sprint10aInvariantTest::T1` asserts the
+     * equivalence against `grid()` for every convenio in the corpus.
+     *
+     * NOTE this is deliberately NOT `fullGapConvenios()`, which requires all
+     * FOUR cells (prose ∧ salary ∧ facts ∧ rulings) to be ✗ — a different and
+     * much narrower predicate. Measured on staging 2026-09-11: 12 convenios
+     * have zero prose chunks, only 10 are all-four-gap, and the two that differ
+     * (4 and 21) are precisely the employee-bearing ones.
+     */
+    public function hasZeroProseChunks(int $convenioId): bool
+    {
+        return $this->partitionActiveProseDocs($convenioId)['with_chunks'] === [];
+    }
+
+    /**
+     * Classify this convenio's prose gap for the Estatuto-fallback trigger
+     * (Sprint 10a, ADR-0032). Deterministic, read-only, no LLM.
+     *
+     * The distinction the whole fallback rests on: "we never had a text" is
+     * safe to answer from the Estatuto; "we have a text but are not serving it"
+     * is not. Fails closed — anything that is not provably `never_ingested`
+     * returns `expired_only` and the caller escalates.
+     *
+     * @return self::PROSE_*
+     */
+    public function classifyProseGap(int $convenioId): string
+    {
+        if (! $this->hasZeroProseChunks($convenioId)) {
+            return self::PROSE_COVERED;
+        }
+
+        $proseIds = KnowledgeMap::proseTypeIds();
+
+        // D3 (mid-ingest guard): ANY prose document, at ANY retrieval status —
+        // active-but-not-yet-embedded, under_review, historical. If a text
+        // exists in the system at all, we are not entitled to say the convenio
+        // is silent.
+        $anyProseDoc = $proseIds !== [] && DB::table('documents')
+            ->where('convenio_id', $convenioId)
+            ->whereIn('document_type_id', $proseIds)
+            ->exists();
+
+        if ($anyProseDoc) {
+            return self::PROSE_EXPIRED_ONLY;
+        }
+
+        // Belt and braces: a chunk of ANY status carrying this convenio_id, even
+        // if its parent document row is gone or re-typed. `/retrieve` filters on
+        // the chunk's own denormalized `convenio_id` (hr-ai/app/chunks_db.py),
+        // so the chunk table is the other place a convenio's text can hide.
+        $anyChunk = DB::table('document_chunks')
+            ->where('convenio_id', $convenioId)
+            ->exists();
+
+        return $anyChunk ? self::PROSE_EXPIRED_ONLY : self::PROSE_NEVER_INGESTED;
+    }
+
+    /**
+     * What is actually wrong with this convenio's prose, in the terms the
+     * escalation card needs (Sprint 10a).
+     *
+     * `classifyProseGap()` answers the trigger question — may the fallback fire?
+     * This answers the HR question — what is wrong, and who should do what? It
+     * reuses `proseCell()` for the reason code rather than re-deriving it, so an
+     * escalation card and the Cobertura screen can never disagree about the same
+     * convenio, and adds the one distinction Cobertura does not draw
+     * (`pending_embed`, see `classifyZeroChunkDocs()`).
+     *
+     * @return array{reason_code: ?string, pending_embed: bool}
+     */
+    public function proseGapEvidence(int $convenioId): array
+    {
+        return [
+            'reason_code' => $this->proseCell($convenioId)['reason_code'],
+            'pending_embed' => $this->classifyZeroChunkDocs(
+                $this->partitionActiveProseDocs($convenioId)['zero_chunk']
+            )['pending_embed'] !== null,
+        ];
+    }
+
     /**
      * The convenio-level grid — one row per registry convenio, ordered by id
      * (deterministic order is what makes the agreement/byte-stable tests
@@ -171,28 +287,17 @@ class CorpusCoverageService
             return ['covered' => false, 'amendment_only' => false, 'reason_code' => null, 'detail' => 'no prose document types configured', 'doc_uuid' => null];
         }
 
-        $activeDocs = DB::table('documents')
-            ->where('convenio_id', $convenioId)
-            ->whereIn('document_type_id', $proseIds)
-            ->where('retrieval_status', 'active')
-            ->select('id', 'uuid', 'document_type_id')
-            ->get();
-
         $substantiveTypeIds = DB::table('document_types')
             ->whereIn('code', ['convenio_text', 'national_law'])
             ->pluck('id')
             ->all();
 
-        $activeWithChunks = [];
-        $activeZeroChunk = [];
-        foreach ($activeDocs as $doc) {
-            $chunkCount = (int) DB::table('document_chunks')->where('document_id', $doc->id)->count();
-            if ($chunkCount > 0) {
-                $activeWithChunks[] = $doc;
-            } else {
-                $activeZeroChunk[] = $doc;
-            }
-        }
+        // Sprint 10a: the partition moved into `partitionActiveProseDocs()` so
+        // `hasZeroProseChunks()` (the answer loop's fallback precondition) and
+        // this cell run the SAME code, not two queries that happen to agree.
+        $partition = $this->partitionActiveProseDocs($convenioId);
+        $activeWithChunks = $partition['with_chunks'];
+        $activeZeroChunk = $partition['zero_chunk'];
 
         if ($activeWithChunks !== []) {
             $hasSubstantive = collect($activeWithChunks)->contains(fn ($d) => in_array($d->document_type_id, $substantiveTypeIds, true));
@@ -227,24 +332,9 @@ class CorpusCoverageService
             // (the same `pages_with_text` definition `DocumentController`
             // already uses for its own `empty_text` flag) distinguishes them
             // instead of assuming every zero-chunk active doc is a scan.
-            $genuineScanDoc = null;
-            $underReviewWithTextDoc = null;
-            foreach ($activeZeroChunk as $doc) {
-                $pagesTotal = (int) DB::table('document_pages')->where('document_id', $doc->id)->count();
-                $pagesWithText = (int) DB::table('document_pages')
-                    ->where('document_id', $doc->id)
-                    ->whereRaw("length(btrim(coalesce(text, ''))) > 0")
-                    ->count();
-                if ($pagesTotal > 0 && $pagesWithText === 0) {
-                    $genuineScanDoc ??= $doc;
-
-                    continue;
-                }
-                $taggingStatus = DB::table('documents')->where('id', $doc->id)->value('tagging_status');
-                if ($taggingStatus === 'under_review') {
-                    $underReviewWithTextDoc ??= $doc;
-                }
-            }
+            $zero = $this->classifyZeroChunkDocs($activeZeroChunk);
+            $genuineScanDoc = $zero['genuine_scan'];
+            $underReviewWithTextDoc = $zero['under_review'];
 
             if ($genuineScanDoc !== null) {
                 return ['covered' => false, 'amendment_only' => false, 'reason_code' => self::REASON_SCAN_NO_TEXT, 'detail' => 'active prose document(s) exist but page-level text extraction found none — a genuine scan with no OCR text', 'doc_uuid' => $genuineScanDoc->uuid];
@@ -277,6 +367,95 @@ class CorpusCoverageService
         }
 
         return ['covered' => false, 'amendment_only' => false, 'reason_code' => null, 'detail' => 'no prose document at all for this convenio', 'doc_uuid' => null];
+    }
+
+    /**
+     * Why do these ACTIVE prose documents have no chunks? (Sprint 10a extraction
+     * of the Sprint-8 loop that was inline in `proseCell()`.)
+     *
+     * Three distinguishable causes, in the order `proseCell()` reports them:
+     *   - `genuine_scan`   — pages exist and NONE has extracted text;
+     *   - `under_review`   — text is there, tagging is not yet verified, so
+     *                        `chunks:embed`'s own selection skips the document;
+     *   - `pending_embed`  — text is there AND tagging is verified: nothing is
+     *                        wrong, `chunks:embed` simply has not run yet.
+     *
+     * `pending_embed` is not a new Cobertura reason code and the screen is
+     * unchanged — `proseCell()`'s catch-all still reports SCAN_NO_TEXT for it,
+     * exactly as before. It is surfaced only to the Sprint 10a escalation card,
+     * which needs it: telling HR to "obtain a non-scanned copy of the convenio"
+     * when the copy is fine and the embed job is still running is wrong advice,
+     * and this is the structured signal that avoids giving it.
+     *
+     * @param  list<object>  $activeZeroChunk
+     * @return array{genuine_scan: ?object, under_review: ?object, pending_embed: ?object}
+     */
+    private function classifyZeroChunkDocs(array $activeZeroChunk): array
+    {
+        $genuineScan = null;
+        $underReview = null;
+        $pendingEmbed = null;
+
+        foreach ($activeZeroChunk as $doc) {
+            $pagesTotal = (int) DB::table('document_pages')->where('document_id', $doc->id)->count();
+            $pagesWithText = (int) DB::table('document_pages')
+                ->where('document_id', $doc->id)
+                ->whereRaw("length(btrim(coalesce(text, ''))) > 0")
+                ->count();
+            if ($pagesTotal > 0 && $pagesWithText === 0) {
+                $genuineScan ??= $doc;
+
+                continue;
+            }
+            $taggingStatus = DB::table('documents')->where('id', $doc->id)->value('tagging_status');
+            if ($taggingStatus === 'under_review') {
+                $underReview ??= $doc;
+
+                continue;
+            }
+            $pendingEmbed ??= $doc;
+        }
+
+        return ['genuine_scan' => $genuineScan, 'under_review' => $underReview, 'pending_embed' => $pendingEmbed];
+    }
+
+    /**
+     * Split this convenio's ACTIVE prose documents into those that have at
+     * least one chunk and those that have none (Sprint 10a extraction).
+     *
+     * The one place "does retrieval have prose for this convenio?" is decided.
+     * `proseCell()` needs both halves (it uses the zero-chunk half to pick
+     * between SCAN_NO_TEXT and UNDER_REVIEW_SCOPE); `hasZeroProseChunks()`
+     * needs only whether the first half is empty.
+     *
+     * @return array{with_chunks: list<object>, zero_chunk: list<object>}
+     */
+    private function partitionActiveProseDocs(int $convenioId): array
+    {
+        $proseIds = KnowledgeMap::proseTypeIds();
+        if ($proseIds === []) {
+            return ['with_chunks' => [], 'zero_chunk' => []];
+        }
+
+        $activeDocs = DB::table('documents')
+            ->where('convenio_id', $convenioId)
+            ->whereIn('document_type_id', $proseIds)
+            ->where('retrieval_status', 'active')
+            ->select('id', 'uuid', 'document_type_id')
+            ->get();
+
+        $withChunks = [];
+        $zeroChunk = [];
+        foreach ($activeDocs as $doc) {
+            $chunkCount = (int) DB::table('document_chunks')->where('document_id', $doc->id)->count();
+            if ($chunkCount > 0) {
+                $withChunks[] = $doc;
+            } else {
+                $zeroChunk[] = $doc;
+            }
+        }
+
+        return ['with_chunks' => $withChunks, 'zero_chunk' => $zeroChunk];
     }
 
     /**

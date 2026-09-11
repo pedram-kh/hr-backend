@@ -86,7 +86,15 @@ class Sprint6GuardrailInvariantTest extends TestCase
             'territory_id' => $territory->id, 'employment_type' => 'full_time', 'status' => 'active',
         ]);
 
-        $type = DocumentType::create(['code' => 'official_convenio', 'name' => 'Convenio oficial']);
+        // `code` is a DOCUMENT TYPE, not an authority level — this fixture used
+        // to set it to 'official_convenio' (an authority_level value), which is
+        // not a real `document_types.code` and is not in
+        // `KnowledgeMap::PROSE_TYPE_CODES`. Nothing read it until Sprint 10a's
+        // prose-gap classifier did, at which point the fixture described a
+        // convenio with chunks but no prose DOCUMENT — a state that cannot exist
+        // in production. Corrected to the real code; `authority_level` on the
+        // document below is unchanged and still carries 'official_convenio'.
+        $type = DocumentType::create(['code' => 'convenio_text', 'name' => 'Convenio (texto)']);
         $doc = Document::create([
             'title' => 'Convenio Test', 'storage_path' => 'test/doc.pdf',
             'convenio_id' => $this->convenio->id, 'document_type_id' => $type->id,
@@ -218,7 +226,12 @@ class Sprint6GuardrailInvariantTest extends TestCase
         // BEFORE: default floor 0.40 → 0.5 passes Check A → ANSWER.
         $before = $this->ask('¿cuántos días de vacaciones me corresponden?');
         $this->assertSame('answer', $before['outcome']);
-        $this->assertSame(0.40, $before['trace']['floor_decision']['retrieval_score_floor']);
+        // Sprint 10a — Correction-01 (E3): the live `/chat/message` response no
+        // longer carries `trace` at all (admin material; ADR-0018 spirit). The
+        // floor actually applied is still fully persisted — read it back from
+        // `message_traces`, exactly what the admin board itself sees.
+        $this->assertArrayNotHasKey('trace', $before);
+        $this->assertSame(0.40, $this->persistedFloor($before['message_id']));
 
         // Raise the floor above the chunk score.
         $this->postGuardrails($this->adminWithRole('super_admin'), ['retrieval_score_floor' => 0.60])->assertStatus(200);
@@ -227,7 +240,15 @@ class Sprint6GuardrailInvariantTest extends TestCase
         $after = $this->ask('¿cuántos días de vacaciones me corresponden?');
         $this->assertSame('escalate', $after['outcome']);
         $this->assertSame('low_confidence', $after['escalation_reason']);
-        $this->assertSame(0.60, $after['trace']['floor_decision']['retrieval_score_floor']); // the RAISED value was used
+        $this->assertSame(0.60, $this->persistedFloor($after['message_id'])); // the RAISED value was used
+    }
+
+    /** The persisted `floor_decision.retrieval_score_floor` for a message (admin-visible, full trace). */
+    private function persistedFloor(int $messageId): float
+    {
+        $trace = \App\Models\MessageTrace::where('message_id', $messageId)->first()?->trace ?? [];
+
+        return (float) ($trace['floor_decision']['retrieval_score_floor'] ?? -1);
     }
 
     // ---- 3. Blocked topics (add-only union); baseline still fires first ------

@@ -11,6 +11,7 @@ use App\Models\EscalationCard;
 use App\Models\MessageCitation;
 use App\Models\MessageTrace;
 use App\Models\ReferenceFact;
+use App\Support\CorpusCoverageService;
 use App\Support\TopicLexicon;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -60,6 +61,33 @@ class ChatService
      */
     public const EMPLOYEE_ESCALATION_MESSAGE = 'Un/a compañero/a de Recursos Humanos revisará tu '
         .'consulta y te responderá.';
+
+    /** `floor_decision.fallback` value — the only one there is (Sprint 10a). */
+    public const FALLBACK_ESTATUTO_GAP = 'estatuto_gap';
+
+    /**
+     * Sprint 10a (ADR-0032) — appended to every answer built on the Estatuto
+     * fallback, verbatim, by deterministic hr-backend code.
+     *
+     * The AI never writes, edits or decides to include this (ADR-0015/0016).
+     * It is a fixed string concatenated after synthesis and after every gate,
+     * so it cannot influence `/ground` (it is not a claim the model made and is
+     * not checked as one) and cannot be paraphrased away by the model.
+     *
+     * What it must convey, and why each part is there: the answer comes from
+     * the Estatuto de los Trabajadores (source), that is the legal MINIMUM
+     * (ceiling caveat — a convenio may only improve on it), and where to go to
+     * confirm the concrete case. It names no document id, no convenio, and no
+     * internal system state (Correction-01/E2 — the earlier wording ("todavía
+     * no está cargado en el sistema") named internal state; the earlier
+     * `---`/`**…**` separator and bold were raw markdown in a plain-text
+     * employee surface. Plain text, no markdown, no separator line.)
+     */
+    public const FALLBACK_CAVEAT = "\n\n"
+        .'Esta respuesta se basa en el Estatuto de los Trabajadores, que establece los '
+        .'mínimos legales para cualquier persona trabajadora. Tu convenio colectivo puede '
+        .'mejorar estas condiciones (nunca empeorarlas). Para confirmar lo que se aplica en '
+        .'tu caso concreto, consulta con Recursos Humanos.';
 
     /** Surfaced on a vague "total días libres" aggregation (Correction-03, Fix 2). */
     public const AGGREGATION_MESSAGE = 'Para darte una cifra fiable necesito que me preguntes por un '
@@ -112,6 +140,11 @@ class ChatService
         private readonly GuardrailPolicy $policy,
         private readonly ReferenceFactRouter $referenceFactRouter,
         private readonly ReferenceFactAnswerService $referenceFactAnswer,
+        // Sprint 10a (ADR-0032): the SAME coverage service the Cobertura screen
+        // and the `corpus:coverage` export use. The answer loop asks it whether
+        // this employee's convenio has retrievable prose rather than re-deriving
+        // the question — one definition of "full gap", not two (plan §C.6, R5).
+        private readonly CorpusCoverageService $coverage,
     ) {}
 
     /**
@@ -798,11 +831,53 @@ class ChatService
             return $this->persistTurn($session, $employee, $question, self::AGGREGATION_MESSAGE, [], $trace, 'escalate', 'low_confidence');
         }
 
+        // --- Sprint 10a (ADR-0032): the Estatuto fallback decision -------------
+        // Deterministic, before retrieval, in hr-backend. The AI is not asked and
+        // does not decide (ADR-0015/0016): this is a read of what is in the
+        // corpus, not a judgement about the question.
+        //
+        // Until now an employee whose convenio has no retrievable prose still got
+        // an answer — `include_national_law: true` quietly filled the gap with the
+        // Estatuto and the answer read as if it were their own agreement. That is
+        // fine when the convenio was never supplied and dangerous when it was:
+        // an expired convenio generally stays in force under ultraactividad (ET
+        // art. 86.4), so the national minimum can be strictly worse than what the
+        // employee is actually owed.
+        //
+        // So the gap is classified, not just detected:
+        //   never_ingested → answer from the Estatuto, labelled as such (below);
+        //   expired_only   → escalate, never fall back (fails closed, D3);
+        //   covered        → nothing changes, byte for byte.
+        $fallback = false;
+        if ($employee->convenio_id !== null) {
+            $proseGap = $this->coverage->classifyProseGap((int) $employee->convenio_id);
+
+            if ($proseGap === CorpusCoverageService::PROSE_EXPIRED_ONLY) {
+                unset($decryptedKey);
+                $trace['prose_gap'] = ['classification' => $proseGap]
+                    + $this->coverage->proseGapEvidence((int) $employee->convenio_id);
+                $trace['floor_decision'] = [
+                    'retrieval_score_floor' => $retrievalFloor,
+                    'answer_confidence_floor' => $confidenceFloor,
+                    'outcome' => 'escalate',
+                    'escalation_reason' => 'estatuto_fallback_gap',
+                    'note' => 'convenio prose exists but is not retrievable — the Estatuto fallback is not allowed to substitute for it (ADR-0032)',
+                ];
+
+                return $this->persistTurn($session, $employee, $question, self::ESCALATION_MESSAGE, [], $trace, 'escalate', 'estatuto_fallback_gap');
+            }
+
+            $fallback = $proseGap === CorpusCoverageService::PROSE_NEVER_INGESTED;
+            if ($fallback) {
+                $trace['prose_gap'] = ['classification' => $proseGap, 'reason_code' => null];
+            }
+        }
+
         // Recall hardening (§6, resolved §9 F): one /retrieve for the question,
         // one per decomposed sub-query (compound questions — the Q10 fix), plus a
         // national-law-only pass (the silent-topic recall — the Art. 14 ET miss).
         // Union, dedupe by chunk_id keeping the max score. /retrieve is unchanged.
-        $union = $this->retrieveUnion($question, $subqueries, $employee->convenio_id, $asOfDate->toDateString());
+        $union = $this->retrieveUnion($question, $subqueries, $employee->convenio_id, $asOfDate->toDateString(), $fallback);
         $chunks = $union['chunks'];
         $eligibleTotal = $union['eligible_total'];
         $topScore = empty($chunks) ? 0.0 : (float) collect($chunks)->max('score');
@@ -826,14 +901,14 @@ class ChatService
         // --- Check A: pre-synthesis floor ---------------------------------------
         if ($topScore < $retrievalFloor) {
             unset($decryptedKey);
-            $trace['floor_decision'] = [
+            $trace['floor_decision'] = self::stampFallback([
                 'retrieval_score_floor' => $retrievalFloor,
                 'answer_confidence_floor' => $confidenceFloor,
                 'check_a_retrieval' => false,
                 'outcome' => 'escalate',
                 'escalation_reason' => 'low_confidence',
                 'note' => $eligibleTotal === 0 ? 'no eligible chunks' : 'eligible chunks but all below retrieval floor',
-            ];
+            ], $fallback);
 
             return $this->persistTurn($session, $employee, $question, self::ESCALATION_MESSAGE, [], $trace, 'escalate', 'low_confidence');
         }
@@ -841,14 +916,14 @@ class ChatService
         // --- Answer model must be configured to synthesise ----------------------
         if ($decryptedKey === null) {
             $trace['synthesis'] = ['skipped' => 'answer_model_not_configured'];
-            $trace['floor_decision'] = [
+            $trace['floor_decision'] = self::stampFallback([
                 'retrieval_score_floor' => $retrievalFloor,
                 'answer_confidence_floor' => $confidenceFloor,
                 'check_a_retrieval' => true,
                 'outcome' => 'escalate',
                 'escalation_reason' => 'low_confidence',
                 'note' => 'answer model not configured',
-            ];
+            ], $fallback);
 
             return $this->persistTurn($session, $employee, $question, self::ESCALATION_MESSAGE, [], $trace, 'escalate', 'low_confidence');
         }
@@ -887,14 +962,14 @@ class ChatService
             Log::warning('chat: synthesis provider failure', ['error' => $synth['error']]); // never logs the key
             unset($decryptedKey);
             $trace['synthesis'] = ['provider' => $providerConfig['provider'], 'model' => $providerConfig['model'], 'error' => $synth['error']];
-            $trace['floor_decision'] = [
+            $trace['floor_decision'] = self::stampFallback([
                 'retrieval_score_floor' => $retrievalFloor,
                 'answer_confidence_floor' => $confidenceFloor,
                 'check_a_retrieval' => true,
                 'outcome' => 'escalate',
                 'escalation_reason' => 'low_confidence',
                 'note' => 'provider error',
-            ];
+            ], $fallback);
 
             return $this->persistTurn($session, $employee, $question, self::ESCALATION_MESSAGE, [], $trace, 'escalate', 'low_confidence');
         }
@@ -985,7 +1060,7 @@ class ChatService
             'escalation_reason' => $decisionPass ? null : 'low_confidence',
             'note' => $decisionPass ? null : $note,
         ];
-        $trace['floor_decision'] = $floor;
+        $trace['floor_decision'] = self::stampFallback($floor, $fallback);
 
         if (! $decisionPass) {
             return $this->persistTurn($session, $employee, $question, self::ESCALATION_MESSAGE, [], $trace, 'escalate', 'low_confidence');
@@ -997,6 +1072,29 @@ class ChatService
     }
 
     /**
+     * Add `floor_decision.fallback` — and ONLY when the fallback actually fired
+     * (Sprint 10a, ADR-0032).
+     *
+     * The key's absence is load-bearing, not cosmetic. Every existing trace
+     * assertion in `Sprint7cAdditivityRegressionTest` compares `floor_decision`
+     * against a byte-for-byte golden copy; a key added unconditionally — even
+     * one set to `null` or `false` — breaks that comparison for every question
+     * in the system and would end this sprint's additivity claim. So a normal
+     * turn's `floor_decision` is untouched, and `T4` asserts exactly that.
+     *
+     * @param  array<string,mixed>  $floor
+     * @return array<string,mixed>
+     */
+    private static function stampFallback(array $floor, bool $fallback): array
+    {
+        if ($fallback) {
+            $floor['fallback'] = self::FALLBACK_ESTATUTO_GAP;
+        }
+
+        return $floor;
+    }
+
+    /**
      * Recall hardening (§6): issue /retrieve for the question + each decomposed
      * sub-query + a national-law-only pass, then UNION (dedupe by chunk_id keeping
      * the max score), sort by score desc, cap to SYNTHESIS_CHUNK_CAP. /retrieve is
@@ -1005,7 +1103,7 @@ class ChatService
      * @param  list<string>  $subqueries
      * @return array{chunks:list<array<string,mixed>>, eligible_total:int, passes:list<array<string,mixed>>, rerank:array<string,mixed>}
      */
-    private function retrieveUnion(string $question, array $subqueries, ?int $convenioId, string $asOf): array
+    private function retrieveUnion(string $question, array $subqueries, ?int $convenioId, string $asOf, bool $fallback = false): array
     {
         $byChunkId = [];
         $passes = [];
@@ -1013,12 +1111,22 @@ class ChatService
         $poolK = (int) config('hr.retrieval_pool_k', 25);
         $nlK = (int) config('hr.retrieval_national_law_k', 8);
 
+        // Sprint 10a: on the fallback path the convenio side is empty BY
+        // MEASUREMENT — `classifyProseGap()` has already established there is not
+        // one prose chunk to find. Passing `convenio_id: null` therefore removes
+        // a filter that can only ever match nothing, and turns the scoped passes
+        // into national-law-only passes. `/retrieve` is UNCHANGED (ADR-0007, and
+        // spec R2): hr-ai has always returned national law alone for a null
+        // convenio_id (hr-ai/app/chunks_db.py:100-119) — that is exactly what the
+        // existing national-law pass below already relies on.
+        $scopeConvenioId = $fallback ? null : $convenioId;
+
         // The main question + each sub-query: scoped (convenio + national law).
         $queries = array_merge([$question], $subqueries);
         foreach ($queries as $i => $q) {
             $resp = $this->safeRetrieve([
                 'query' => $q,
-                'convenio_id' => $convenioId,
+                'convenio_id' => $scopeConvenioId,
                 'include_national_law' => true,
                 'retrieval_status' => ['active'],
                 'as_of_date' => $asOf,
@@ -1060,8 +1168,20 @@ class ChatService
         // (before truncation) promote a governing convenio chunk above the
         // national_law chunk that covers the SAME topic, so the convenio's figure
         // displaces the baseline instead of being discarded by the raw-score cut.
+        //
+        // Sprint 10a: skipped on the fallback path. The re-rank's entire job is to
+        // resolve convenio-vs-baseline competition, and on this path there is no
+        // convenio side to compete — every chunk is national_law, so the pass
+        // would be a no-op that still rewrites `effective_score` and emits a
+        // rerank trace implying an adjudication happened. Skipping it keeps the
+        // trace honest about what the answer was built from.
         $merged = array_values($byChunkId);
-        [$merged, $rerank] = $this->precedenceRerank($merged, $poolK);
+        if ($fallback) {
+            usort($merged, fn ($a, $b) => ($b['score'] ?? 0.0) <=> ($a['score'] ?? 0.0));
+            $rerank = ['skipped' => 'estatuto_fallback — national-law-only pool, no convenio side to re-rank against'];
+        } else {
+            [$merged, $rerank] = $this->precedenceRerank($merged, $poolK);
+        }
         // The synthesis cap grows with the number of sub-queries so a compound
         // union isn't truncated below its parts' recall (Correction-03, Fix 1).
         $cap = self::SYNTHESIS_CHUNK_CAP + self::COMPOUND_CAP_PER_SUBQUERY * count($subqueries);
@@ -1503,6 +1623,34 @@ class ChatService
      * @param  list<array<string,mixed>>  $categories
      * @return array<string,mixed>
      */
+    /**
+     * The mirror of the escalation override, for the ANSWER side (Sprint 10a).
+     *
+     * `persistTurn()` is already the one place an employee-visible escalation
+     * string can originate from (Sprint 7g Item 1, ADR-0029). This makes it the
+     * one place an employee-visible answer can be decorated, for the same
+     * reason: `$employeeAnswer` is what gets persisted AND returned, so a caveat
+     * added anywhere else could be shown without being stored, or stored without
+     * being shown.
+     *
+     * Placement is what makes this safe. It runs after synthesis and after every
+     * gate — Check A, Check B, the figure-guard and `/ground` have all already
+     * passed on the UNDECORATED answer. So the caveat cannot be mistaken for a
+     * model claim, cannot be sent to `/ground` as one, and cannot change any
+     * gate's verdict. Deterministic: a fixed constant appended on a boolean
+     * read off the trace, with no model in the loop (ADR-0015/0016).
+     *
+     * @param  array<string,mixed>  $trace
+     */
+    private static function decorate(string $answer, array $trace): string
+    {
+        if (($trace['floor_decision']['fallback'] ?? null) === self::FALLBACK_ESTATUTO_GAP) {
+            return $answer.self::FALLBACK_CAVEAT;
+        }
+
+        return $answer;
+    }
+
     private function persistTurn(
         ChatSession $session,
         Employee $employee,
@@ -1523,7 +1671,7 @@ class ChatService
         // regardless of $escalationReason. This is what the guard/scan test
         // relies on: there is exactly one place in the codebase an employee-
         // visible escalation string can originate from.
-        $employeeAnswer = $escalate ? self::EMPLOYEE_ESCALATION_MESSAGE : $answer;
+        $employeeAnswer = $escalate ? self::EMPLOYEE_ESCALATION_MESSAGE : self::decorate($answer, $trace);
 
         return DB::transaction(function () use ($session, $employee, $question, $employeeAnswer, $citations, $trace, $outcome, $escalate, $escalationReason, $categories) {
             $session->forceFill(['last_activity_at' => now()])->save();

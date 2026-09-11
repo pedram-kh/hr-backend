@@ -15,11 +15,17 @@ use Illuminate\Support\Facades\DB;
  * Two audiences:
  *  - 'employee' — the employee hydrating their own chat. A human reply is
  *    attributed as "Recursos Humanos" ONLY — never the admin's name/email/PII.
+ *    Sprint 10a (Correction-01/E3): also gets no `trace` key and no citation
+ *    excerpts — `source_labels` (document display names only) instead.
  *  - 'admin'    — the card-scoped board view. A human reply shows the authoring
  *    admin's name (internal attribution); the trace explains why it escalated.
+ *    Unaffected by Correction-01 — full `trace` + citation excerpts, as always.
  *
- * Used by both the employee `GET /chat/session` and the card-detail read, so the
- * frontend reuses the Sprint-2/3 chat components (CitationList, TracePanel).
+ * Used by both the employee `GET /chat/session` and the card-detail read. The
+ * admin surfaces reuse the Sprint-2/3 chat components (CitationList,
+ * TracePanel) on the ADMIN branch's output; the employee's own `ChatScreen`
+ * renders the EMPLOYEE branch's `source_labels` line instead (never those two
+ * components).
  */
 class ConversationPresenter
 {
@@ -53,8 +59,9 @@ class ConversationPresenter
             $isAssistant = $m->role === 'assistant';
             $trace = $isAssistant ? ($traces->get($m->id)?->trace) : null;
             $floor = $trace['floor_decision'] ?? [];
+            $resolvedCitations = $isAssistant ? $this->citations($citations->get($m->id), $snippets) : [];
 
-            return [
+            $row = [
                 'id' => $m->id,
                 'role' => $m->role,
                 'content' => $m->content,
@@ -63,10 +70,54 @@ class ConversationPresenter
                 'outcome' => $isAssistant ? ($floor['outcome'] ?? 'answer') : null,
                 'escalated' => $isAssistant ? (($floor['outcome'] ?? null) === 'escalate') : false,
                 'authority_used' => $isAssistant ? ($floor['authority_used'] ?? []) : [],
-                'citations' => $isAssistant ? $this->citations($citations->get($m->id), $snippets) : [],
-                'trace' => $trace,
             ];
+
+            // Sprint 10a — Correction-01 (E3, ADR-0018 spirit: the server is the
+            // boundary). `trace` (router confidence, model name, chunk counts —
+            // "Cómo llegué a esto") and citation EXCERPTS (the FUENTES snippet
+            // block) are admin material. The admin board/history/quality-queue
+            // audience keeps both, byte for byte — this branch never runs for
+            // them. The employee audience — hydrating their OWN chat here — gets
+            // neither: `trace` is OMITTED from the array (absent from the JSON,
+            // not null: a live poll must not even carry the key), `citations` is
+            // `[]`, and `source_labels` (document display names only, no
+            // chunk_id/page/snippet/authority_level) is the one thing derived
+            // from them for display. This is not CSS-hiding: the data never
+            // leaves this method for that audience.
+            if ($audience === self::AUDIENCE_ADMIN) {
+                $row['citations'] = $resolvedCitations;
+                $row['trace'] = $trace;
+            } else {
+                $row['citations'] = [];
+                $row['source_labels'] = self::sourceLabels($resolvedCitations);
+            }
+
+            return $row;
         })->values()->all();
+    }
+
+    /**
+     * Document display names only — no chunk_id, page, snippet or
+     * authority_level — deduped and in citation order (Sprint 10a,
+     * Correction-01/E3). Shared by both employee-facing surfaces: this
+     * presenter's own EMPLOYEE branch (session hydration) and
+     * `ChatController::message()` (the live turn), so the "one source line"
+     * rule is computed in exactly one place.
+     *
+     * @param  list<array<string,mixed>>  $resolvedCitations
+     * @return list<string>
+     */
+    public static function sourceLabels(array $resolvedCitations): array
+    {
+        $labels = [];
+        foreach ($resolvedCitations as $c) {
+            $title = $c['document_title'] ?? null;
+            if ($title !== null && $title !== '' && ! in_array($title, $labels, true)) {
+                $labels[] = $title;
+            }
+        }
+
+        return $labels;
     }
 
     private function authorLabel(string $role, ?string $adminName, string $audience): ?string
