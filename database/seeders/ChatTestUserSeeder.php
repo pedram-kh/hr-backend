@@ -150,6 +150,42 @@ class ChatTestUserSeeder extends Seeder
             resolveCategory: false,
         );
 
+        // Sprint 10a (ADR-0032) — the two sides of the Estatuto fallback trigger.
+        //
+        // Acción e Intervención Social Estatal (convenio 7) is the FULL GAP: no
+        // prose document of any retrieval status, no chunks of any status, and —
+        // checked deliberately, because either would short-circuit the prose turn
+        // before the fallback is reached — no salary table and no reference fact.
+        // It is the only non-fixture convenio in the corpus that satisfies D3's
+        // predicate, so it is what `never_ingested` means in practice.
+        //
+        // NOTE for whoever reads the sprint doc: the build authorization's D5 named
+        // convenio 16 here. That was chosen against the plan's looser predicate
+        // (zero ACTIVE prose docs); D3 tightened it to any status, and convenio 16
+        // has a historical text — so it lands on the other side of the split and is
+        // seeded below as a negative control instead.
+        $this->seedEmployee(
+            email: 'test-fullgap@example.com',
+            name: 'Test Acción e Intervención Social Estatal (convenio 7)',
+            convenio: $this->byNumero('99016085012007') ?? $this->byName('INTERVENCI', 'Estatal'),
+            jobCategoryId: null,
+            resolveCategory: false,
+        );
+
+        // Hostelería Huesca (convenio 16) is the D3 MID-INGEST case, and the only
+        // real one in the corpus: its single prose document (a historical convenio
+        // text) has zero chunks, so there is nothing to retrieve — but a document
+        // DOES exist, so the Estatuto must not answer in its place. Fails closed to
+        // `estatuto_fallback_gap`. Until now this shape existed only as a test
+        // fixture; this profile is how it gets exercised against real data.
+        $this->seedEmployee(
+            email: 'test-midingest@example.com',
+            name: 'Test Hostelería Huesca (convenio 16, sin fragmentos)',
+            convenio: $this->byNumero('22000175012004') ?? $this->byName('HOSTELERIA', 'Huesca'),
+            jobCategoryId: null,
+            resolveCategory: false,
+        );
+
         // A generic active-convenio employee for the sensitive-topic + floor gates.
         $this->seedEmployee(
             email: 'test-any@example.com',

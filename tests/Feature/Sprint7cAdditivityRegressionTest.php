@@ -84,9 +84,9 @@ class Sprint7cAdditivityRegressionTest extends TestCase
         // The governing convenio prose document the vacaciones answer must cite.
         $this->proseDoc = $this->doc('Convenio Hostelería Navarra', 'official_convenio');
         // The Estatuto baseline — present in retrieval, must NOT be cited for a convenio-governed topic.
-        $this->estatutoDoc = $this->doc('Estatuto de los Trabajadores', 'national_law', convenio: false);
+        $this->estatutoDoc = $this->doc('Estatuto de los Trabajadores', 'national_law', convenio: false, typeCode: 'national_law');
         // The salary-table source document the salary citation points at (chunk_id = null).
-        $this->salaryDoc = $this->doc('Tablas salariales 2026', 'official_convenio');
+        $this->salaryDoc = $this->doc('Tablas salariales 2026', 'official_convenio', typeCode: 'salary_tables');
 
         // Real chunk rows so the prose citation FK (message_citations.chunk_id) resolves.
         $this->chunkRow(self::PROSE_CONVENIO_CHUNK_ID, $this->proseDoc->id, 'official_convenio');
@@ -244,13 +244,24 @@ class Sprint7cAdditivityRegressionTest extends TestCase
         ]);
     }
 
-    private function doc(string $title, string $authority, bool $convenio = true): Document
+    /**
+     * @param  string  $authority  the document's `authority_level`.
+     * @param  string  $typeCode  its `document_types.code`. Previously this
+     *   helper took whatever `DocumentType::query()->value('id')` returned
+     *   first, which is an arbitrary type and, for the prose documents, not a
+     *   prose one. Nothing read `document_type_id` until Sprint 10a's prose-gap
+     *   classifier did, at which point the fixture described a convenio holding
+     *   chunks but owning no prose DOCUMENT — a state production cannot reach.
+     *   Naming the type explicitly makes each fixture document what it claims to
+     *   be; no asserted answer, citation or trace value depends on it.
+     */
+    private function doc(string $title, string $authority, bool $convenio = true, string $typeCode = 'convenio_text'): Document
     {
         return Document::create([
             'title' => $title,
             'storage_path' => 'fake/'.uniqid(),
             'convenio_id' => $convenio ? $this->convenio->id : null,
-            'document_type_id' => \App\Models\DocumentType::query()->value('id'),
+            'document_type_id' => \App\Models\DocumentType::where('code', $typeCode)->value('id'),
             'authority_level' => $authority,
             'retrieval_status' => 'active',
             'language' => 'es',

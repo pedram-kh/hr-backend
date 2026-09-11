@@ -46,6 +46,23 @@ class EscalationController extends Controller
         // Sprint 7g Item 1 correction: added — was missing entirely, so a
         // reference-fact coverage-gap card displayed its raw reason string.
         'reference_fact_coverage_gap' => 'Hueco en datos de referencia',
+        // Sprint 8, Step 6: added — was missing entirely, so a monthly
+        // quality-sample "wrong" card displayed its raw reason string.
+        'quality_sample_wrong' => 'Muestra de calidad incorrecta',
+        // Sprint 10a (ADR-0032). Deliberately named as a corpus gap, not as a
+        // fallback failure: the fix is always to make the convenio text
+        // retrievable, never to let the Estatuto answer in its place.
+        //
+        // Correction-02 (CP-4 step 6, C2-1): originally 'Hueco en el texto
+        // del convenio' — too close in meaning to any generic prose-retrieval
+        // gap for a reviewer to tell apart on the badge/filter alone, even
+        // though the underlying cause (a convenio text that exists but is
+        // deliberately NOT served — expired/no successor, mid-ingest, tagging
+        // under review, or an unreadable scan) is legally distinct from an
+        // ordinary retrieval miss: this is the one case where the system
+        // refuses to fall back to the Estatuto. Renamed to name that
+        // specifically, so it reads as its own category everywhere it renders.
+        'estatuto_fallback_gap' => 'Convenio vencido / sin texto vigente',
     ];
 
     public function __construct(
@@ -109,7 +126,22 @@ class EscalationController extends Controller
     public function show(string $uuid, Request $request): JsonResponse
     {
         $card = $this->find($uuid);
-        $card->load(['employee:id,uuid,full_name,convenio_id', 'employee.convenio:id,numero,name', 'assignedTo:id,full_name', 'topic:id,name', 'sourceMessage:id,content', 'resolution', 'events.actor:id,full_name']);
+        $card->load([
+            'employee:id,uuid,full_name,email,convenio_id,territory_id,job_category_id,convenio_group_id,start_date',
+            'employee.convenio:id,numero,name',
+            // Correction-02 (CP-4 step 6, C2-2): the extra relations the new
+            // card-detail-only employee block needs (territory / category /
+            // group / seniority). Detail-only by construction: `index()`'s own
+            // eager-load (the board LIST query, above) is untouched, and
+            // `cardSummary()` — shared by both endpoints — never reads these,
+            // so the list payload does not grow even though this is the same
+            // `employee` relation.
+            'employee.territory:id,code,name',
+            'employee.jobCategory:id,name',
+            'employee.convenioGroup:id,parent_id,label,code_normalized',
+            'employee.convenioGroup.parent:id,label',
+            'assignedTo:id,full_name', 'topic:id,name', 'sourceMessage:id,content', 'resolution', 'events.actor:id,full_name',
+        ]);
 
         // Sprint-5 tightening (ADR-0018 §4.4): the conversation PAYLOAD requires
         // `escalation.work` OR `history.view_all`. This denies a knowledge_editor
@@ -122,6 +154,21 @@ class EscalationController extends Controller
             && method_exists($actor, 'can')
             && ($actor->can('escalation.work') || $actor->can('history.view_all'));
 
+        // Correction-02 (C2-2): the employee-context block (name/email/
+        // territory/category-group/seniority) is narrower than the
+        // conversation gate above — `escalation.work` only, per spec ("visible
+        // to escalation.work-scoped viewers"), so a history.view_all-only
+        // auditor sees the conversation but NOT this block. Same ability that
+        // already gates every write on this card (assign/move/reply/resolve)
+        // — no new permission introduced. No new access-log write either: this
+        // read path (`show()`) had no dedicated access-log call to begin with
+        // (unlike `HistoryController`'s `ConversationAccessLogger`, which is a
+        // different, broader browsing surface), so there was nothing to reuse
+        // or duplicate — confirmed by inspection, not assumed.
+        $canSeeEmployeeContext = $actor !== null
+            && method_exists($actor, 'can')
+            && $actor->can('escalation.work');
+
         $conversation = ($canSeeConversation && $card->session !== null)
             ? $this->presenter->present($card->session, ConversationPresenter::AUDIENCE_ADMIN)
             : [];
@@ -130,6 +177,8 @@ class EscalationController extends Controller
             'card' => $this->cardSummary($card),
             'conversation' => $conversation,
             'conversation_restricted' => ! $canSeeConversation,
+            'employee_context' => $canSeeEmployeeContext ? $this->employeeContext($card) : null,
+            'employee_context_restricted' => ! $canSeeEmployeeContext,
             'resolution' => $card->resolution !== null ? [
                 'resolution_text' => $card->resolution->resolution_text,
                 'converted_to_document_id' => $card->resolution->converted_to_document_id,
@@ -342,6 +391,46 @@ class EscalationController extends Controller
     private function find(string $uuid): EscalationCard
     {
         return EscalationCard::where('uuid', $uuid)->firstOrFail();
+    }
+
+    /**
+     * Correction-02 (CP-4 step 6, C2-2) — the card-detail-ONLY employee block:
+     * name, email, territory, category/group, seniority (where recorded). Never
+     * called from `cardSummary()`, so it never reaches the board's list view.
+     *
+     * @return array<string,mixed>|null
+     */
+    private function employeeContext(EscalationCard $card): ?array
+    {
+        $employee = $card->employee;
+        if ($employee === null) {
+            return null;
+        }
+
+        return [
+            'full_name' => $employee->full_name,
+            'email' => $employee->email,
+            'territory' => $employee->territory !== null ? [
+                'id' => $employee->territory->id,
+                'name' => $employee->territory->name,
+            ] : null,
+            'job_category' => $employee->jobCategory !== null ? [
+                'id' => $employee->jobCategory->id,
+                'name' => $employee->jobCategory->name,
+            ] : null,
+            'convenio_group' => $employee->convenioGroup !== null ? [
+                'id' => $employee->convenioGroup->id,
+                'path_label' => $employee->convenioGroup->pathLabel(),
+            ] : null,
+            // "seniority where recorded" — there is no dedicated seniority
+            // field; `start_date` (hire date) is nullable and often absent on
+            // older/imported profiles, so this is null exactly when it is not
+            // recorded, never a guessed/derived date.
+            'seniority' => $employee->start_date !== null ? [
+                'start_date' => $employee->start_date->toDateString(),
+                'years' => (int) $employee->start_date->diffInYears(now()),
+            ] : null,
+        ];
     }
 
     /**

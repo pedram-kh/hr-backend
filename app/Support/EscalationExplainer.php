@@ -86,6 +86,15 @@ final class EscalationExplainer
         'quality_sample_wrong.stale_document',
         'quality_sample_wrong.unclear',
         'quality_sample_wrong.other',
+        // --- Sprint 10a (ADR-0032) — the Estatuto fallback did NOT fire -------
+        // One sub-outcome per cause of "a convenio text exists but is not being
+        // served", because each needs a different person to do a different
+        // thing. `never_ingested` is deliberately absent: that is the state in
+        // which the fallback DOES fire, so it produces an answer, not a card.
+        'estatuto_fallback_gap.expired_no_successor',
+        'estatuto_fallback_gap.tagging_under_review',
+        'estatuto_fallback_gap.scan_no_text',
+        'estatuto_fallback_gap.not_yet_embedded',
     ];
 
     /**
@@ -155,6 +164,7 @@ final class EscalationExplainer
             'conflict' => 'fact_vs_convenio',
             'salary_coverage_gap' => self::salarySubOutcome($trace),
             'reference_fact_coverage_gap' => self::referenceFactSubOutcome($trace),
+            'estatuto_fallback_gap' => self::estatutoFallbackSubOutcome($trace),
             // Sprint 8, Step 6 (plan.md §6.4): the sub-outcome is already known
             // directly — the reviewer picked it (`quality_samples.failure_kind`)
             // — not detected from a floor/router trace shape like every other
@@ -228,6 +238,38 @@ final class EscalationExplainer
             str_contains($note, 'selected category not valid') => 'category_unresolved',
             str_contains($note, 'no salary row for this category') => 'no_row_for_category',
             default => 'no_table',
+        };
+    }
+
+    /**
+     * Sprint 10a (ADR-0032) — which flavour of "a convenio text exists but is
+     * not being served" is this?
+     *
+     * Read straight off `prose_gap.reason_code`, which `ChatService` copies from
+     * `CorpusCoverageService::proseGapReasonCode()` — the SAME code the
+     * Cobertura screen shows for that convenio's prose cell. No pattern-matching
+     * on note strings here: unlike the older reasons, this one has a real
+     * structured field to read, so it reads it.
+     *
+     * `pending_embed` is checked FIRST and overrides the code. Cobertura reports
+     * a document that has real text, verified tagging and no chunks as
+     * SCAN_NO_TEXT — a catch-all, not a measurement — and acting on that here
+     * would tell HR to re-source a convenio whose only problem is that
+     * `chunks:embed` has not run yet. `CorpusCoverageService::proseGapEvidence()`
+     * supplies the distinction as a structured flag rather than leaving this to
+     * parse a detail string.
+     */
+    private static function estatutoFallbackSubOutcome(array $trace): string
+    {
+        if (($trace['prose_gap']['pending_embed'] ?? false) === true) {
+            return 'not_yet_embedded';
+        }
+
+        return match ($trace['prose_gap']['reason_code'] ?? null) {
+            CorpusCoverageService::REASON_EXPIRED_NO_SUCCESSOR => 'expired_no_successor',
+            CorpusCoverageService::REASON_UNDER_REVIEW_SCOPE => 'tagging_under_review',
+            CorpusCoverageService::REASON_SCAN_NO_TEXT => 'scan_no_text',
+            default => 'not_yet_embedded',
         };
     }
 
@@ -669,6 +711,47 @@ final class EscalationExplainer
                     'fix_action' => 'Leer la nota de la persona revisora para entender el motivo exacto y decidir la corrección.',
                     'fix_surface' => 'Escalations (tarjeta)',
                     'fix_link' => null,
+                ],
+            ],
+
+            // --- Sprint 10a (ADR-0032): the fallback deliberately did NOT fire.
+            // The employee's convenio has no retrievable prose, but a convenio
+            // text DOES exist in the system, so answering from the Estatuto
+            // would present the national minimum as if it were their agreement.
+            // All four say the same thing to the employee (one neutral message)
+            // and four different things to HR.
+            'estatuto_fallback_gap' => [
+                'expired_no_successor' => fn (array $t) => [
+                    'asked' => 'El empleado preguntó por una condición regulada normalmente en su convenio colectivo.',
+                    'found' => 'El convenio de este empleado está vencido y no consta un convenio posterior que lo sustituya. Su texto ya no se usa para responder.',
+                    'stopped_reason' => 'Un convenio vencido suele seguir aplicándose en ultraactividad (art. 86.4 del Estatuto de los Trabajadores) hasta que se negocie uno nuevo, así que responder con el mínimo legal del Estatuto podría dar al empleado una condición peor que la que realmente le corresponde. El sistema prefiere escalar antes que arriesgarse a eso.',
+                    'fix_action' => 'Conseguir el texto del convenio vigente y cargarlo; si no existe sucesor, confirmar si sigue en ultraactividad y reactivar el texto anterior.',
+                    'fix_surface' => 'Documentos',
+                    'fix_link' => $documentsLink(),
+                ],
+                'tagging_under_review' => fn (array $t) => [
+                    'asked' => 'El empleado preguntó por una condición regulada normalmente en su convenio colectivo.',
+                    'found' => 'Existe el texto del convenio de este empleado, pero su etiquetado todavía no está verificado, así que aún no se ha indexado para búsqueda.',
+                    'stopped_reason' => 'El texto existe: responder con el mínimo legal del Estatuto sería peor que esperar a que el convenio propio esté disponible.',
+                    'fix_action' => 'Verificar el etiquetado de este documento para que pase a indexarse.',
+                    'fix_surface' => 'Etiquetado',
+                    'fix_link' => $taggingLink(),
+                ],
+                'scan_no_text' => fn (array $t) => [
+                    'asked' => 'El empleado preguntó por una condición regulada normalmente en su convenio colectivo.',
+                    'found' => 'El convenio de este empleado está cargado solo como escaneo de imagen, sin texto extraíble, así que no puede buscarse.',
+                    'stopped_reason' => 'El convenio existe pero es ilegible para el sistema; responder con el mínimo legal del Estatuto ocultaría ese problema en lugar de resolverlo.',
+                    'fix_action' => 'Conseguir una versión del convenio con texto (no escaneada) o pedir al equipo técnico el reconocimiento de texto (OCR) del documento actual.',
+                    'fix_surface' => 'Documentos',
+                    'fix_link' => $documentsLink(),
+                ],
+                'not_yet_embedded' => fn (array $t) => [
+                    'asked' => 'El empleado preguntó por una condición regulada normalmente en su convenio colectivo.',
+                    'found' => 'El texto del convenio de este empleado está cargado y activo, pero su indexado para búsqueda todavía no ha terminado.',
+                    'stopped_reason' => 'Es un estado transitorio de la carga del documento, no un hueco real de cobertura: el texto llegará. El sistema escala en lugar de responder con el mínimo legal mientras tanto.',
+                    'fix_action' => 'Esperar a que termine el indexado; si no avanza en unas horas, avisar al equipo técnico.',
+                    'fix_surface' => 'Documentos',
+                    'fix_link' => $documentsLink(),
                 ],
             ],
         ];
