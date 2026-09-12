@@ -34,7 +34,13 @@ return [
         // rest in answer_model_settings, and passed decrypted per call. These MUST
         // point at an EU-available model/endpoint (GDPR is deploy-time, deploy.md §1).
         'answer_provider' => env('HR_AI_ANSWER_PROVIDER', 'claude'),
-        'answer_model' => env('HR_AI_ANSWER_MODEL', 'claude-sonnet-4-5'),
+        // Sprint 10-M: claude-sonnet-4-5 -> claude-sonnet-5. Governs BOTH
+        // /synthesise and /ground (GroundingService reuses this same config —
+        // see its own header comment); /route and /explain are unaffected,
+        // they use router_model below. Model swap only, no prompt-text or
+        // sampling-param changes (isolates the model variable per the sprint
+        // scope fence). See hr-docs/sprints/sprint-10-M/ for the measurement.
+        'answer_model' => env('HR_AI_ANSWER_MODEL', 'claude-sonnet-5'),
         'answer_endpoint' => env('HR_AI_ANSWER_ENDPOINT', 'https://api.anthropic.com'),
 
         // The question router (Sprint 2b-2, ADR-0016) — a SMALL/FAST model reusing
