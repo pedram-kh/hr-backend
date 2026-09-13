@@ -25,6 +25,21 @@ use Illuminate\Support\Facades\Log;
  * answerable) until a human verifies.
  *
  * The same job backs the manual "re-segment" admin action.
+ *
+ * Sprint 10c (spec §2.4) — dispatch-time validity capture, not job-time. A
+ * batch of queued jobs can sit for minutes; if a document's validity window is
+ * edited while jobs are still queued, a job that RE-READS `$document` at
+ * execute time would stamp facts with the post-edit window even though it was
+ * queued before the edit — a fact whose applicability is unresolved at the
+ * moment it was proposed, exactly the wrong-but-confident shape. The fix:
+ * the validity window is captured by the CALLER at `dispatch()` time (both
+ * production call sites — `DocumentIngestor` and the manual re-segment action
+ * — read `$document->validity_start/end` right before dispatching) and rides
+ * through the queue payload as plain strings (`SerializesModels` carries them
+ * exactly like `$documentId`). `handle()` never reads validity off the
+ * (possibly since-edited) `$document` row — only `ReferenceFactProposalService`
+ * does, and only from these captured constructor properties, never from a
+ * fresh model reload.
  */
 class SegmentReferenceSource implements ShouldQueue
 {
@@ -32,7 +47,11 @@ class SegmentReferenceSource implements ShouldQueue
 
     public int $tries = 1;
 
-    public function __construct(public int $documentId) {}
+    public function __construct(
+        public int $documentId,
+        public ?string $capturedValidityStart,
+        public ?string $capturedValidityEnd,
+    ) {}
 
     public function handle(ReferenceFactProposalService $segmenter): void
     {
@@ -49,7 +68,7 @@ class SegmentReferenceSource implements ShouldQueue
         }
 
         try {
-            $summary = $segmenter->propose($document);
+            $summary = $segmenter->propose($document, $this->capturedValidityStart, $this->capturedValidityEnd);
             Log::info('reference segmentation completed', ['document_id' => $document->id, 'summary' => $summary]);
         } catch (\Throwable $e) {
             // Never rethrow into ingest; the source stays unsegmented.

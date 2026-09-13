@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\AnswerModelSetting;
 use App\Models\Convenio;
+use App\Models\ConvenioGroup;
 use App\Models\Document;
 use App\Models\DocumentPage;
 use App\Models\DocumentType;
@@ -96,7 +97,7 @@ class Sprint7b2SegmentationInvariantTest extends TestCase
             $this->fact($this->coeasAlava->id, 'Grupo 1', 'Cinco meses', 0.9),
         ]);
 
-        $service->propose($doc);
+        $service->propose($doc, $doc->validity_start?->toDateString(), $doc->validity_end?->toDateString());
 
         $fact = ReferenceFact::where('source', 'ai_agent')->firstOrFail();
         // (1) inert
@@ -128,7 +129,7 @@ class Sprint7b2SegmentationInvariantTest extends TestCase
             $this->fact($this->coeasAlava->id, 'Grupo 2', 'Tres meses', 0.8),
         ]);
 
-        $service->propose($doc);
+        $service->propose($doc, $doc->validity_start?->toDateString(), $doc->validity_end?->toDateString());
 
         $this->assertSame(0, DB::table('salary_table_rows')->count());
         $this->assertSame(0, DB::table('salary_tables')->count());
@@ -146,13 +147,13 @@ class Sprint7b2SegmentationInvariantTest extends TestCase
         ];
 
         // First run — the blocker fix: three DISTINCT facts, not one clobbered.
-        $this->serviceReturning($envelope)->propose($doc);
+        $this->serviceReturning($envelope)->propose($doc, $doc->validity_start?->toDateString(), $doc->validity_end?->toDateString());
         $this->assertSame(3, ReferenceFact::where('source', 'ai_agent')->count(), 'G1/G2/G3 must persist distinctly (group_label)');
         $labels = ReferenceFact::where('source', 'ai_agent')->pluck('group_label')->sort()->values()->all();
         $this->assertSame(['Grupo 1', 'Grupo 2', 'Grupo 3'], $labels);
 
         // Re-run the SAME envelope — idempotent UPSERT on the extended key.
-        $this->serviceReturning($envelope)->propose($doc);
+        $this->serviceReturning($envelope)->propose($doc, $doc->validity_start?->toDateString(), $doc->validity_end?->toDateString());
         $this->assertSame(3, ReferenceFact::where('source', 'ai_agent')->count(), 're-running must upsert, not duplicate');
     }
 
@@ -163,7 +164,7 @@ class Sprint7b2SegmentationInvariantTest extends TestCase
             // Same group "Grupo 1", different convenio (province) → two facts.
             $this->fact($this->coeasAlava->id, 'Grupo 1', 'Cinco meses', 0.9),
             $this->fact($this->coeasEstatal->id, 'Grupo 1', 'Seis meses', 0.9),
-        ])->propose($doc);
+        ])->propose($doc, $doc->validity_start?->toDateString(), $doc->validity_end?->toDateString());
 
         $alavaFact = ReferenceFact::where('convenio_id', $this->coeasAlava->id)->firstOrFail();
         $estatalFact = ReferenceFact::where('convenio_id', $this->coeasEstatal->id)->firstOrFail();
@@ -177,6 +178,18 @@ class Sprint7b2SegmentationInvariantTest extends TestCase
 
     public function test_invariant_6_same_scope_different_value_sets_duplicate_flag_without_merging(): void
     {
+        // This test is about DUPLICATE detection, isolated from the D4 group-
+        // restraint backstop (its own dedicated test below): give coeasAlava an
+        // APPROVED tree so the new fact's uncertainty isn't claimed by D4's
+        // "no approved tree" flag before the duplicate check ever runs.
+        ConvenioGroup::create([
+            'convenio_id' => $this->coeasAlava->id,
+            'code_normalized' => 'grupo_2',
+            'label' => 'Grupo 2',
+            'status' => ConvenioGroup::STATUS_APPROVED,
+            'source' => ConvenioGroup::SOURCE_MANUAL,
+        ]);
+
         // An existing (file-1) fact: COEAS Álava, Grupo 2, "Seis meses".
         $existing = ReferenceFact::create([
             'convenio_id' => $this->coeasAlava->id,
@@ -192,7 +205,7 @@ class Sprint7b2SegmentationInvariantTest extends TestCase
         $doc = $this->referenceSource();
         $this->serviceReturning([
             $this->fact($this->coeasAlava->id, 'Grupo 2', 'Cuatro meses', 0.85),
-        ])->propose($doc);
+        ])->propose($doc, $doc->validity_start?->toDateString(), $doc->validity_end?->toDateString());
 
         $new = ReferenceFact::where('source', 'ai_agent')->firstOrFail();
         $this->assertSame($existing->id, $new->duplicate_of_id, 'a same-scope/different-value collision is flagged');
@@ -201,6 +214,130 @@ class Sprint7b2SegmentationInvariantTest extends TestCase
         $existing->refresh();
         $this->assertSame('Seis meses', $existing->value);
         $this->assertSame('verified', $existing->status);
+    }
+
+    // ---- Sprint 10c D4 — the group-restraint deterministic backstop ---------
+
+    /**
+     * A group-labelled fact for a convenio with NO approved `convenio_groups`
+     * tree must be flagged (never a skip) — flag-and-persist, plan §A.3/D4.
+     * The agent itself proposes it unconditionally (no `uncertainty` at all);
+     * the flag must be added deterministically, in code, not by the model.
+     */
+    public function test_d4_group_label_without_approved_tree_is_flagged_not_skipped(): void
+    {
+        $doc = $this->referenceSource();
+        $this->serviceReturning([
+            // No 'uncertainty' key at all — exactly what the real prompt emits
+            // today (plan §A.3: no restraint rule for missing trees exists).
+            $this->fact($this->coeasAlava->id, 'Grupo 1', 'Cinco meses', 0.95),
+        ])->propose($doc, $doc->validity_start?->toDateString(), $doc->validity_end?->toDateString());
+
+        $fact = ReferenceFact::where('source', 'ai_agent')->firstOrFail();
+        // Never skipped — the fact is real, reviewable information.
+        $this->assertSame('Cinco meses', $fact->value);
+        $this->assertSame('needs_review', $fact->status);
+        // Flagged, deterministically, by code — not by the (stubbed) model.
+        $this->assertSame('group', $fact->uncertainty['field'] ?? null);
+        $this->assertStringContainsString('árbol de grupos aprobado', $fact->uncertainty['reason'] ?? '');
+    }
+
+    /** An APPROVED tree suppresses the backstop — no flag needed. */
+    public function test_d4_group_label_with_approved_tree_is_not_flagged(): void
+    {
+        ConvenioGroup::create([
+            'convenio_id' => $this->coeasAlava->id,
+            'code_normalized' => 'grupo_1',
+            'label' => 'Grupo 1',
+            'status' => ConvenioGroup::STATUS_APPROVED,
+            'source' => ConvenioGroup::SOURCE_MANUAL,
+        ]);
+
+        $doc = $this->referenceSource();
+        $this->serviceReturning([
+            $this->fact($this->coeasAlava->id, 'Grupo 1', 'Cinco meses', 0.95),
+        ])->propose($doc, $doc->validity_start?->toDateString(), $doc->validity_end?->toDateString());
+
+        $fact = ReferenceFact::where('source', 'ai_agent')->firstOrFail();
+        $this->assertNull($fact->uncertainty);
+    }
+
+    /** A NEEDS_REVIEW (unapproved) tree does NOT suppress the backstop. */
+    public function test_d4_group_label_with_pending_unapproved_tree_is_still_flagged(): void
+    {
+        ConvenioGroup::create([
+            'convenio_id' => $this->coeasAlava->id,
+            'code_normalized' => 'grupo_1',
+            'label' => 'Grupo 1',
+            'status' => ConvenioGroup::STATUS_NEEDS_REVIEW,
+            'source' => ConvenioGroup::SOURCE_AI,
+        ]);
+
+        $doc = $this->referenceSource();
+        $this->serviceReturning([
+            $this->fact($this->coeasAlava->id, 'Grupo 1', 'Cinco meses', 0.95),
+        ])->propose($doc, $doc->validity_start?->toDateString(), $doc->validity_end?->toDateString());
+
+        $fact = ReferenceFact::where('source', 'ai_agent')->firstOrFail();
+        $this->assertSame('group', $fact->uncertainty['field'] ?? null);
+    }
+
+    /** A convenio-wide fact (null group_label) is never touched by the backstop. */
+    public function test_d4_convenio_wide_fact_is_never_flagged_by_the_group_backstop(): void
+    {
+        $doc = $this->referenceSource();
+        $this->serviceReturning([
+            $this->fact($this->coeasAlava->id, null, 'Dos meses para todo el personal', 0.95),
+        ])->propose($doc, $doc->validity_start?->toDateString(), $doc->validity_end?->toDateString());
+
+        $fact = ReferenceFact::where('source', 'ai_agent')->firstOrFail();
+        $this->assertNull($fact->group_label);
+        $this->assertNull($fact->uncertainty);
+    }
+
+    /** The backstop never overrides an uncertainty the model already set. */
+    public function test_d4_backstop_never_overrides_the_models_own_uncertainty(): void
+    {
+        $doc = $this->referenceSource();
+        $envelope = $this->fact($this->coeasAlava->id, 'Grupo 1 y área cinco de Grupo 2', 'combinado', 0.7);
+        $envelope['uncertainty'] = ['field' => 'group', 'reason' => 'expresión de grupo compuesta'];
+        $this->serviceReturning([$envelope])
+            ->propose($doc, $doc->validity_start?->toDateString(), $doc->validity_end?->toDateString());
+
+        $fact = ReferenceFact::where('source', 'ai_agent')->firstOrFail();
+        $this->assertSame('expresión de grupo compuesta', $fact->uncertainty['reason'] ?? null);
+    }
+
+    // ---- Sprint 10c A.2/D — dispatch-time validity capture -------------------
+
+    /**
+     * The job must stamp facts with the validity window CAPTURED at dispatch
+     * time, not whatever the document's row holds when the job actually
+     * executes. Simulates the exact race spec §2.4 describes: dispatch, THEN
+     * the document's validity is edited, THEN the job runs.
+     */
+    public function test_dispatch_time_validity_is_captured_not_reread_at_execute_time(): void
+    {
+        $doc = $this->referenceSource(); // validity_start=2024-01-01, validity_end=2027-12-31
+
+        // Capture "at dispatch" — exactly what DocumentIngestor/the controller do.
+        $capturedStart = $doc->validity_start?->toDateString();
+        $capturedEnd = $doc->validity_end?->toDateString();
+
+        // Simulate an admin editing the document's validity WHILE queued (the
+        // race this fix closes) — the job has not executed yet.
+        $doc->update(['validity_start' => '2030-01-01', 'validity_end' => '2031-12-31']);
+
+        // The job executes now, re-fetching the document itself (as the real
+        // job does) — but the SERVICE only ever receives the captured values.
+        $doc->refresh();
+        $this->serviceReturning([
+            $this->fact($this->coeasAlava->id, 'Grupo 1', 'Cinco meses', 0.9),
+        ])->propose($doc, $capturedStart, $capturedEnd);
+
+        $fact = ReferenceFact::where('source', 'ai_agent')->firstOrFail();
+        $this->assertSame('2024-01-01', $fact->validity_start?->toDateString(), 'must stamp the CAPTURED window, not the post-edit one');
+        $this->assertSame('2027-12-31', $fact->validity_end?->toDateString(), 'must stamp the CAPTURED window, not the post-edit one');
     }
 
     // ---- helpers ------------------------------------------------------------

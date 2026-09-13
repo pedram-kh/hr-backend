@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\AnswerModelSetting;
 use App\Models\Convenio;
+use App\Models\ConvenioGroup;
 use App\Models\Document;
 use App\Models\ReferenceFact;
 use App\Models\TagEvent;
@@ -52,9 +53,19 @@ class ReferenceFactProposalService
     /**
      * Segment one reference_source and persist its facts as inert AI proposals.
      *
+     * Sprint 10c (spec §2.4): `$capturedValidityStart`/`$capturedValidityEnd` are
+     * REQUIRED (nullable typed, no default) — deliberately, so a caller cannot
+     * silently omit them and fall back to some implicit re-read. They must be
+     * the document's validity window as read by the CALLER at dispatch time
+     * (see `SegmentReferenceSource`'s docblock), never re-fetched from
+     * `$document` here — `$document` may be a stale in-memory copy or, worse, a
+     * fresh reload reflecting an edit made after this job was queued. This is
+     * the job-time-vs-dispatch-time fix: nothing downstream of dispatch ever
+     * reads validity off the document again.
+     *
      * @return array<string,mixed> a summary for the caller (job/endpoint)
      */
-    public function propose(Document $document): array
+    public function propose(Document $document, ?string $capturedValidityStart, ?string $capturedValidityEnd): array
     {
         $settings = AnswerModelSetting::current();
         if (! $settings->isConfigured()) {
@@ -102,7 +113,22 @@ class ReferenceFactProposalService
             return ['status' => 'error', 'reason' => $result['error']];
         }
 
-        return $this->persist($document, $result['facts'] ?? []);
+        // Sprint 10c (D1): log token counts from hr-ai's trace_fragment so batch
+        // cost is a MEASUREMENT, not an estimate — one line, no new storage, no
+        // new endpoint. Never fails the call: trace_fragment is best-effort and
+        // absent entirely on a parse-salvage path (claude.py's own fallback).
+        $trace = $result['trace_fragment'] ?? [];
+        Log::info('reference segmentation: usage', [
+            'document_id' => $document->id,
+            'model' => $trace['model'] ?? null,
+            'prompt_tokens' => $trace['prompt_tokens'] ?? null,
+            'completion_tokens' => $trace['completion_tokens'] ?? null,
+            'fact_count' => $trace['fact_count'] ?? count($result['facts'] ?? []),
+            'truncated' => $trace['truncated'] ?? null,
+            'salvaged' => $trace['salvaged'] ?? null,
+        ]);
+
+        return $this->persist($document, $result['facts'] ?? [], $capturedValidityStart, $capturedValidityEnd);
     }
 
     /**
@@ -113,19 +139,37 @@ class ReferenceFactProposalService
      * @param  list<array<string,mixed>>  $facts  hr-ai /segment-facts envelope facts
      * @return array<string,mixed>
      */
-    private function persist(Document $document, array $facts): array
+    private function persist(Document $document, array $facts, ?string $validityStart, ?string $validityEnd): array
     {
         $batchId = (string) Str::uuid();
-        // Validity rides the SOURCE document's human-set window (Q7) — the agent
-        // never parses dates from prose. NULL = open-ended.
-        $validityStart = $document->validity_start?->toDateString();
-        $validityEnd = $document->validity_end?->toDateString();
+        // Validity rides the CAPTURED-AT-DISPATCH window (Sprint 10c, spec §2.4)
+        // — never re-read from `$document` here. The agent never parses dates
+        // from prose (unchanged, Q7); what changed is WHEN the human-set window
+        // is read: at dispatch, by the caller, not at job-execution time here.
+        // NULL = open-ended.
 
         $created = 0;
         $updated = 0;
         $duplicatesFlagged = 0;
 
-        DB::transaction(function () use ($document, $facts, $batchId, $validityStart, $validityEnd, &$created, &$updated, &$duplicatesFlagged) {
+        // Sprint 10c (D4) — the group-restraint DETERMINISTIC backstop. The
+        // segmentation prompt has no rule at all for "this convenio has no
+        // approved group tree" (plan §A.3: the agent proposes a group-labelled
+        // fact unconditionally, regardless of tree status). This is enforced
+        // here, in code, not the prompt: computed ONCE per batch, the set of
+        // convenio_ids among this batch's facts that already have an APPROVED
+        // `convenio_groups` tree. Any OTHER convenio_id with a non-null
+        // group_label gets its uncertainty forced below — never a skip
+        // (flag-and-persist, D4): the fact is still real, reviewable
+        // information; a human may verify it AND separately approve/bind a
+        // tree later (7f's manual-bind lane exists for exactly this).
+        $approvedTreeConvenioIds = ConvenioGroup::approved()
+            ->whereIn('convenio_id', collect($facts)->pluck('convenio_id')->filter()->unique()->values()->all())
+            ->pluck('convenio_id')
+            ->unique()
+            ->all();
+
+        DB::transaction(function () use ($document, $facts, $batchId, $validityStart, $validityEnd, $approvedTreeConvenioIds, &$created, &$updated, &$duplicatesFlagged) {
             foreach ($facts as $f) {
                 $convenioId = $f['convenio_id'] ?? null;
                 $value = trim((string) ($f['value'] ?? ''));
@@ -138,6 +182,18 @@ class ReferenceFactProposalService
                     : null;
                 $topicId = $f['topic_id'] ?? null;
                 $jobCategoryId = $f['job_category_id'] ?? null;
+
+                // D4 backstop: a group-labelled fact for a convenio with no
+                // approved tree gets flagged (never overriding an uncertainty
+                // the model already set — the model's own flag, e.g. a compound
+                // group expression, is a real and different concern).
+                $uncertainty = $this->normalizeUncertainty($f['uncertainty'] ?? null);
+                if ($uncertainty === null && $groupLabel !== null && ! in_array($convenioId, $approvedTreeConvenioIds, true)) {
+                    $uncertainty = [
+                        'field' => 'group',
+                        'reason' => 'no hay árbol de grupos aprobado para este convenio — revisar y vincular manualmente',
+                    ];
+                }
 
                 $key = [
                     'source' => 'ai_agent',
@@ -159,7 +215,7 @@ class ReferenceFactProposalService
                     'value' => $value,
                     'raw_values' => $f['raw_values'] ?? null,
                     'confidence' => isset($f['confidence']) ? (float) $f['confidence'] : null,
-                    'uncertainty' => $this->normalizeUncertainty($f['uncertainty'] ?? null),
+                    'uncertainty' => $uncertainty,
                     // INVARIANT 1: forced to the floor regardless of anything.
                     'authority_level' => ReferenceFact::AUTHORITY_LEVEL,
                     // inert until a human verifies (the agent never flips this).

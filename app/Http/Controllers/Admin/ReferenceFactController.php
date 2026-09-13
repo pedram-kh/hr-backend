@@ -457,6 +457,9 @@ class ReferenceFactController extends Controller
      * ingest auto-trigger uses); the proposed facts land inert (ai_agent/
      * needs_review). Idempotent — re-running upserts on the group_label-extended
      * logical key. Gated by `knowledge.edit`.
+     *
+     * Sprint 10c (spec §2.4): validity is captured HERE, at dispatch time, not
+     * left for the job to re-read later (see SegmentReferenceSource's docblock).
      */
     public function segment(Request $request, string $uuid): JsonResponse
     {
@@ -464,7 +467,11 @@ class ReferenceFactController extends Controller
             ->where('uuid', $uuid)
             ->firstOrFail();
 
-        SegmentReferenceSource::dispatch($doc->id);
+        SegmentReferenceSource::dispatch(
+            $doc->id,
+            $doc->validity_start?->toDateString(),
+            $doc->validity_end?->toDateString(),
+        );
 
         return response()->json(['status' => 'queued', 'document_uuid' => $doc->uuid]);
     }

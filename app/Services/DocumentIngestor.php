@@ -368,8 +368,16 @@ class DocumentIngestor
         // (ai_agent/needs_review, not answerable) until a human verifies. The
         // routing invariant holds: only a reference_source reaches this path, and
         // the segmenter never writes a salary row.
+        //
+        // Sprint 10c (spec §2.4): validity is captured HERE, at dispatch — a
+        // fresh document's window can't have drifted yet, but the job must never
+        // re-read it later regardless (see SegmentReferenceSource's docblock).
         if ($asReference) {
-            \App\Jobs\SegmentReferenceSource::dispatch($document->id);
+            \App\Jobs\SegmentReferenceSource::dispatch(
+                $document->id,
+                $document->validity_start?->toDateString(),
+                $document->validity_end?->toDateString(),
+            );
         }
 
         return [
