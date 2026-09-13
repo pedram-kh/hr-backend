@@ -410,6 +410,7 @@ class Sprint7b2SegmentationInvariantTest extends TestCase
                 array $candidateTopics,
                 string $decryptedKey,
                 array $providerConfig,
+                ?array $targetTopic = null,
             ): array {
                 return ['facts' => $this->facts, 'trace_fragment' => ['stub' => true]];
             }

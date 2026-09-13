@@ -9,6 +9,8 @@ use App\Models\Document;
 use App\Models\ReferenceFact;
 use App\Models\TagEvent;
 use App\Models\Topic;
+use App\Support\TopicLexicon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -129,6 +131,153 @@ class ReferenceFactProposalService
         ]);
 
         return $this->persist($document, $result['facts'] ?? [], $capturedValidityStart, $capturedValidityEnd);
+    }
+
+    /**
+     * Sprint 10c (plan §A.1, §D.11 step 3) — the per-(document, topic) driver
+     * over ALREADY-INGESTED convenio text, alongside (not replacing) the
+     * `reference_source` path above. Two structural differences from
+     * `propose()`:
+     *
+     *  1. SOURCE: convenio text already in `document_pages`, not an uploaded
+     *     recopilación — `$document` here is a `convenio_text` document.
+     *  2. SCOPE: single-convenio (this document's own `convenio_id`) and
+     *     single-topic (`$topic`, passed to hr-ai as `target_topic` — NOT a
+     *     closed list to bind against opportunistically). No header-carry:
+     *     a single-convenio call has no cross-province ambiguity to resolve.
+     *
+     * Input is PASSAGE-SCOPED (plan §A.1's sizing finding): only pages
+     * carrying a `TopicLexicon` anchor for `$topic`, not the whole convenio
+     * (real convenio text runs up to 263k chars against a 48k-char cap).
+     *
+     * Source selection is the CALLER's job (see `eligibleDocumentsForTopic()`)
+     * — by the time a `$document` reaches here it has already passed the
+     * `document_type=convenio_text` + `retrieval_status='active'` filter
+     * (D6, plan §B.6): an expired convenio (4/21) is excluded upstream
+     * because it has no active row, never via a hardcoded skip list here.
+     *
+     * `$capturedValidityStart`/`$capturedValidityEnd` follow the exact same
+     * dispatch-time-capture discipline as `propose()` (spec §2.4) — required
+     * (nullable-typed, no default), never re-read from `$document` here.
+     *
+     * @return array<string,mixed>
+     */
+    public function proposeForTopic(Document $document, Topic $topic, ?string $capturedValidityStart, ?string $capturedValidityEnd): array
+    {
+        $settings = AnswerModelSetting::current();
+        if (! $settings->isConfigured()) {
+            return ['status' => 'skipped', 'reason' => 'answer_model_not_configured'];
+        }
+
+        $document->loadMissing(['convenio.territory', 'convenio.sector', 'convenio.jobCategories']);
+        $convenio = $document->convenio;
+        if ($convenio === null) {
+            return ['status' => 'skipped', 'reason' => 'no_convenio'];
+        }
+
+        $topicKey = TopicLexicon::keyForTopicName($topic->name);
+        if ($topicKey === null) {
+            return ['status' => 'skipped', 'reason' => 'topic_not_in_lexicon'];
+        }
+
+        $pagesText = $this->passageScopedText($document, $topicKey);
+        if (trim($pagesText) === '') {
+            return ['status' => 'skipped', 'reason' => 'no_anchored_passages'];
+        }
+
+        $providerConfig = [
+            'provider' => config('services.hr_ai.answer_provider', 'claude'),
+            'model' => config('services.hr_ai.answer_model'),
+            'endpoint' => config('services.hr_ai.answer_endpoint'),
+        ];
+
+        $key = $settings->decryptKey();
+        $result = $this->ai->segmentFacts(
+            $document->id,
+            $document->uuid,
+            'docx', // convenio text is always prose, never a salary grid
+            $pagesText,
+            [$this->convenioPayload($convenio)], // single-convenio: no cross-province binding needed
+            [], // candidate_topics unused when target_topic is set
+            $key,
+            $providerConfig,
+            ['id' => $topic->id, 'name' => $topic->name],
+        );
+        unset($key); // drop the plaintext as soon as the call returns
+
+        if (isset($result['error'])) {
+            Log::warning('topic segmentation: provider failure (convenio left unsegmented for this topic)', [
+                'document_id' => $document->id,
+                'convenio_id' => $convenio->id,
+                'topic_id' => $topic->id,
+                'error' => $result['error'], // never the key
+            ]);
+
+            return ['status' => 'error', 'reason' => $result['error']];
+        }
+
+        // D1: same measurement-not-estimate logging as propose(), plus the
+        // topic/convenio identity so per-topic batch cost is attributable.
+        $trace = $result['trace_fragment'] ?? [];
+        Log::info('topic segmentation: usage', [
+            'document_id' => $document->id,
+            'convenio_id' => $convenio->id,
+            'topic_id' => $topic->id,
+            'topic_name' => $topic->name,
+            'model' => $trace['model'] ?? null,
+            'prompt_tokens' => $trace['prompt_tokens'] ?? null,
+            'completion_tokens' => $trace['completion_tokens'] ?? null,
+            'fact_count' => $trace['fact_count'] ?? count($result['facts'] ?? []),
+            'truncated' => $trace['truncated'] ?? null,
+            'salvaged' => $trace['salvaged'] ?? null,
+        ]);
+
+        return $this->persist($document, $result['facts'] ?? [], $capturedValidityStart, $capturedValidityEnd);
+    }
+
+    /**
+     * The eligible `(document)` set for a topic's batch (D6, plan §B.6):
+     * `document_type=convenio_text` AND `retrieval_status='active'`, full
+     * stop, further narrowed to documents carrying at least one page anchored
+     * to this topic (so a batch driver never dispatches a job with nothing to
+     * do). No convenio_id skip list, ever — an expired convenio (4/21) is
+     * excluded here ONLY because it has no `active` row, proven directly by
+     * `Sprint10cTopicSegmentationTest`'s source-selection test.
+     *
+     * @return Collection<int,Document>
+     */
+    public function eligibleDocumentsForTopic(Topic $topic): Collection
+    {
+        $topicKey = TopicLexicon::keyForTopicName($topic->name);
+        if ($topicKey === null) {
+            return collect();
+        }
+
+        return Document::query()
+            ->whereHas('documentType', fn ($q) => $q->where('code', 'convenio_text'))
+            ->where('retrieval_status', 'active')
+            ->with('pages')
+            ->get()
+            ->filter(fn (Document $d) => trim($this->passageScopedText($d, $topicKey)) !== '')
+            ->values();
+    }
+
+    /**
+     * Only this document's pages carrying a `TopicLexicon` anchor for
+     * `$topicKey` (plan §A.1's sizing finding — passage-scoped, not the whole
+     * convenio). Each matching page is prefixed with a `[loc:pN]` marker so
+     * the model's `source_locator` (rule 9) can cite a real, checkable page.
+     */
+    private function passageScopedText(Document $document, string $topicKey): string
+    {
+        $document->loadMissing('pages');
+
+        return $document->pages
+            ->sortBy('page_number')
+            ->filter(fn ($p) => TopicLexicon::textMatchesTopicKey($topicKey, (string) $p->text))
+            ->map(fn ($p) => "[loc:p{$p->page_number}]\n".(string) $p->text)
+            ->values()
+            ->implode("\n\n");
     }
 
     /**
@@ -370,19 +519,33 @@ class ReferenceFactProposalService
     {
         return Convenio::with(['territory', 'sector', 'jobCategories'])
             ->orderBy('id')->get()
-            ->map(fn (Convenio $c) => [
-                'id' => $c->id,
-                'name' => $c->name,
-                'numero' => $c->numero,
-                'aliases' => array_values((array) $c->aliases),
-                'territory_name' => $c->territory?->name ?? '',
-                'territory_aliases' => array_values((array) ($c->territory?->aliases ?? [])),
-                'sector_name' => $c->sector?->name ?? '',
-                'sector_aliases' => array_values((array) ($c->sector?->aliases ?? [])),
-                'job_categories' => $c->jobCategories
-                    ->map(fn ($jc) => ['id' => $jc->id, 'name' => $jc->name, 'group_code' => $jc->group_code])
-                    ->values()->all(),
-            ])->values()->all();
+            ->map(fn (Convenio $c) => $this->convenioPayload($c))
+            ->values()->all();
+    }
+
+    /**
+     * The single-convenio payload shape shared by `buildCandidateConvenios()`
+     * (all 27, for the multi-province `propose()` path) and `proposeForTopic()`
+     * (exactly 1, for the single-convenio Sprint 10c path) — one implementation
+     * of the candidate-convenio shape hr-ai's closed-set binding expects.
+     *
+     * @return array<string,mixed>
+     */
+    private function convenioPayload(Convenio $c): array
+    {
+        return [
+            'id' => $c->id,
+            'name' => $c->name,
+            'numero' => $c->numero,
+            'aliases' => array_values((array) $c->aliases),
+            'territory_name' => $c->territory?->name ?? '',
+            'territory_aliases' => array_values((array) ($c->territory?->aliases ?? [])),
+            'sector_name' => $c->sector?->name ?? '',
+            'sector_aliases' => array_values((array) ($c->sector?->aliases ?? [])),
+            'job_categories' => $c->jobCategories
+                ->map(fn ($jc) => ['id' => $jc->id, 'name' => $jc->name, 'group_code' => $jc->group_code])
+                ->values()->all(),
+        ];
     }
 
     /**

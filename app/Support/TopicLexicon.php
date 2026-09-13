@@ -118,4 +118,30 @@ class TopicLexicon
             'á' => 'a', 'é' => 'e', 'í' => 'i', 'ó' => 'o', 'ú' => 'u', 'ü' => 'u',
         ]);
     }
+
+    /**
+     * The reverse of `TOPIC_NAMES` (Sprint 10c): given an approved `topics.name`
+     * (e.g. "permisos"), find its lexicon topic_key (e.g. "permisos") so the new
+     * per-(convenio, topic) segmentation driver can pull that key's `ANCHORS` to
+     * passage-filter convenio text. Accent/case-insensitive, matching every
+     * other lookup in this class. Returns null for a topic with no lexicon
+     * entry (falls through safely — the driver simply finds no anchored pages).
+     */
+    public static function keyForTopicName(string $topicName): ?string
+    {
+        $needle = self::stripAccents(mb_strtolower(trim($topicName)));
+        foreach (self::TOPIC_NAMES as $key => $name) {
+            if (self::stripAccents(mb_strtolower($name)) === $needle) {
+                return $key;
+            }
+        }
+
+        return null;
+    }
+
+    /** Does this text carry an anchor for the GIVEN topic_key (not every topic)? */
+    public static function textMatchesTopicKey(string $topicKey, string $text): bool
+    {
+        return array_key_exists($topicKey, self::matchTopicKeys($text));
+    }
 }
