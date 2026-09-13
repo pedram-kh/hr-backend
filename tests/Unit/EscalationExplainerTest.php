@@ -45,6 +45,11 @@ class EscalationExplainerTest extends TestCase
             'salary_coverage_gap.future_only' => ['salary_coverage_gap', ['salary' => ['note' => 'only a not-yet-effective (future) salary table exists — escalate, do not quote']], 'future_only'],
             'salary_coverage_gap.category_unresolved' => ['salary_coverage_gap', ['salary' => ['note' => 'selected category not valid for this convenio']], 'category_unresolved'],
             'salary_coverage_gap.no_row_for_category' => ['salary_coverage_gap', ['salary' => ['note' => 'no salary row for this category in the resolved table']], 'no_row_for_category'],
+            // Sprint 10b, Correction-01: SMI/salario mínimo — a statutory
+            // figure, checked and escalated BEFORE SalaryAnswerService ever
+            // runs, so this note shape is set directly by ChatService, not by
+            // SalaryAnswerService::escalate() like the four cases above it.
+            'salary_coverage_gap.statutory_figure' => ['salary_coverage_gap', ['salary' => ['note' => 'statutory figure (SMI/salario mínimo) — never sourced from the employee\'s own convenio salary table, regardless of whether one exists (Correction-01)']], 'statutory_figure'],
             'reference_fact_coverage_gap.no_convenio' => ['reference_fact_coverage_gap', ['reference_fact' => ['note' => 'no convenio on profile']], 'no_convenio'],
             'reference_fact_coverage_gap.no_reference_data' => ['reference_fact_coverage_gap', ['reference_fact' => ['note' => 'no verified in-scope in-validity fact (only unverified / out-of-validity / future-only, or none)', 'coverage_gap_detail' => ['case' => 'none_recorded']]], 'no_reference_data'],
             'reference_fact_coverage_gap.only_needs_review' => ['reference_fact_coverage_gap', ['reference_fact' => ['note' => 'no verified in-scope in-validity fact (only unverified / out-of-validity / future-only, or none)', 'coverage_gap_detail' => ['case' => 'only_needs_review']]], 'only_needs_review'],

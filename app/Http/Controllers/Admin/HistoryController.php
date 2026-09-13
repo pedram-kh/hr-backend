@@ -7,6 +7,7 @@ use App\Models\ChatMessage;
 use App\Models\ChatSession;
 use App\Services\ConversationAccessLogger;
 use App\Services\ConversationPresenter;
+use App\Support\EmployeeContextPresenter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -101,7 +102,18 @@ class HistoryController extends Controller
      */
     public function show(string $sessionUuid, Request $request): JsonResponse
     {
-        $session = ChatSession::with(['employee:id,uuid,full_name,convenio_id', 'employee.convenio:id,numero,name'])
+        // Sprint 10b, Correction-02 (eyes-on finding): the extra relations the
+        // EMPLEADO block needs (territory / category / group / seniority),
+        // plus `email`/`start_date` on the employee select itself — mirrors
+        // EscalationController::show()'s eager-load for the same block.
+        $session = ChatSession::with([
+            'employee:id,uuid,full_name,email,convenio_id,territory_id,job_category_id,convenio_group_id,start_date',
+            'employee.convenio:id,numero,name',
+            'employee.territory:id,code,name',
+            'employee.jobCategory:id,name',
+            'employee.convenioGroup:id,parent_id,label,code_normalized',
+            'employee.convenioGroup.parent:id,label',
+        ])
             ->where('uuid', $sessionUuid)
             ->firstOrFail();
 
@@ -119,6 +131,13 @@ class HistoryController extends Controller
                     'name' => $session->employee->convenio->name,
                 ] : null,
             ] : null,
+            // Sprint 10b, Correction-02 (eyes-on finding): mirrors 10a's
+            // escalation-card employee_context block. No additional gate here
+            // — this whole endpoint already requires `history.view_all`
+            // (route group), and opening it already writes the access-log row
+            // above regardless of this addition, so there is no new access
+            // path to log separately.
+            'employee_context' => $session->employee !== null ? EmployeeContextPresenter::present($session->employee) : null,
             'started_at' => $session->started_at?->toIso8601String(),
             'last_activity_at' => $session->last_activity_at?->toIso8601String(),
             'messages' => $this->presenter->present($session, ConversationPresenter::AUDIENCE_ADMIN),
