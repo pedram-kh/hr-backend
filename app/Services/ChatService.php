@@ -113,6 +113,18 @@ class ChatService
         .'cifra mezclada o equivocada: te derivo con una persona del equipo de Recursos Humanos para que '
         .'te lo confirme con exactitud.';
 
+    /**
+     * Surfaced on a statutory salary figure (SMI/salario mínimo), Sprint 10b
+     * Correction-01. Deliberately distinct from `SalaryAnswerService::
+     * COVERAGE_GAP_MESSAGE` — that message says "no tengo tu tabla salarial",
+     * which would be FALSE here (the employee may well have one); this says
+     * the figure asked for was never going to be in it.
+     */
+    public const STATUTORY_SALARY_MESSAGE = 'El SMI (salario mínimo interprofesional) es una cifra '
+        .'legal general que fija el Estado, no un dato de tu tabla salarial estructurada — no quiero '
+        .'confirmártelo desde aquí con una cifra que no sea la tuya. Te derivo con una persona del '
+        .'equipo de Recursos Humanos.';
+
     /** Max chunks handed to synthesis after the recall-hardening union (top by score). */
     private const SYNTHESIS_CHUNK_CAP = 10;
 
@@ -125,6 +137,10 @@ class ChatService
      * periodo-de-prueba chunks share the pool). The cap grows with the number of
      * sub-queries so each sub-topic keeps its recall; a single-topic question
      * (no sub-queries) is unchanged at SYNTHESIS_CHUNK_CAP.
+     *
+     * Sprint 10b (ADR-0033): also applied per decomposed_queries entry, for the
+     * same reason — a situational rephrasing's recall must not be truncated
+     * below what a canonically-phrased version of the same question would get.
      */
     private const COMPOUND_CAP_PER_SUBQUERY = 2;
 
@@ -218,7 +234,36 @@ class ChatService
             return $this->persistTurn($session, $employee, $question, $message, [], $trace, 'escalate', $adminBlock['reason']);
         }
 
-        // --- Step 2c: reference-fact pre-check (Sprint 7c Phase 1, ADR-0023) ----
+        // --- Step 2c: explicit_request pre-check (Sprint 10b, ADR-0033) --------
+        // Deterministic, NO LLM — same calling convention as the salary pre-
+        // classifier (RouterService::matchesSalary(), called directly below at
+        // Step 2d). Runs AFTER both guardrail layers above (build authorization
+        // D3: a message that is simultaneously sensitive AND a human request
+        // must escalate sensitive_topic — the stronger, already-cleared reason —
+        // never this weaker, contentless one) and BEFORE the reference-fact
+        // pre-check and the router (a bare human-request phrase has no topic to
+        // anchor on and nothing to classify; checking it first on a narrow closed
+        // list is safer and cheaper than letting it reach the LLM router, where
+        // today it is misclassified off_domain — plan.md §0/§C.4, card 9).
+        //
+        // `explicit_request` has existed in the reason enum and the 7g
+        // EscalationExplainer matrix/registry since Sprint 4/7g (reserved, "not
+        // currently emitted" — EscalationExplainer.php:44); this is its first
+        // producer. No migration, no explainer change, no guard-test change
+        // needed (plan.md §C.4 confirmed all three already cover it).
+        if ($this->router->matchesExplicitRequest($question)) {
+            $trace['floor_decision'] = [
+                'retrieval_score_floor' => $this->policy->retrievalFloor(),
+                'answer_confidence_floor' => $this->policy->confidenceFloor(),
+                'outcome' => 'escalate',
+                'escalation_reason' => 'explicit_request',
+                'note' => 'employee explicitly asked to speak with a person (deterministic pre-check, before router)',
+            ];
+
+            return $this->persistTurn($session, $employee, $question, self::ESCALATION_MESSAGE, [], $trace, 'escalate', 'explicit_request');
+        }
+
+        // --- Step 2d: reference-fact pre-check (Sprint 7c Phase 1, ADR-0023) ----
         // Deterministic, NO LLM. Runs in the salary-pre-classifier layer, on a
         // NON-salary question only (Q4: salary keeps its exact path). It adds the
         // reference-fact route ONLY when a VERIFIED, in-scope, in-validity,
@@ -255,6 +300,10 @@ class ChatService
             'note' => $decision['note'],
             'cross_path' => $decision['cross_path'] ?? false,
             'trace_fragment' => $decision['trace_fragment'] ?? [],
+            // Sprint 10b (ADR-0033): situational/colloquial retrieval rephrasings
+            // — [] for every turn today except a prose turn hr-ai chose to
+            // rephrase. Admin TracePanel renders this alongside subqueries.
+            'decomposed_queries' => $decision['decomposed_queries'] ?? [],
         ];
 
         // --- Step 4c: off-domain → escalate -------------------------------------
@@ -300,6 +349,32 @@ class ChatService
                 return $this->persistTurn($session, $employee, $question, self::CROSSPATH_MESSAGE, [], $trace, 'escalate', 'low_confidence');
             }
 
+            // Sprint 10b, Correction-01 (post-D1-bis regression, eyes-on found):
+            // SMI/salario mínimo names a STATUTORY figure, never a cell in the
+            // employee's OWN convenio salary table — `SalaryAnswerService`
+            // cannot tell the two apart (it only resolves WHO is asking, never
+            // WHAT). D1-bis's gold-eval only exercised the no-tables profile, so
+            // it never caught `test-navarra@example.com`-shaped employees (a
+            // resolvable table + category) getting her own category cell as a
+            // non-responsive answer to a national-figure question. Checked here,
+            // BEFORE `$this->salary->answer()` is ever called, so the answer path
+            // is unreachable for these regardless of whether a table/category/row
+            // exists — the contract is escalation for every employee profile.
+            if ($this->router->matchesStatutorySalaryFigure($question)) {
+                $trace['salary'] = [
+                    'outcome' => 'escalate',
+                    'note' => 'statutory figure (SMI/salario mínimo) — never sourced from the employee\'s own convenio salary table, regardless of whether one exists (Correction-01)',
+                ];
+                $trace['floor_decision'] = [
+                    'path' => 'salary_sql',
+                    'outcome' => 'escalate',
+                    'escalation_reason' => 'salary_coverage_gap',
+                    'note' => $trace['salary']['note'],
+                ];
+
+                return $this->persistTurn($session, $employee, $question, self::STATUTORY_SALARY_MESSAGE, [], $trace, 'escalate', 'salary_coverage_gap');
+            }
+
             $result = $this->salary->answer($employee, $asOfDate, $selectedJobCategoryId);
             $trace['salary'] = $result['salary'];
 
@@ -339,7 +414,7 @@ class ChatService
         }
 
         // --- Step 4b: prose path -------------------------------------------------
-        return $this->answerProse($session, $employee, $question, $decision['subqueries'], $asOfDate, $decryptedKey, $trace);
+        return $this->answerProse($session, $employee, $question, $decision['subqueries'], $asOfDate, $decryptedKey, $trace, $decision['decomposed_queries'] ?? []);
     }
 
     /**
@@ -448,7 +523,11 @@ class ChatService
             return null; // a fact with no citable source can't enter the composed set
         }
 
-        // Recall-hardened retrieval (reuse the prose union; single-topic → no subqueries).
+        // Recall-hardened retrieval (reuse the prose union; single-topic → no
+        // subqueries). Sprint 10b (ADR-0033): decomposedQueries defaults to []
+        // and is deliberately not wired here — the reference-fact path never
+        // calls the router (short-circuits before it, above), so there is no
+        // decomposition to thread through (plan.md §B.2 scope note).
         $union = $this->retrieveUnion($question, [], $employee->convenio_id, $asOfDate->toDateString());
         $chunks = $union['chunks'];
 
@@ -798,9 +877,11 @@ class ChatService
      *
      * @param  list<string>  $subqueries
      * @param  array<string,mixed>  $trace
+     * @param  list<string>  $decomposedQueries  Sprint 10b (ADR-0033) — situational/
+     *   colloquial retrieval rephrasings, [] on every turn until hr-ai returns one.
      * @return array<string,mixed>
      */
-    private function answerProse(ChatSession $session, Employee $employee, string $question, array $subqueries, Carbon $asOfDate, ?string $decryptedKey, array $trace): array
+    private function answerProse(ChatSession $session, Employee $employee, string $question, array $subqueries, Carbon $asOfDate, ?string $decryptedKey, array $trace, array $decomposedQueries = []): array
     {
         // Effective floors = stricter_of(hardcoded baseline, admin override),
         // computed inside GuardrailPolicy (Sprint 6, ADR-0019). The caller never
@@ -874,10 +955,13 @@ class ChatService
         }
 
         // Recall hardening (§6, resolved §9 F): one /retrieve for the question,
-        // one per decomposed sub-query (compound questions — the Q10 fix), plus a
-        // national-law-only pass (the silent-topic recall — the Art. 14 ET miss).
-        // Union, dedupe by chunk_id keeping the max score. /retrieve is unchanged.
-        $union = $this->retrieveUnion($question, $subqueries, $employee->convenio_id, $asOfDate->toDateString(), $fallback);
+        // one per decomposed sub-query (compound questions — the Q10 fix), one
+        // per decomposed_queries retrieval rephrasing (Sprint 10b, ADR-0033 —
+        // situational/colloquial vocabulary joins the SAME union the same way),
+        // plus a national-law-only pass (the silent-topic recall — the Art. 14 ET
+        // miss). Union, dedupe by chunk_id keeping the max score. /retrieve is
+        // unchanged.
+        $union = $this->retrieveUnion($question, $subqueries, $employee->convenio_id, $asOfDate->toDateString(), $fallback, $decomposedQueries);
         $chunks = $union['chunks'];
         $eligibleTotal = $union['eligible_total'];
         $topScore = empty($chunks) ? 0.0 : (float) collect($chunks)->max('score');
@@ -1096,14 +1180,27 @@ class ChatService
 
     /**
      * Recall hardening (§6): issue /retrieve for the question + each decomposed
-     * sub-query + a national-law-only pass, then UNION (dedupe by chunk_id keeping
-     * the max score), sort by score desc, cap to SYNTHESIS_CHUNK_CAP. /retrieve is
-     * unchanged (the union is hr-backend-side — resolved §9 F).
+     * sub-query + each decomposed_queries retrieval rephrasing (Sprint 10b,
+     * ADR-0033) + a national-law-only pass, then UNION (dedupe by chunk_id
+     * keeping the max score), sort by score desc, cap to SYNTHESIS_CHUNK_CAP.
+     * /retrieve is unchanged (the union is hr-backend-side — resolved §9 F).
+     *
+     * `$decomposedQueries` is a SEPARATE array from `$subqueries` — subqueries
+     * SPLIT a compound question into its constituent topics; decomposed_queries
+     * REPHRASE a (possibly single-topic) question's underlying legal concept into
+     * corpus vocabulary. Both join the SAME union the SAME way (plan.md §B.2):
+     * each entry becomes one more scoped `/retrieve` pass, with `query` the ONLY
+     * thing that varies — `convenio_id`/`include_national_law`/`retrieval_status`/
+     * `as_of_date`/`k` are fixed from the enclosing turn's own resolved scope,
+     * never read from the query text. This is the deterministic guard (plan.md
+     * §B.3): a decomposed query can reach retrieval text and nothing else — no
+     * scope resolve, no routing precedence, no authority.
      *
      * @param  list<string>  $subqueries
+     * @param  list<string>  $decomposedQueries
      * @return array{chunks:list<array<string,mixed>>, eligible_total:int, passes:list<array<string,mixed>>, rerank:array<string,mixed>}
      */
-    private function retrieveUnion(string $question, array $subqueries, ?int $convenioId, string $asOf, bool $fallback = false): array
+    private function retrieveUnion(string $question, array $subqueries, ?int $convenioId, string $asOf, bool $fallback = false, array $decomposedQueries = []): array
     {
         $byChunkId = [];
         $passes = [];
@@ -1121,8 +1218,11 @@ class ChatService
         // existing national-law pass below already relies on.
         $scopeConvenioId = $fallback ? null : $convenioId;
 
-        // The main question + each sub-query: scoped (convenio + national law).
-        $queries = array_merge([$question], $subqueries);
+        // The main question + each sub-query + each decomposed_queries rephrasing:
+        // scoped (convenio + national law). `query` is the ONLY thing that varies
+        // per pass — see the deterministic-guard note on the method docblock.
+        $subqueryCount = count($subqueries);
+        $queries = array_merge([$question], $subqueries, $decomposedQueries);
         foreach ($queries as $i => $q) {
             $resp = $this->safeRetrieve([
                 'query' => $q,
@@ -1135,8 +1235,14 @@ class ChatService
             $this->mergeChunks($byChunkId, $resp['chunks'] ?? []);
             $eligible = (int) ($resp['eligible_total'] ?? 0);
             $maxEligible = max($maxEligible, $eligible);
+            $kind = 'main';
+            if ($i > 0 && $i <= $subqueryCount) {
+                $kind = 'subquery';
+            } elseif ($i > $subqueryCount) {
+                $kind = 'decomposed_query';
+            }
             $passes[] = [
-                'kind' => $i === 0 ? 'main' : 'subquery',
+                'kind' => $kind,
                 'query' => $q,
                 'returned' => count($resp['chunks'] ?? []),
                 'eligible_total' => $eligible,
@@ -1184,7 +1290,12 @@ class ChatService
         }
         // The synthesis cap grows with the number of sub-queries so a compound
         // union isn't truncated below its parts' recall (Correction-03, Fix 1).
-        $cap = self::SYNTHESIS_CHUNK_CAP + self::COMPOUND_CAP_PER_SUBQUERY * count($subqueries);
+        // Sprint 10b (ADR-0033, plan.md §B.2): decomposed_queries counts
+        // SYMMETRICALLY with subqueries — a situational rephrasing earns the same
+        // recall headroom a compound question already gets, so decomposition
+        // never costs recall relative to today (count 0 → identical cap →
+        // byte-for-byte with pre-10b behavior on every question it doesn't touch).
+        $cap = self::SYNTHESIS_CHUNK_CAP + self::COMPOUND_CAP_PER_SUBQUERY * (count($subqueries) + count($decomposedQueries));
         $merged = array_slice($merged, 0, $cap);
         $rerank['synthesis_cap'] = $cap;
 

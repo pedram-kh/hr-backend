@@ -62,6 +62,12 @@ final class EscalationExplainer
         'salary_coverage_gap.future_only',
         'salary_coverage_gap.category_unresolved',
         'salary_coverage_gap.no_row_for_category',
+        // Sprint 10b, Correction-01: SMI/salario mínimo — a STATUTORY figure,
+        // never a cell in the employee's own convenio table. Fires regardless
+        // of whether a table/category/row exists (ChatService checks this
+        // BEFORE ever calling SalaryAnswerService::answer()) — the other five
+        // sub-outcomes above are all genuine absences of data; this one is not.
+        'salary_coverage_gap.statutory_figure',
         // --- reference-fact path (Sprint 7c Phase 1, 7f group scoping) --------
         'reference_fact_coverage_gap.no_convenio',
         'reference_fact_coverage_gap.no_reference_data',
@@ -233,6 +239,10 @@ final class EscalationExplainer
         $note = (string) ($trace['salary']['note'] ?? '');
 
         return match (true) {
+            // Sprint 10b, Correction-01: checked FIRST — this is the one
+            // sub-outcome that is not a data absence, so it must not fall
+            // through to any of the coverage-gap notes below by accident.
+            str_contains($note, 'statutory figure') => 'statutory_figure',
             str_contains($note, 'no convenio on profile') => 'no_convenio',
             str_contains($note, 'not-yet-effective') => 'future_only',
             str_contains($note, 'selected category not valid') => 'category_unresolved',
@@ -541,6 +551,19 @@ final class EscalationExplainer
                     'fix_action' => 'Revisar la tabla salarial de origen y añadir la fila que falta para esta categoría.',
                     'fix_surface' => 'Documentos',
                     'fix_link' => $documentsLink(),
+                ],
+                // Sprint 10b, Correction-01: SMI/salario mínimo. Distinct from
+                // the four sub-outcomes above — this is NOT a coverage gap in
+                // the employee's own table (one may well exist, with a row for
+                // their category); the question asks for a different, national
+                // figure that table was never going to contain.
+                'statutory_figure' => fn (array $t) => [
+                    'asked' => 'El empleado preguntó por el SMI (salario mínimo interprofesional) u otra cifra salarial estatutaria general.',
+                    'found' => 'No se consultó la tabla salarial del empleado — el SMI es una cifra legal general que fija el Estado, no un dato de la tabla de ningún convenio concreto, así que su categoría o tabla (exista o no) nunca iba a contener la respuesta.',
+                    'stopped_reason' => 'Responder con la cifra de la tabla del empleado habría sido una respuesta real pero equivocada (no responde a lo que se preguntó); el sistema nunca sustituye una cifra estatutaria por una cifra de convenio.',
+                    'fix_action' => 'Responder directamente con el SMI vigente (cifra pública, no requiere revisar el perfil del empleado) o derivar a la fuente oficial (BOE/SMI anual).',
+                    'fix_surface' => 'ninguna — cifra pública, respuesta manual',
+                    'fix_link' => null,
                 ],
             ],
             'reference_fact_coverage_gap' => [
