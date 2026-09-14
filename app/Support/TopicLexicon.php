@@ -55,8 +55,22 @@ class TopicLexicon
     public const TOPIC_NAMES = [
         'vacaciones' => 'vacaciones',
         'jornada' => 'jornada',
-        'permisos' => 'permisos',
-        'excedencia' => 'excedencia',
+        // Sprint 10c (plan §D.10 live-DB check): the REAL approved topic row is
+        // named "permisos retribuidos" (staging confirms a SEPARATE "permisos no
+        // retribuidos" topic also exists, id 10 — deliberately excluded here;
+        // conflating the two would blur a real, human-drawn distinction). This
+        // key was 'permisos' before, which never matched any approved topic row
+        // — a pre-existing, fail-safe-masked bug (ADR-0016: ReferenceFactRouter
+        // just fell through silently, never erroring), fixed here because this
+        // sprint is the first thing to actually exercise this specific mapping.
+        'permisos' => 'permisos retribuidos',
+        // Sprint 10c (review.md finding 3, live-DB check): same class of bug as
+        // permisos above — the real approved topic row is plural, "excedencias"
+        // (staging id 8). This key was 'excedencia' (singular) before, which
+        // never matched any approved topic row — the same
+        // fail-safe-masked/dead-code profile (ADR-0016), left flagged-only at
+        // the permisos checkpoint and fixed now under the same discipline.
+        'excedencia' => 'excedencias',
         'periodo_prueba' => 'periodo de prueba',
         'trabajo_distancia' => 'trabajo a distancia',
         'horas_extra' => 'horas extraordinarias',
@@ -117,5 +131,31 @@ class TopicLexicon
         return strtr($s, [
             'á' => 'a', 'é' => 'e', 'í' => 'i', 'ó' => 'o', 'ú' => 'u', 'ü' => 'u',
         ]);
+    }
+
+    /**
+     * The reverse of `TOPIC_NAMES` (Sprint 10c): given an approved `topics.name`
+     * (e.g. "permisos"), find its lexicon topic_key (e.g. "permisos") so the new
+     * per-(convenio, topic) segmentation driver can pull that key's `ANCHORS` to
+     * passage-filter convenio text. Accent/case-insensitive, matching every
+     * other lookup in this class. Returns null for a topic with no lexicon
+     * entry (falls through safely — the driver simply finds no anchored pages).
+     */
+    public static function keyForTopicName(string $topicName): ?string
+    {
+        $needle = self::stripAccents(mb_strtolower(trim($topicName)));
+        foreach (self::TOPIC_NAMES as $key => $name) {
+            if (self::stripAccents(mb_strtolower($name)) === $needle) {
+                return $key;
+            }
+        }
+
+        return null;
+    }
+
+    /** Does this text carry an anchor for the GIVEN topic_key (not every topic)? */
+    public static function textMatchesTopicKey(string $topicKey, string $text): bool
+    {
+        return array_key_exists($topicKey, self::matchTopicKeys($text));
     }
 }

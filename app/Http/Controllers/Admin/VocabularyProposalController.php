@@ -52,7 +52,7 @@ class VocabularyProposalController extends Controller
     public function suggest(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'facet' => ['required', 'in:territory,sector,convenio'],
+            'facet' => ['required', 'in:territory,sector,convenio,topic'],
             'value' => ['required', 'string'],
         ]);
 
@@ -71,7 +71,7 @@ class VocabularyProposalController extends Controller
     public function store(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'facet' => ['required', 'in:territory,sector,convenio'],
+            'facet' => ['required', 'in:territory,sector,convenio,topic'],
             'value' => ['required', 'string', 'max:255'],
             'source_document_uuid' => ['sometimes', 'nullable', 'string'],
             'review_task_id' => ['sometimes', 'nullable', 'integer'],

@@ -4,6 +4,7 @@ namespace App\Support;
 
 use App\Services\ExtractionClient;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 // Note: TopicLexicon lives in this same namespace (App\Support), so
@@ -49,9 +50,7 @@ class QuestionClusteringService
      */
     public const DEFAULT_THRESHOLD = 0.80;
 
-    public function __construct(private readonly ExtractionClient $hrAi)
-    {
-    }
+    public function __construct(private readonly ExtractionClient $hrAi) {}
 
     /**
      * Run the full pipeline for one period, writing `question_clusters` +
@@ -96,7 +95,7 @@ class QuestionClusteringService
         foreach ($clusters as $memberTexts) {
             [$medoidText, $minSim, $maxSim] = $this->medoid($memberTexts, $textToVector);
 
-            /** @var \Illuminate\Support\Collection $clusterMessages */
+            /** @var Collection $clusterMessages */
             $clusterMessages = collect($memberTexts)->flatMap(fn ($t) => $messagesByContent->get($t, collect()));
             $messageIds = $clusterMessages->pluck('id')->all();
 
@@ -314,6 +313,94 @@ class QuestionClusteringService
         })->sortByDesc('score')->take($limit)->values()->all();
 
         return $ranked;
+    }
+
+    /**
+     * Sprint 10c, D7 — nightly per-TOPIC demand score, written alongside
+     * `question_clusters` (same command, same `run_date`). Reuses the exact
+     * "unanswered" formula `unansweredRanking()` already computes per
+     * cluster — escalation_rate x volume x headcount_weight — aggregated by
+     * `TopicLexicon::matchTopicKeys()` topic_key instead of by cluster
+     * membership: independent of the greedy-threshold clustering pass, the
+     * same way `topicBreakdown()` already is.
+     *
+     * Full rebuild per run_date (delete-then-insert), matching `run()`'s own
+     * idempotency idiom.
+     *
+     * @return int the number of topic_key rows written
+     */
+    public function computeTopicDemandScores(Carbon $periodStart, Carbon $periodEnd, Carbon $runDate): int
+    {
+        $messages = DB::table('chat_messages')
+            ->where('role', 'user')
+            ->where('created_at', '>=', $periodStart)
+            ->where('created_at', '<', $periodEnd)
+            ->select('id', 'content', 'session_id')
+            ->get();
+
+        $messageIdsByTopic = [];
+        foreach ($messages as $m) {
+            foreach (array_keys(TopicLexicon::matchTopicKeys($m->content)) as $topicKey) {
+                $messageIdsByTopic[$topicKey][] = $m->id;
+            }
+        }
+
+        $headcounts = app(CorpusCoverageService::class)->headcounts();
+        $employeeByMessageId = $this->employeesByMessage($messages);
+        $convenioByEmployeeId = DB::table('employees')->pluck('convenio_id', 'id');
+
+        $rows = [];
+        foreach ($messageIdsByTopic as $topicKey => $messageIds) {
+            $messageIds = array_values(array_unique($messageIds));
+
+            $escalatedCount = DB::table('escalation_cards')->whereIn('source_message_id', $messageIds)
+                ->distinct('source_message_id')->count('source_message_id');
+            $escalationRate = count($messageIds) > 0 ? round($escalatedCount / count($messageIds), 4) : 0.0;
+
+            $askingEmployeeIds = collect($messageIds)
+                ->map(fn ($id) => $employeeByMessageId[$id] ?? null)
+                ->filter()->unique()->values();
+            $headcountWeight = 0;
+            foreach ($askingEmployeeIds as $empId) {
+                $convenioId = $convenioByEmployeeId[$empId] ?? null;
+                $headcountWeight += $convenioId !== null ? ($headcounts[$convenioId] ?? 0) : 0;
+            }
+
+            $score = $escalationRate * count($messageIds) * $headcountWeight;
+
+            // Bind to a real approved topic by NAME (TopicLexicon::TOPIC_NAMES),
+            // never mint one (ADR-0011) — a topic_key with no approved row
+            // (e.g. preaviso, descanso today) simply gets topic_id=null: the
+            // demand signal is still recorded, just not yet joinable.
+            $topicName = TopicLexicon::TOPIC_NAMES[$topicKey] ?? null;
+            $topicId = $topicName !== null
+                ? DB::table('topics')->where('status', 'approved')
+                    ->whereRaw('lower(name) = ?', [mb_strtolower($topicName)])->value('id')
+                : null;
+
+            $rows[] = [
+                'run_date' => $runDate->toDateString(),
+                'topic_key' => $topicKey,
+                'topic_id' => $topicId,
+                'volume' => count($messageIds),
+                'escalation_rate' => $escalationRate,
+                'headcount_weight' => $headcountWeight,
+                'score' => $score,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ];
+        }
+
+        DB::transaction(function () use ($runDate, $rows) {
+            DB::table('topic_demand_scores')->where('run_date', $runDate->toDateString())->delete();
+            foreach (array_chunk($rows, 200) as $chunk) {
+                if ($chunk !== []) {
+                    DB::table('topic_demand_scores')->insert($chunk);
+                }
+            }
+        });
+
+        return count($rows);
     }
 
     /** @param list<array{cluster:array<string,mixed>,message_ids:list<int>}> $rows */

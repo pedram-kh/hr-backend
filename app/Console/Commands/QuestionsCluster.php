@@ -32,8 +32,15 @@ class QuestionsCluster extends Command
 
         $result = $service->run($from, $to, $runDate, $threshold);
 
+        // Sprint 10c, D7 — the per-topic demand score, written alongside the
+        // clusters (same run_date, same period), independent of the greedy
+        // clustering pass. Feeds the reference-facts queue's demand-tier
+        // ordering (presentation-only, ranked AFTER uncertainty/confidence).
+        $topicRows = $service->computeTopicDemandScores($from, $to, $runDate);
+
         $this->info("questions:cluster {$from->toDateString()}..{$to->toDateString()} (τ={$threshold}): ".
-            "{$result['clusters']} clusters from {$result['distinct_texts']} distinct questions ({$result['members']} total turns)");
+            "{$result['clusters']} clusters from {$result['distinct_texts']} distinct questions ({$result['members']} total turns); ".
+            "{$topicRows} topic demand score(s) written");
 
         if ($this->option('print')) {
             $this->newLine();

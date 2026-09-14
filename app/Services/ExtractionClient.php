@@ -417,6 +417,12 @@ class ExtractionClient
      * @param  array{provider:string,model:string,endpoint:?string}  $providerConfig
      * @return array<string,mixed>
      */
+    /**
+     * @param  array<string,mixed>|null  $targetTopic  Sprint 10c (plan §A.1):
+     *     when set (`['id'=>int,'name'=>string]`), this call is FOR ONE TOPIC
+     *     ONLY — the new per-(convenio, topic) driver's path. When null, this
+     *     is byte-for-byte the original 7b-2 `reference_source` call.
+     */
     public function segmentFacts(
         int $documentId,
         string $documentUuid,
@@ -426,6 +432,7 @@ class ExtractionClient
         array $candidateTopics,
         string $decryptedKey,
         array $providerConfig,
+        ?array $targetTopic = null,
     ): array {
         $response = Http::withHeaders(['X-Internal-Token' => $this->token()])
             ->timeout(180) // a multi-province segmentation is a larger LLM call
@@ -437,6 +444,7 @@ class ExtractionClient
                 'pages_text' => $pagesText,
                 'candidate_convenios' => $candidateConvenios,
                 'candidate_topics' => $candidateTopics,
+                'target_topic' => $targetTopic,
                 'provider_api_key' => $decryptedKey,
                 'provider_config' => $providerConfig,
             ]);
