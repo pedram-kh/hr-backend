@@ -48,17 +48,22 @@ class ReferenceFactController extends Controller
         $query = ReferenceFact::query()
             ->with(['convenio.territory', 'convenio.sector', 'jobCategory', 'topic', 'sourceDocument:id,uuid,title']);
 
+        // Sprint 10c, D7: qualified with the table name. The `queue` branch
+        // below left-joins `topic_demand_scores` (which also has a
+        // `topic_id` column) onto this same query — an unqualified
+        // `topic_id` would become an ambiguous-column SQL error the moment
+        // both `?topic_id=` and `?queue=true` are passed together.
         if ($request->filled('convenio_id')) {
-            $query->where('convenio_id', $request->integer('convenio_id'));
+            $query->where('reference_facts.convenio_id', $request->integer('convenio_id'));
         }
         if ($request->filled('topic_id')) {
-            $query->where('topic_id', $request->integer('topic_id'));
+            $query->where('reference_facts.topic_id', $request->integer('topic_id'));
         }
         if ($request->filled('status')) {
-            $query->where('status', $request->string('status'));
+            $query->where('reference_facts.status', $request->string('status'));
         }
         if ($request->filled('source')) {
-            $query->where('source', $request->string('source'));
+            $query->where('reference_facts.source', $request->string('source'));
         }
 
         // The AI-proposed Reference-facts review queue (Sprint 7b-2): the
@@ -66,11 +71,28 @@ class ReferenceFactController extends Controller
         // unclear / compound group / possible version) floats to the top, then
         // the least-confident, so the reviewer spends attention where the risk
         // is. Default scope: the inert ai_agent lane awaiting verification.
+        //
+        // Sprint 10c, D7: a THIRD tier — real employee demand for this fact's
+        // topic (`topic_demand_scores`, written nightly by `questions:cluster`)
+        // — is added AFTER uncertainty and confidence, never before: safety
+        // outranks demand, always. Presentation-only — this changes nothing
+        // about which facts are IN the queue, only the order a reviewer sees
+        // them in. A left join against the LATEST run_date is a no-op (all
+        // NULL, ORDER BY unaffected) until the first `questions:cluster` run
+        // exists, so this is safely additive on a fresh install too.
         if ($request->boolean('queue')) {
             $query->where('source', 'ai_agent')->where('status', 'needs_review');
-            $query->orderByRaw('(uncertainty IS NOT NULL) DESC')
-                ->orderByRaw('confidence ASC NULLS LAST')
-                ->orderByDesc('id');
+
+            $latestRunDate = DB::table('topic_demand_scores')->max('run_date');
+            $query->leftJoin('topic_demand_scores as tds', function ($join) use ($latestRunDate) {
+                $join->on('tds.topic_id', '=', 'reference_facts.topic_id')
+                    ->where('tds.run_date', '=', $latestRunDate);
+            })->select('reference_facts.*');
+
+            $query->orderByRaw('(reference_facts.uncertainty IS NOT NULL) DESC')
+                ->orderByRaw('reference_facts.confidence ASC NULLS LAST')
+                ->orderByRaw('tds.score DESC NULLS LAST')
+                ->orderByDesc('reference_facts.id');
         } else {
             $query->orderByDesc('id');
         }

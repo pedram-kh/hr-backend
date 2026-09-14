@@ -60,7 +60,10 @@ class Sprint10cTopicSegmentationTest extends TestCase
             'numero' => '31000000', 'name' => 'Hostelería Navarra',
             'territory_id' => $this->navarra->id, 'sector_id' => $this->hosteleria->id,
         ]);
-        $this->permisos = Topic::firstOrCreate(['name' => 'permisos'], ['status' => 'approved']);
+        // Sprint 10c live-DB check (plan §D.10, gold-fixture eval run1): the REAL
+        // approved topic row is named "permisos retribuidos", not "permisos" —
+        // TopicLexicon::TOPIC_NAMES was fixed to match; this fixture follows.
+        $this->permisos = Topic::firstOrCreate(['name' => 'permisos retribuidos'], ['status' => 'approved']);
 
         $setting = new AnswerModelSetting(['provider' => 'claude']);
         $setting->id = 1;
@@ -150,7 +153,7 @@ class Sprint10cTopicSegmentationTest extends TestCase
         $spy['service']->proposeForTopic($doc, $this->permisos, '2024-01-01', '2027-12-31');
 
         $call = $spy['ai']->calls[0];
-        $this->assertSame(['id' => $this->permisos->id, 'name' => 'permisos'], $call['target_topic']);
+        $this->assertSame(['id' => $this->permisos->id, 'name' => 'permisos retribuidos'], $call['target_topic']);
         $this->assertSame([], $call['candidate_topics'], 'candidate_topics is unused/empty when target_topic is set');
         $this->assertCount(1, $call['candidate_convenios'], 'single-convenio: no cross-province candidate list needed');
         $this->assertSame($this->convenio->id, $call['candidate_convenios'][0]['id']);

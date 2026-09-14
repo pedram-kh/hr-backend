@@ -127,6 +127,12 @@ class ReferenceFactProposalService
             'completion_tokens' => $trace['completion_tokens'] ?? null,
             'fact_count' => $trace['fact_count'] ?? count($result['facts'] ?? []),
             'truncated' => $trace['truncated'] ?? null,
+            // Sprint 10c jornada eval finding: `truncated` above is OUTPUT-only
+            // (the model's own response hitting max_tokens) — this is the
+            // INPUT-side signal (hr-ai's `text_truncated`, added the same
+            // sprint after the jornada eval found it silently absent), so a
+            // huge reference_source is never truncated without a trace.
+            'text_truncated' => $trace['text_truncated'] ?? null,
             'salvaged' => $trace['salvaged'] ?? null,
         ]);
 
@@ -229,6 +235,13 @@ class ReferenceFactProposalService
             'completion_tokens' => $trace['completion_tokens'] ?? null,
             'fact_count' => $trace['fact_count'] ?? count($result['facts'] ?? []),
             'truncated' => $trace['truncated'] ?? null,
+            // Sprint 10c jornada eval finding (this IS the path it was found
+            // on): `truncated` above is OUTPUT-only; this is hr-ai's new
+            // INPUT-side signal (TOPIC_SEGMENT_TEXT_CAP) — a broad anchor
+            // (e.g. 'jornada') can produce a passage-scoped set exceeding the
+            // cap, previously silently cutting off real content (convenio 25,
+            // page 45) with zero trace. Now measured, never silent.
+            'text_truncated' => $trace['text_truncated'] ?? null,
             'salvaged' => $trace['salvaged'] ?? null,
         ]);
 

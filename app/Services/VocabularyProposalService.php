@@ -7,6 +7,7 @@ use App\Models\DocumentReviewTask;
 use App\Models\Sector;
 use App\Models\TagEvent;
 use App\Models\Territory;
+use App\Models\Topic;
 use App\Models\VocabularyProposal;
 use App\Support\TextNormalizer;
 use Illuminate\Support\Facades\DB;
@@ -24,6 +25,19 @@ use RuntimeException;
  * Authorization is enforced at the route/controller (propose: knowledge.edit;
  * approve: vocabulary.approve / super_admin). The AI can only ever PROPOSE; a
  * human always approves. The AI never creates vocabulary.
+ *
+ * Sprint 10c, D-topic-lane — `topic` joined this facet map (previously
+ * territory/sector/convenio only). ADR-0011's principle is "the closed set
+ * grows only by deliberate human action" — the GATE, not the mechanism. A
+ * second bespoke approval lane for topics would be more surface guarding the
+ * exact same guarantee this one already enforces, so topics reuse it rather
+ * than getting their own. This is also, finally, real use of the `topics`
+ * table's `status`/`proposed_by`/`approved_by` columns — present in the
+ * schema since Sprint ~3 (2026-06-20) but dead until this lane existed to
+ * write them (see ADR-0011's lineage note). Topics have no alias-fold
+ * mechanism (§`foldAlias()` below) — spelling/synonym variants are resolved
+ * in code via `TopicLexicon`, not the controlled vocabulary — so only the
+ * `new_value` resolution is meaningful for this facet.
  */
 class VocabularyProposalService
 {
@@ -34,6 +48,7 @@ class VocabularyProposalService
         'territory' => Territory::class,
         'sector' => Sector::class,
         'convenio' => Convenio::class,
+        'topic' => Topic::class,
     ];
 
     /**
@@ -159,6 +174,10 @@ class VocabularyProposalService
      */
     private function foldAlias(string $facet, int $targetId, string $value): array
     {
+        if ($facet === 'topic') {
+            throw new RuntimeException('Topics have no alias-fold mechanism — spelling/synonym variants are resolved in code via TopicLexicon, not the controlled vocabulary. Approve as new_value, or fix the TopicLexicon mapping directly if this is a known-topic spelling mismatch.');
+        }
+
         $model = self::FACET_MODEL[$facet];
         $row = $model::findOrFail($targetId);
         $aliases = array_values((array) ($row->aliases ?? []));
@@ -186,6 +205,24 @@ class VocabularyProposalService
     {
         if ($facet === 'convenio') {
             throw new RuntimeException('Convenios are created by the registry import, not the propose-new-vocabulary flow (ADR-0011). Fold a spelling into an existing convenio, or import the convenio.');
+        }
+
+        if ($facet === 'topic') {
+            // Sprint 10c, D-topic-lane: the deliberate human action IS this
+            // approve() call — write it straight into the same `status` /
+            // `proposed_by` / `approved_by` columns the AI-steering side of
+            // the schema always had, but never through the front door. A
+            // topic created here is `approved` immediately (same as every
+            // topic that exists today, all seeded outside any lane) —
+            // there is no separate "pending until reviewed" state for a
+            // topic the way there is for the VocabularyProposal itself; the
+            // proposal record IS that pending state.
+            return ['topic', Topic::create([
+                'name' => $value,
+                'status' => 'approved',
+                'proposed_by' => 'admin',
+                'approved_by' => $opts['approver_id'] ?? null,
+            ])];
         }
 
         if ($facet === 'sector') {

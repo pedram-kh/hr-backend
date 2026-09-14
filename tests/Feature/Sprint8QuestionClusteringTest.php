@@ -6,11 +6,13 @@ use App\Models\Convenio;
 use App\Models\Employee;
 use App\Models\Sector;
 use App\Models\Territory;
+use App\Models\Topic;
 use App\Services\ExtractionClient;
 use App\Support\QuestionClusteringService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 /**
@@ -44,16 +46,16 @@ class Sprint8QuestionClusteringTest extends TestCase
         $sector = Sector::create(['name' => 'Test Sector', 'aliases' => []]);
         $convenio = Convenio::create(['numero' => '01TESTC001', 'name' => 'Test Convenio', 'territory_id' => $territory->id, 'sector_id' => $sector->id]);
         $this->employeeA = Employee::create([
-            'uuid' => (string) \Illuminate\Support\Str::uuid(), 'email' => 'ca@example.com', 'full_name' => 'Cluster Asker A',
+            'uuid' => (string) Str::uuid(), 'email' => 'ca@example.com', 'full_name' => 'Cluster Asker A',
             'convenio_id' => $convenio->id, 'territory_id' => $territory->id, 'employment_type' => 'full_time', 'status' => 'active',
         ]);
         $this->employeeB = Employee::create([
-            'uuid' => (string) \Illuminate\Support\Str::uuid(), 'email' => 'cb@example.com', 'full_name' => 'Cluster Asker B',
+            'uuid' => (string) Str::uuid(), 'email' => 'cb@example.com', 'full_name' => 'Cluster Asker B',
             'convenio_id' => $convenio->id, 'territory_id' => $territory->id, 'employment_type' => 'full_time', 'status' => 'active',
         ]);
 
-        $sessionA = DB::table('chat_sessions')->insertGetId(['uuid' => (string) \Illuminate\Support\Str::uuid(), 'employee_id' => $this->employeeA->id, 'started_at' => $this->day, 'created_at' => $this->day, 'updated_at' => $this->day]);
-        $sessionB = DB::table('chat_sessions')->insertGetId(['uuid' => (string) \Illuminate\Support\Str::uuid(), 'employee_id' => $this->employeeB->id, 'started_at' => $this->day, 'created_at' => $this->day, 'updated_at' => $this->day]);
+        $sessionA = DB::table('chat_sessions')->insertGetId(['uuid' => (string) Str::uuid(), 'employee_id' => $this->employeeA->id, 'started_at' => $this->day, 'created_at' => $this->day, 'updated_at' => $this->day]);
+        $sessionB = DB::table('chat_sessions')->insertGetId(['uuid' => (string) Str::uuid(), 'employee_id' => $this->employeeB->id, 'started_at' => $this->day, 'created_at' => $this->day, 'updated_at' => $this->day]);
 
         // Two near-duplicate vacation questions (should cluster together) +
         // one unrelated question (its own cluster).
@@ -63,7 +65,7 @@ class Sprint8QuestionClusteringTest extends TestCase
 
         // q1 escalated (no answer given); q2/q3 not.
         DB::table('escalation_cards')->insert([
-            'uuid' => (string) \Illuminate\Support\Str::uuid(), 'employee_id' => $this->employeeA->id,
+            'uuid' => (string) Str::uuid(), 'employee_id' => $this->employeeA->id,
             'source_message_id' => $q1, 'reason' => 'low_confidence', 'status' => 'new',
             'created_at' => $this->day, 'updated_at' => $this->day,
         ]);
@@ -171,6 +173,62 @@ class Sprint8QuestionClusteringTest extends TestCase
         $this->assertSame(0.0, $ranking[1]['score']);
     }
 
+    // ---- Sprint 10c, D7 — per-topic demand score (independent of clustering) --
+
+    public function test_topic_demand_score_uses_the_same_formula_terms_aggregated_by_topic(): void
+    {
+        // Same fixture as the cluster tests above (q1 escalated, q2/q3 not) —
+        // proving the SAME numbers fall out whether aggregated by cluster
+        // membership (unansweredRanking) or by TopicLexicon topic_key
+        // (computeTopicDemandScores), since both share one formula.
+        $topic = Topic::firstOrCreate(['name' => 'vacaciones'], ['status' => 'approved']);
+
+        $written = app(QuestionClusteringService::class)->computeTopicDemandScores(
+            $this->day->copy()->subDay(), $this->day->copy()->addDay(), $this->day,
+        );
+
+        // Exactly one topic_key matched anything in this fixture (§4.1's own
+        // finding: the salary question anchors to none of the 14 keys).
+        $this->assertSame(1, $written);
+
+        $row = DB::table('topic_demand_scores')->where('run_date', $this->day->toDateString())->first();
+        $this->assertNotNull($row);
+        $this->assertSame('vacaciones', $row->topic_key);
+        $this->assertSame($topic->id, $row->topic_id);
+        $this->assertSame(2, $row->volume); // q1 + q2, both anchor to 'vacaciones'
+        $this->assertSame(0.5, $row->escalation_rate); // 1 of 2 (q1) escalated
+        $this->assertSame(4, $row->headcount_weight); // same as the cluster test — 2 askers x headcount 2 each
+        $this->assertEqualsWithDelta(4.0, $row->score, 0.001); // 0.5 x 2 x 4
+    }
+
+    public function test_topic_demand_score_writes_null_topic_id_for_a_topic_key_with_no_approved_row_yet(): void
+    {
+        // No 'vacaciones' Topic row created here — proves this NEVER mints
+        // one (ADR-0011): the demand signal is recorded with topic_id=null,
+        // not silently dropped and not silently auto-created.
+        $this->assertSame(0, Topic::where('name', 'vacaciones')->count());
+
+        app(QuestionClusteringService::class)->computeTopicDemandScores(
+            $this->day->copy()->subDay(), $this->day->copy()->addDay(), $this->day,
+        );
+
+        $row = DB::table('topic_demand_scores')->where('topic_key', 'vacaciones')->first();
+        $this->assertNotNull($row);
+        $this->assertNull($row->topic_id);
+    }
+
+    public function test_topic_demand_score_rerun_for_same_run_date_is_a_clean_replace(): void
+    {
+        $service = app(QuestionClusteringService::class);
+        $service->computeTopicDemandScores($this->day->copy()->subDay(), $this->day->copy()->addDay(), $this->day);
+        $countAfterFirst = DB::table('topic_demand_scores')->count();
+
+        $service->computeTopicDemandScores($this->day->copy()->subDay(), $this->day->copy()->addDay(), $this->day);
+        $countAfterSecond = DB::table('topic_demand_scores')->count();
+
+        $this->assertSame($countAfterFirst, $countAfterSecond);
+    }
+
     public function test_rerun_for_same_run_date_is_a_clean_replace(): void
     {
         $scripted = new ScriptedEmbedClient([
@@ -198,9 +256,7 @@ class Sprint8QuestionClusteringTest extends TestCase
  */
 class ScriptedEmbedClient extends ExtractionClient
 {
-    public function __construct(private readonly array $vectorsByText)
-    {
-    }
+    public function __construct(private readonly array $vectorsByText) {}
 
     public function embedBatch(array $texts): array
     {

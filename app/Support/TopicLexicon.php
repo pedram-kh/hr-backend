@@ -55,8 +55,22 @@ class TopicLexicon
     public const TOPIC_NAMES = [
         'vacaciones' => 'vacaciones',
         'jornada' => 'jornada',
-        'permisos' => 'permisos',
-        'excedencia' => 'excedencia',
+        // Sprint 10c (plan §D.10 live-DB check): the REAL approved topic row is
+        // named "permisos retribuidos" (staging confirms a SEPARATE "permisos no
+        // retribuidos" topic also exists, id 10 — deliberately excluded here;
+        // conflating the two would blur a real, human-drawn distinction). This
+        // key was 'permisos' before, which never matched any approved topic row
+        // — a pre-existing, fail-safe-masked bug (ADR-0016: ReferenceFactRouter
+        // just fell through silently, never erroring), fixed here because this
+        // sprint is the first thing to actually exercise this specific mapping.
+        'permisos' => 'permisos retribuidos',
+        // Sprint 10c (review.md finding 3, live-DB check): same class of bug as
+        // permisos above — the real approved topic row is plural, "excedencias"
+        // (staging id 8). This key was 'excedencia' (singular) before, which
+        // never matched any approved topic row — the same
+        // fail-safe-masked/dead-code profile (ADR-0016), left flagged-only at
+        // the permisos checkpoint and fixed now under the same discipline.
+        'excedencia' => 'excedencias',
         'periodo_prueba' => 'periodo de prueba',
         'trabajo_distancia' => 'trabajo a distancia',
         'horas_extra' => 'horas extraordinarias',
