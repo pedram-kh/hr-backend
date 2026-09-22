@@ -123,4 +123,19 @@ return [
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Staging fixed-OTP code (Sprint 11a, spec §2.6)
+    |--------------------------------------------------------------------------
+    |
+    | A fixed 6-digit login code accepted ONLY for accounts on the domains in
+    | AuthController::STAGING_FIXED_OTP_ALLOWED_DOMAINS. Must be empty/unset
+    | outside staging — App\Support\StagingFixedOtpGuard::assertSafeToBoot()
+    | (called from AppServiceProvider::boot()) refuses to boot the app if
+    | this is set while APP_ENV=production.
+    |
+    */
+
+    'staging_fixed_otp_code' => env('STAGING_FIXED_OTP_CODE'),
+
 ];

@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Support\StagingFixedOtpGuard;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
@@ -23,6 +24,14 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->configureRateLimiters();
+
+        // Sprint 11a (spec §2.6): refuse to boot in production if the
+        // staging fixed-OTP convenience is configured. See
+        // App\Support\StagingFixedOtpGuard.
+        StagingFixedOtpGuard::assertSafeToBoot(
+            app()->environment(),
+            config('app.staging_fixed_otp_code'),
+        );
     }
 
     private function configureRateLimiters(): void
