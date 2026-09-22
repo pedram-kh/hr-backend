@@ -12,6 +12,7 @@ use App\Http\Controllers\Admin\EscalationController;
 use App\Http\Controllers\Admin\GuardrailsController;
 use App\Http\Controllers\Admin\HierarchyController;
 use App\Http\Controllers\Admin\HistoryController;
+use App\Http\Controllers\Admin\KnowledgeGraphController;
 use App\Http\Controllers\Admin\QualitySampleController;
 use App\Http\Controllers\Admin\ReferenceFactController;
 use App\Http\Controllers\Admin\ReviewQueueController;
@@ -125,6 +126,11 @@ Route::middleware(['auth:sanctum', 'admin', 'active'])->prefix('admin')->group(f
     Route::get('/hierarchy', [HierarchyController::class, 'roots']);
     Route::get('/hierarchy/children', [HierarchyController::class, 'children']);
     Route::get('/coverage-gaps', [CoverageGapController::class, 'index']);
+    // Sprint 11c (plan.md §A.5) — the knowledge graph, same read gate as the
+    // rest of Map: an auditor can already enumerate every node/edge below via
+    // /hierarchy, so gating this harder would hide a picture of data they can
+    // already see. No ability: middleware, deliberately.
+    Route::get('/knowledge-graph', [KnowledgeGraphController::class, 'index']);
     Route::get('/documents/{uuid}/source', [DocumentController::class, 'source']);
     Route::post('/documents/{uuid}/sandbox', [SandboxController::class, 'run']);
 
