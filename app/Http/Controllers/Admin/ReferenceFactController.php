@@ -66,11 +66,24 @@ class ReferenceFactController extends Controller
             $query->where('reference_facts.source', $request->string('source'));
         }
 
-        // The AI-proposed Reference-facts review queue (Sprint 7b-2): the
-        // uncertain-first sort is THE safety affordance — a flagged fact (scope
-        // unclear / compound group / possible version) floats to the top, then
-        // the least-confident, so the reviewer spends attention where the risk
-        // is. Default scope: the inert ai_agent lane awaiting verification.
+        // The Reference-facts review queue (Sprint 7b-2, widened Correction
+        // queue-source-01): the uncertain-first sort is THE safety affordance —
+        // a flagged fact (scope unclear / compound group / possible version)
+        // floats to the top, then the least-confident, so the reviewer spends
+        // attention where the risk is. Scope: EVERY fact still `needs_review`,
+        // regardless of `source`.
+        //
+        // Correction queue-source-01 (found live: fact #169, an admin_manual
+        // convenio-wide create, had no way to be reached from this tab at all
+        // — `store()` always lands a manual fact `needs_review`, same as the
+        // agent, but the queue's WHERE additionally required `source =
+        // 'ai_agent'`, so a manual fact sat inert with no UI path to verify
+        // it). A manual fact has no `confidence`/`uncertainty` (only the
+        // segmentation agent ever sets those columns), so it falls to the
+        // bottom of its tier under the SAME ordering rules below, unranked
+        // rather than exempted — it still needs the same one human action
+        // (verify) as an AI proposal, just never floats to the top on a safety
+        // signal it structurally cannot carry.
         //
         // Sprint 10c, D7: a THIRD tier — real employee demand for this fact's
         // topic (`topic_demand_scores`, written nightly by `questions:cluster`)
@@ -81,7 +94,7 @@ class ReferenceFactController extends Controller
         // NULL, ORDER BY unaffected) until the first `questions:cluster` run
         // exists, so this is safely additive on a fresh install too.
         if ($request->boolean('queue')) {
-            $query->where('source', 'ai_agent')->where('status', 'needs_review');
+            $query->where('status', 'needs_review');
 
             $latestRunDate = DB::table('topic_demand_scores')->max('run_date');
             $query->leftJoin('topic_demand_scores as tds', function ($join) use ($latestRunDate) {
@@ -607,6 +620,11 @@ class ReferenceFactController extends Controller
             'uncertainty' => $f->uncertainty,
             'source_excerpt' => $f->source_excerpt,
             'is_ai_proposed' => $f->source === 'ai_agent' && $f->status === 'needs_review',
+            // Correction queue-source-01 — the row-level source badge's OTHER
+            // state. Symmetric with `is_ai_proposed` on purpose: same
+            // `needs_review` gate, so the two are mutually exclusive and
+            // together cover every row this endpoint can now return.
+            'is_manual_pending' => $f->source === 'admin_manual' && $f->status === 'needs_review',
             'is_possible_duplicate' => $f->duplicate_of_id !== null,
             // Sprint 7d — the flag is now actionable, so the row has to say whether
             // it is still waiting on a human. An UNRESOLVED duplicate is the one that
@@ -645,6 +663,10 @@ class ReferenceFactController extends Controller
             // Fuchsia is unverified-AI ONLY (ADR-0020): an ai_agent fact that is
             // still needs_review. A manual or verified fact never gets it.
             'is_ai_proposed' => $fact->source === 'ai_agent' && $fact->status === 'needs_review',
+            // Correction queue-source-01 — same symmetry as `listRow()` above:
+            // the neutral "Manual" badge's condition, mutually exclusive with
+            // `is_ai_proposed`.
+            'is_manual_pending' => $fact->source === 'admin_manual' && $fact->status === 'needs_review',
             // Sprint 7b-2 — the segmentation metadata the reviewer judges against.
             'confidence' => $fact->confidence,
             'uncertainty' => $fact->uncertainty,
