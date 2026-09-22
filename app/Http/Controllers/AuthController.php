@@ -20,6 +20,21 @@ class AuthController extends Controller
     private const MAX_VERIFY_ATTEMPTS = 5;
 
     /**
+     * Sprint 11a (spec §2.6): domains eligible for the staging fixed-OTP
+     * convenience — matches the seeded test accounts
+     * (docker-compose.staging.yml SEED_*_EMAIL). Real accounts on any other
+     * domain are never affected: the branch below only matches when BOTH
+     * the flag is set AND the email's domain is in this list, so this const
+     * being present in the codebase changes nothing unless
+     * STAGING_FIXED_OTP_CODE is also non-empty.
+     *
+     * @var list<string>
+     */
+    private const STAGING_FIXED_OTP_ALLOWED_DOMAINS = [
+        'hr-staging.internal',
+    ];
+
+    /**
      * Request an email OTP. Always returns a generic 200 so the endpoint never
      * reveals whether an email is registered.
      */
@@ -70,6 +85,18 @@ class AuthController extends Controller
 
         $email = strtolower(trim($data['email']));
 
+        // Sprint 11a (spec §2.6): staging fixed-OTP convenience — additive,
+        // BEFORE the real LoginCode lookup, and skips it entirely (no row
+        // read, no row written, no attempts counter touched — T6). Only
+        // matches when the flag is configured AND the email's domain is
+        // allowlisted; any other request falls straight through to the
+        // unmodified real OTP path below, exactly as it did before this
+        // branch existed.
+        $stagingFixedOtp = $this->tryStagingFixedOtp($email, $data['code']);
+        if ($stagingFixedOtp !== null) {
+            return $stagingFixedOtp;
+        }
+
         $loginCode = LoginCode::query()
             ->where('email', $email)
             ->whereNull('consumed_at')
@@ -114,6 +141,47 @@ class AuthController extends Controller
             'token' => $token,
             'token_type' => 'Bearer',
             'identity' => IdentityPresenter::present($account, $loginCode->account_type),
+        ]);
+    }
+
+    /**
+     * Sprint 11a (spec §2.6). Returns a ready response if the fixed-OTP
+     * convenience matched (success or a deliberate non-match 422 would be
+     * wrong here — non-matches must fall through, not respond), else null
+     * to let the caller continue to the real LoginCode path.
+     */
+    private function tryStagingFixedOtp(string $email, string $submittedCode): ?JsonResponse
+    {
+        $fixedCode = config('app.staging_fixed_otp_code');
+        if (blank($fixedCode)) {
+            return null;
+        }
+
+        $domain = substr($email, strrpos($email, '@') + 1);
+        if (! in_array($domain, self::STAGING_FIXED_OTP_ALLOWED_DOMAINS, true)) {
+            return null;
+        }
+
+        if (! hash_equals((string) $fixedCode, $submittedCode)) {
+            return null;
+        }
+
+        // Domain is allowlisted AND flag is set AND code matches: this is
+        // the one branch that resolves without ever touching login_codes.
+        // Account resolution/active-status rules are unchanged — an
+        // inactive or unknown account still fails here exactly as the real
+        // path would.
+        [$account, $accountType] = $this->resolveAccount($email);
+        if ($account === null) {
+            return response()->json(['message' => 'Invalid or expired code.'], 422);
+        }
+
+        $token = $account->createToken('otp-login')->plainTextToken;
+
+        return response()->json([
+            'token' => $token,
+            'token_type' => 'Bearer',
+            'identity' => IdentityPresenter::present($account, $accountType),
         ]);
     }
 
