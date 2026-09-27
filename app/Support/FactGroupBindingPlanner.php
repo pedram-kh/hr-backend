@@ -156,7 +156,7 @@ class FactGroupBindingPlanner
         $raw = trim((string) $label);
         if ($raw === '') {
             return $this->outcome(self::STATUS_CONVENIO_WIDE, [], 'convenio_wide',
-                'Sin etiqueta de grupo: el dato es de ámbito convenio (Tier 3) y no se vincula a ningún nodo.');
+                'Sin etiqueta de grupo: el dato es de alcance convenio (Tier 3) y no se vincula a ningún nodo.');
         }
 
         $flat = TextNormalizer::deaccent($raw);

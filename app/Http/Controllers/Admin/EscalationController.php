@@ -28,7 +28,7 @@ class EscalationController extends Controller
     /** The board reason → human label (Spanish admin voice). */
     private const REASON_LABELS = [
         'low_confidence' => 'Baja confianza',
-        'off_domain' => 'Fuera de ámbito',
+        'off_domain' => 'Fuera de alcance',
         // Sprint 7g Item 1 correction: the live `reason` column value is
         // `sensitive_topic` (see the CHECK-constraint enum chain in
         // database/migrations), never bare `sensitive` — that key never
@@ -289,8 +289,8 @@ class EscalationController extends Controller
         if ($convert && ! ($data['confirm_scope_change'] ?? false)) {
             return response()->json([
                 'code' => 'scope_confirmation_required',
-                'message' => 'Publicar esta resolución como conocimiento hereda el ámbito del empleado '
-                    .'(convenio, territorio, sector) y cambia a quién se responde. Confirma el cambio de ámbito para continuar.',
+                'message' => 'Publicar esta resolución como conocimiento hereda el alcance del empleado '
+                    .'(convenio, territorio, sector) y cambia a quién se responde. Confirma el cambio de alcance para continuar.',
             ], 409);
         }
 
@@ -335,10 +335,10 @@ class EscalationController extends Controller
             return response()->json([
                 'code' => 'publish_blocked',
                 'message' => $semantic
-                    ? 'No se puede publicar: el texto del convenio oficial vigente para este ámbito ya parece '
+                    ? 'No se puede publicar: el texto del convenio oficial vigente para este alcance ya parece '
                         .'regular este punto concreto. Una resolución interna no puede prevalecer sobre el convenio — '
                         .'revisa los pasajes coincidentes; se ha devuelto la tarjeta a una persona.'
-                    : 'No se puede publicar: existe un convenio oficial vigente para este ámbito y tema. '
+                    : 'No se puede publicar: existe un convenio oficial vigente para este alcance y tema. '
                         .'Una resolución interna no puede prevalecer sobre el convenio — se ha devuelto la tarjeta a una persona.',
                 'reason' => $result['reason'] ?? null,
                 'conflicts' => $result['conflicts'],
@@ -361,9 +361,9 @@ class EscalationController extends Controller
                     // mistaken for a real near-passage — an acknowledgement the human
                     // learns to click through is a fence that has quietly opened.
                     ? 'No se ha podido comparar esta resolución con el texto del convenio vigente '
-                        .'(la comparación semántica no está disponible o el convenio del ámbito no tiene texto legible). '
+                        .'(la comparación semántica no está disponible o el convenio del alcance no tiene texto legible). '
                         .'Eso no confirma que no haya solapamiento: revísalo y confirma explícitamente para publicar.'
-                    : 'Esta resolución se parece a pasajes del convenio oficial vigente en este ámbito, '
+                    : 'Esta resolución se parece a pasajes del convenio oficial vigente en este alcance, '
                         .'pero no lo bastante como para bloquear la publicación. Revisa los pasajes y confirma '
                         .'explícitamente que no hay solapamiento para publicar.',
                 'reason' => $result['reason'] ?? null,
