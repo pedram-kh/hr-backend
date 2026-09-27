@@ -6,6 +6,7 @@ use App\Models\Admin;
 use App\Models\LoginCode;
 use App\Support\StagingFixedOtpGuard;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\RateLimiter;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -44,10 +45,10 @@ class Sprint11aStagingOtpInvariantTest extends TestCase
     public function test_non_allowlisted_domain_with_fixed_code_value_falls_through_and_fails(): void
     {
         config(['app.staging_fixed_otp_code' => '654321']);
-        $this->makeAdmin('real-admin@example.com');
+        $this->makeAdmin('real-admin@example.org');
 
         $response = $this->postJson('/auth/verify-code', [
-            'email' => 'real-admin@example.com',
+            'email' => 'real-admin@example.org',
             'code' => '654321',
         ]);
 
@@ -98,11 +99,11 @@ class Sprint11aStagingOtpInvariantTest extends TestCase
     public function test_real_account_off_allowlist_still_uses_the_real_otp_path(): void
     {
         config(['app.staging_fixed_otp_code' => '654321']);
-        $this->makeAdmin('real-admin@example.com');
+        $this->makeAdmin('real-admin@example.org');
 
-        $this->postJson('/auth/request-code', ['email' => 'real-admin@example.com'])->assertOk();
+        $this->postJson('/auth/request-code', ['email' => 'real-admin@example.org'])->assertOk();
 
-        $loginCode = LoginCode::where('email', 'real-admin@example.com')->whereNull('consumed_at')->first();
+        $loginCode = LoginCode::where('email', 'real-admin@example.org')->whereNull('consumed_at')->first();
         $this->assertNotNull($loginCode, 'requestCode must still create a real LoginCode row for a real account.');
 
         // We cannot read the plaintext code (only its hash is stored), but we
@@ -112,7 +113,7 @@ class Sprint11aStagingOtpInvariantTest extends TestCase
         $loginCode->update(['code_hash' => \Illuminate\Support\Facades\Hash::make('111222')]);
 
         $response = $this->postJson('/auth/verify-code', [
-            'email' => 'real-admin@example.com',
+            'email' => 'real-admin@example.org',
             'code' => '111222',
         ]);
 
@@ -134,5 +135,68 @@ class Sprint11aStagingOtpInvariantTest extends TestCase
         ])->assertOk();
 
         $this->assertSame($before, LoginCode::count());
+    }
+
+    /** Fixture domain example.com accepts the same fixed code. */
+    public function test_example_com_fixture_accepts_the_fixed_code(): void
+    {
+        config(['app.staging_fixed_otp_code' => '654321']);
+        $this->makeAdmin('test-navarra@example.com');
+
+        $this->postJson('/auth/verify-code', [
+            'email' => 'test-navarra@example.com',
+            'code' => '654321',
+        ])->assertOk();
+    }
+
+    /** Allowlisted domain, flag set: request-code is not capped at 1/min. */
+    public function test_allowlisted_domain_can_request_codes_repeatedly_when_the_flag_is_set(): void
+    {
+        config(['app.staging_fixed_otp_code' => '654321']);
+        $email = 'capture@hr-staging.internal';
+        $this->makeAdmin($email);
+        $this->clearOtpRequestLimit($email);
+
+        $this->postJson('/auth/request-code', ['email' => $email])->assertOk();
+        $this->postJson('/auth/request-code', ['email' => $email])->assertOk();
+    }
+
+    /** Same flag, address outside the allowlist: the 1/min cap still applies. */
+    public function test_non_allowlisted_address_still_hits_the_request_code_limit(): void
+    {
+        config(['app.staging_fixed_otp_code' => '654321']);
+        $email = 'real-admin@example.org';
+        $this->makeAdmin($email);
+        $this->clearOtpRequestLimit($email);
+
+        $this->postJson('/auth/request-code', ['email' => $email])->assertOk();
+        $this->postJson('/auth/request-code', ['email' => $email])->assertStatus(429);
+    }
+
+    /** Flag unset: the allowlist does not loosen the cap. */
+    public function test_allowlisted_domain_is_still_throttled_when_the_flag_is_unset(): void
+    {
+        config(['app.staging_fixed_otp_code' => null]);
+        $email = 'capture@hr-staging.internal';
+        $this->makeAdmin($email);
+        $this->clearOtpRequestLimit($email);
+
+        $this->postJson('/auth/request-code', ['email' => $email])->assertOk();
+        $this->postJson('/auth/request-code', ['email' => $email])->assertStatus(429);
+    }
+
+    /** Production + flag still refuses to boot, through the same guard. */
+    public function test_production_boot_with_the_flag_still_refuses(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('STAGING_FIXED_OTP_CODE must not be set when APP_ENV=production.');
+
+        StagingFixedOtpGuard::assertSafeToBoot('production', '654321');
+    }
+
+    private function clearOtpRequestLimit(string $email): void
+    {
+        RateLimiter::clear('otp-request:min:'.$email);
+        RateLimiter::clear('otp-request:hour:'.$email);
     }
 }

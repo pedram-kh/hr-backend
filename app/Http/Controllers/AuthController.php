@@ -21,17 +21,24 @@ class AuthController extends Controller
 
     /**
      * Sprint 11a (spec §2.6): domains eligible for the staging fixed-OTP
-     * convenience — matches the seeded test accounts
-     * (docker-compose.staging.yml SEED_*_EMAIL). Real accounts on any other
-     * domain are never affected: the branch below only matches when BOTH
-     * the flag is set AND the email's domain is in this list, so this const
-     * being present in the codebase changes nothing unless
-     * STAGING_FIXED_OTP_CODE is also non-empty.
+     * convenience. hr-staging.internal is the seeded admin/employee domain
+     * (docker-compose.staging.yml SEED_*_EMAIL). example.com is the
+     * ChatTestUserSeeder fixture domain. Real accounts on any other domain
+     * are never affected: the branch below only matches when BOTH the flag
+     * is set AND the email's domain is in this list, so this const being
+     * present in the codebase changes nothing unless STAGING_FIXED_OTP_CODE
+     * is also non-empty.
+     *
+     * The request-code rate limiter (AppServiceProvider) consults this same
+     * list, and only while that same flag is set, to skip the 1/min + 5/hour
+     * cap. Any address outside this list stays limited, and production
+     * refuses to boot with the flag set.
      *
      * @var list<string>
      */
-    private const STAGING_FIXED_OTP_ALLOWED_DOMAINS = [
+    public const STAGING_FIXED_OTP_ALLOWED_DOMAINS = [
         'hr-staging.internal',
+        'example.com',
     ];
 
     /**

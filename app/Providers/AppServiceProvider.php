@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Http\Controllers\AuthController;
 use App\Support\StagingFixedOtpGuard;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
@@ -37,8 +38,18 @@ class AppServiceProvider extends ServiceProvider
     private function configureRateLimiters(): void
     {
         // request-code: per-email — a ~60s min interval plus a 5/hour cap.
+        // While STAGING_FIXED_OTP_CODE is set, addresses on
+        // AuthController::STAGING_FIXED_OTP_ALLOWED_DOMAINS skip this cap
+        // (capture reruns). Any other address stays limited. The flag cannot
+        // be set in production — StagingFixedOtpGuard::assertSafeToBoot.
         RateLimiter::for('otp-request', function (Request $request) {
             $email = strtolower((string) $request->input('email'));
+            $at = strrpos($email, '@');
+            $domain = $at === false ? '' : substr($email, $at + 1);
+            if (filled(config('app.staging_fixed_otp_code'))
+                && in_array($domain, AuthController::STAGING_FIXED_OTP_ALLOWED_DOMAINS, true)) {
+                return Limit::none();
+            }
 
             return [
                 Limit::perMinute(1)->by('otp-request:min:'.$email),
