@@ -198,7 +198,7 @@ class HierarchyController extends Controller
         // The scope-rides-on-convenio limitation: a non-national doc with no convenio.
         $unscoped = Document::whereNull('convenio_id')->where('authority_level', '!=', 'national_law')->count();
         if ($unscoped > 0) {
-            $nodes[] = ['key' => 't:unscoped', 'label' => 'Sin ámbito (sin convenio)', 'meta' => null, 'count' => $unscoped, 'child_kind' => 'group', 'gap_kind' => 'unscoped'];
+            $nodes[] = ['key' => 't:unscoped', 'label' => 'Sin alcance (sin convenio)', 'meta' => null, 'count' => $unscoped, 'child_kind' => 'group', 'gap_kind' => 'unscoped'];
         }
 
         return $nodes;

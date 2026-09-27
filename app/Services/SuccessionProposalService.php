@@ -244,7 +244,7 @@ class SuccessionProposalService
 
             return [self::CONFLICT, [
                 'field' => 'relationship',
-                'reason' => 'Mismo ámbito y contenido muy similar, pero las fechas de vigencia no establecen '
+                'reason' => 'Mismo alcance y contenido muy similar, pero las fechas de vigencia no establecen '
                     .'que sea una versión posterior. Puede ser un conflicto o una versión mal fechada — revísalo.',
             ]];
         }

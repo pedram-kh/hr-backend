@@ -399,7 +399,7 @@ class ConvenioGroupController extends Controller
         if ($bindings > 0) {
             throw ValidationException::withMessages([
                 'bindings' => "Este nodo tiene {$bindings} dato(s) de referencia vinculados. "
-                    .'Desvincúlalos primero: rechazarlo dejaría esos datos sin ámbito.',
+                    .'Desvincúlalos primero: rechazarlo dejaría esos datos sin alcance.',
             ]);
         }
 
@@ -549,7 +549,7 @@ class ConvenioGroupController extends Controller
                     // A convenio-wide fact already answers, at Tier 3. Giving it
                     // a group would NARROW a rule that applies to everyone.
                     throw ValidationException::withMessages([
-                        'fact_ids' => "El dato {$factId} es de ámbito convenio: vincularlo a un grupo "
+                        'fact_ids' => "El dato {$factId} es de alcance convenio: vincularlo a un grupo "
                             .'restringiría una norma que se aplica a toda la plantilla.',
                     ]);
                 }

@@ -382,15 +382,15 @@ final class EscalationExplainer
                 'router_off_domain' => fn (array $t) => [
                     'asked' => 'La consulta se clasificó como ajena a RR.HH./convenio.',
                     'found' => 'No se buscó en la documentación disponible porque la consulta no trata sobre convenio, salario o RR.HH.',
-                    'stopped_reason' => 'La consulta se clasificó automáticamente como fuera de este ámbito.',
+                    'stopped_reason' => 'La consulta se clasificó automáticamente como fuera de este alcance.',
                     'fix_action' => 'Si la pregunta SÍ era sobre convenio o RR.HH., revisar por qué se clasificó como ajena y avisar al equipo técnico si se repite.',
                     'fix_surface' => 'Revisión · Vocabulario/AI tagging',
                     'fix_link' => $vocabLink(),
                 ],
                 'admin_off_domain' => fn (array $t) => [
-                    'asked' => 'El empleado hizo una pregunta que coincide con un tema que un administrador ha marcado como fuera de ámbito.',
-                    'found' => 'No se buscó ningún dato — la pregunta contiene un texto marcado por un administrador como fuera de ámbito.',
-                    'stopped_reason' => 'Los administradores pueden marcar temas adicionales como fuera de ámbito; esta pregunta coincidió con uno de ellos.',
+                    'asked' => 'El empleado hizo una pregunta que coincide con un tema que un administrador ha marcado como fuera de alcance.',
+                    'found' => 'No se buscó ningún dato — la pregunta contiene un texto marcado por un administrador como fuera de alcance.',
+                    'stopped_reason' => 'Los administradores pueden marcar temas adicionales como fuera de alcance; esta pregunta coincidió con uno de ellos.',
                     'fix_action' => 'Revisar en Guardarraíles esta regla bloqueada; ajustarla si está bloqueando preguntas legítimas.',
                     'fix_surface' => 'Guardarraíles (admin)',
                     'fix_link' => $guardrailsLink(),
@@ -515,7 +515,7 @@ final class EscalationExplainer
                 'no_convenio' => fn (array $t) => [
                     'asked' => 'El empleado preguntó por su salario.',
                     'found' => 'El perfil del empleado no tiene convenio asignado.',
-                    'stopped_reason' => 'Sin convenio no hay ámbito estructurado de tabla salarial.',
+                    'stopped_reason' => 'Sin convenio no hay alcance estructurado de tabla salarial.',
                     'fix_action' => 'Asignar el convenio correcto al empleado en el Directorio.',
                     'fix_surface' => 'Directorio',
                     'fix_link' => $empLink($t['profile']['employee_uuid'] ?? null),
@@ -570,7 +570,7 @@ final class EscalationExplainer
                 'no_convenio' => fn (array $t) => [
                     'asked' => 'El empleado preguntó por un dato de referencia estructurado.',
                     'found' => 'El perfil del empleado no tiene convenio asignado.',
-                    'stopped_reason' => 'Sin convenio no hay ámbito para buscar el dato.',
+                    'stopped_reason' => 'Sin convenio no hay alcance para buscar el dato.',
                     'fix_action' => 'Asignar el convenio correcto al empleado en el Directorio.',
                     'fix_surface' => 'Directorio',
                     'fix_link' => $empLink($t['profile']['employee_uuid'] ?? null),
@@ -625,14 +625,14 @@ final class EscalationExplainer
                 ],
                 'group_split_since_fact_bound' => fn (array $t) => [
                     'asked' => 'El empleado preguntó por un tema cuyo dato de referencia está vinculado a un grupo que el convenio ha dividido después en sub-áreas.',
-                    'found' => 'El dato sigue vinculado al grupo entero, pero el convenio ahora tiene sub-áreas con valores distintos — el ámbito del propio dato es ambiguo.',
-                    'stopped_reason' => 'El ámbito ambiguo es el del DATO, no el del empleado — se escala hasta que el dato se re-vincule a la sub-área correcta.',
+                    'found' => 'El dato sigue vinculado al grupo entero, pero el convenio ahora tiene sub-áreas con valores distintos — el alcance del propio dato es ambiguo.',
+                    'stopped_reason' => 'El alcance ambiguo es el del DATO, no el del empleado — se escala hasta que el dato se re-vincule a la sub-área correcta.',
                     'fix_action' => 'Re-vincular el dato de referencia a la(s) sub-área(s) correctas en la pestaña Reference facts / Groups.',
                     'fix_surface' => 'Reference facts (revisión)',
                     'fix_link' => $factLink($t['reference_fact']['fact_uuid'] ?? null),
                 ],
                 'same_validity_conflict' => fn (array $t) => [
-                    'asked' => 'El empleado preguntó por un tema con más de un dato de referencia verificado en el mismo nivel de ámbito.',
+                    'asked' => 'El empleado preguntó por un tema con más de un dato de referencia verificado en el mismo nivel de alcance.',
                     'found' => 'Dos datos verificados comparten la validez más reciente pero tienen valores distintos.',
                     'stopped_reason' => 'Un conflicto genuino nunca se resuelve automáticamente ni al azar — se deriva a una persona para decidir cuál es correcto.',
                     'fix_action' => 'Revisar ambos datos verificados y corregir/retirar el que esté desactualizado o mal capturado.',
@@ -643,9 +643,9 @@ final class EscalationExplainer
             'publish' => [
                 'topic_scope_conflict' => fn (array $t) => [
                     'asked' => 'Un/a agente de RR.HH. intentó publicar una resolución como conocimiento oficial.',
-                    'found' => 'Ya existe un convenio vigente para este ámbito, pero el tema todavía no está etiquetado.',
+                    'found' => 'Ya existe un convenio vigente para este alcance, pero el tema todavía no está etiquetado.',
                     'stopped_reason' => 'Sin esa etiqueta, el sistema bloquea siempre la publicación, antes de cualquier otra comprobación.',
-                    'fix_action' => 'Etiquetar el tema del convenio activo de este ámbito.',
+                    'fix_action' => 'Etiquetar el tema del convenio activo de este alcance.',
                     'fix_surface' => 'AI tagging (revisión)',
                     'fix_link' => $taggingLink(),
                 ],
@@ -675,9 +675,9 @@ final class EscalationExplainer
                 ],
                 'semantic_no_text_to_compare' => fn (array $t) => [
                     'asked' => 'Un/a agente de RR.HH. intentó publicar una resolución como conocimiento.',
-                    'found' => 'El convenio de este ámbito no tiene texto legible con el que comparar.',
+                    'found' => 'El convenio de este alcance no tiene texto legible con el que comparar.',
                     'stopped_reason' => 'Sin texto de comparación, no se puede confirmar la ausencia de solapamiento — se pide confirmación explícita.',
-                    'fix_action' => 'Cargar o verificar el texto legible del convenio de este ámbito.',
+                    'fix_action' => 'Cargar o verificar el texto legible del convenio de este alcance.',
                     'fix_surface' => 'Documentos',
                     'fix_link' => $documentsLink(),
                 ],
@@ -697,8 +697,8 @@ final class EscalationExplainer
             'quality_sample_wrong' => [
                 'wrong_scope' => fn (array $t) => [
                     'asked' => 'Una respuesta ya enviada al empleado, revisada en el muestreo mensual de calidad.',
-                    'found' => 'La respuesta usó un ámbito equivocado (convenio, grupo o sub-área distinto al que corresponde a este empleado).',
-                    'stopped_reason' => 'El ámbito de la respuesta no coincide con el perfil real del empleado — detectado en revisión humana, no automáticamente en el momento de responder.',
+                    'found' => 'La respuesta usó un alcance equivocado (convenio, grupo o sub-área distinto al que corresponde a este empleado).',
+                    'stopped_reason' => 'El alcance de la respuesta no coincide con el perfil real del empleado — detectado en revisión humana, no automáticamente en el momento de responder.',
                     'fix_action' => 'Revisar y corregir el convenio/grupo/sub-área asignado al empleado en el Directorio.',
                     'fix_surface' => 'Directorio',
                     'fix_link' => $empLink($t['quality_sample']['employee_uuid'] ?? null),

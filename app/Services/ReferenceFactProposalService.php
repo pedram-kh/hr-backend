@@ -399,7 +399,7 @@ class ReferenceFactProposalService
                 if ($dupe !== null) {
                     $fact->duplicate_of_id = $dupe->id;
                     if ($fact->uncertainty === null) {
-                        $fact->uncertainty = ['field' => 'version', 'reason' => "posible versión de #{$dupe->id} (mismo ámbito, valor distinto)"];
+                        $fact->uncertainty = ['field' => 'version', 'reason' => "posible versión de #{$dupe->id} (mismo alcance, valor distinto)"];
                     }
                     $fact->save();
                     $duplicatesFlagged++;
