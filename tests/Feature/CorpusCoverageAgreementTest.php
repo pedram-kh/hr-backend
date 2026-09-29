@@ -2,8 +2,10 @@
 
 namespace Tests\Feature;
 
+use App\Console\Commands\CorpusCoverage;
 use App\Models\Convenio;
 use App\Models\Document;
+use App\Models\DocumentType;
 use App\Models\Employee;
 use App\Models\ReferenceFact;
 use App\Models\SalaryTable;
@@ -14,6 +16,7 @@ use Database\Seeders\DocumentTypeSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 /**
@@ -48,19 +51,19 @@ class CorpusCoverageAgreementTest extends TestCase
         // Convenio A: fully covered (prose + salary + facts + ruling).
         $convenioA = Convenio::create(['numero' => '01TESTA001', 'name' => 'Covered Convenio', 'territory_id' => $territory->id, 'sector_id' => $sector->id]);
         $doc = Document::create([
-            'uuid' => (string) \Illuminate\Support\Str::uuid(), 'title' => 'Convenio A text', 'storage_path' => 'x/a.pdf',
-            'convenio_id' => $convenioA->id, 'document_type_id' => \App\Models\DocumentType::where('code', 'convenio_text')->value('id'),
+            'uuid' => (string) Str::uuid(), 'title' => 'Convenio A text', 'storage_path' => 'x/a.pdf',
+            'convenio_id' => $convenioA->id, 'document_type_id' => DocumentType::where('code', 'convenio_text')->value('id'),
             'retrieval_status' => 'active', 'authority_level' => 'official_convenio', 'language' => 'es', 'tagging_status' => 'verified',
         ]);
         DB::table('document_chunks')->insert(['document_id' => $doc->id, 'chunk_index' => 0, 'content' => 'text', 'token_count' => 10, 'created_at' => now(), 'updated_at' => now()]);
         SalaryTable::create(['convenio_id' => $convenioA->id, 'year' => Carbon::today()->year, 'source' => 'xlsx_native']);
         ReferenceFact::create([
-            'uuid' => (string) \Illuminate\Support\Str::uuid(), 'convenio_id' => $convenioA->id, 'value' => '30 días',
+            'uuid' => (string) Str::uuid(), 'convenio_id' => $convenioA->id, 'value' => '30 días',
             'authority_level' => 'structured_reference', 'source' => 'admin_manual', 'status' => 'verified',
         ]);
         $ruling = Document::create([
-            'uuid' => (string) \Illuminate\Support\Str::uuid(), 'title' => 'Ruling A', 'storage_path' => 'x/r.pdf',
-            'convenio_id' => $convenioA->id, 'document_type_id' => \App\Models\DocumentType::where('code', 'internal_hr_ruling')->value('id'),
+            'uuid' => (string) Str::uuid(), 'title' => 'Ruling A', 'storage_path' => 'x/r.pdf',
+            'convenio_id' => $convenioA->id, 'document_type_id' => DocumentType::where('code', 'internal_hr_ruling')->value('id'),
             'retrieval_status' => 'active', 'authority_level' => 'internal_hr_ruling', 'language' => 'es', 'tagging_status' => 'verified',
         ]);
 
@@ -68,7 +71,7 @@ class CorpusCoverageAgreementTest extends TestCase
         Convenio::create(['numero' => '01TESTB002', 'name' => 'Gap Convenio', 'territory_id' => $territory->id, 'sector_id' => $sector->id]);
 
         Employee::create([
-            'uuid' => (string) \Illuminate\Support\Str::uuid(), 'email' => 'w1@example.com', 'full_name' => 'Worker One',
+            'uuid' => (string) Str::uuid(), 'email' => 'w1@example.com', 'full_name' => 'Worker One',
             'convenio_id' => $convenioA->id, 'territory_id' => $territory->id, 'employment_type' => 'full_time', 'status' => 'active',
         ]);
 
@@ -80,8 +83,8 @@ class CorpusCoverageAgreementTest extends TestCase
         // read UNDER_REVIEW_SCOPE, never SCAN_NO_TEXT.
         $convenioC = Convenio::create(['numero' => '01TESTC003', 'name' => 'Under-review-with-text Convenio', 'territory_id' => $territory->id, 'sector_id' => $sector->id]);
         $docC = Document::create([
-            'uuid' => (string) \Illuminate\Support\Str::uuid(), 'title' => 'Convenio C text', 'storage_path' => 'x/c.pdf',
-            'convenio_id' => $convenioC->id, 'document_type_id' => \App\Models\DocumentType::where('code', 'convenio_text')->value('id'),
+            'uuid' => (string) Str::uuid(), 'title' => 'Convenio C text', 'storage_path' => 'x/c.pdf',
+            'convenio_id' => $convenioC->id, 'document_type_id' => DocumentType::where('code', 'convenio_text')->value('id'),
             'retrieval_status' => 'active', 'authority_level' => 'official_convenio', 'language' => 'es', 'tagging_status' => 'under_review',
         ]);
         DB::table('document_pages')->insert(['document_id' => $docC->id, 'page_number' => 1, 'text' => 'real extracted convenio text, plenty of it', 'created_at' => now(), 'updated_at' => now()]);
@@ -93,8 +96,8 @@ class CorpusCoverageAgreementTest extends TestCase
         // must still read SCAN_NO_TEXT.
         $convenioD = Convenio::create(['numero' => '01TESTD004', 'name' => 'Genuine Scan Convenio', 'territory_id' => $territory->id, 'sector_id' => $sector->id]);
         $docD = Document::create([
-            'uuid' => (string) \Illuminate\Support\Str::uuid(), 'title' => 'Convenio D scan', 'storage_path' => 'x/d.pdf',
-            'convenio_id' => $convenioD->id, 'document_type_id' => \App\Models\DocumentType::where('code', 'convenio_text')->value('id'),
+            'uuid' => (string) Str::uuid(), 'title' => 'Convenio D scan', 'storage_path' => 'x/d.pdf',
+            'convenio_id' => $convenioD->id, 'document_type_id' => DocumentType::where('code', 'convenio_text')->value('id'),
             'retrieval_status' => 'active', 'authority_level' => 'official_convenio', 'language' => 'es', 'tagging_status' => 'auto_proposed',
         ]);
         DB::table('document_pages')->insert(['document_id' => $docD->id, 'page_number' => 1, 'text' => '', 'created_at' => now(), 'updated_at' => now()]);
@@ -104,7 +107,7 @@ class CorpusCoverageAgreementTest extends TestCase
         // be excluded from both the grid and headcounts entirely.
         $convenioE = Convenio::create(['numero' => CorpusCoverageService::DEV_FIXTURE_NUMERO_PREFIX.'0001', 'name' => 'DEV FIXTURE — placeholder', 'territory_id' => $territory->id, 'sector_id' => $sector->id]);
         Employee::create([
-            'uuid' => (string) \Illuminate\Support\Str::uuid(), 'email' => 'fixture@example.com', 'full_name' => 'Fixture Employee',
+            'uuid' => (string) Str::uuid(), 'email' => 'fixture@example.com', 'full_name' => 'Fixture Employee',
             'convenio_id' => $convenioE->id, 'territory_id' => $territory->id, 'employment_type' => 'full_time', 'status' => 'active',
         ]);
     }
@@ -175,7 +178,7 @@ class CorpusCoverageAgreementTest extends TestCase
         // this test simulates (screen == a direct grid() call, export == the
         // artisan command) resolve through the SAME class — there is no
         // second implementation anywhere to drift from this one.
-        $reflection = new \ReflectionClass(\App\Console\Commands\CorpusCoverage::class);
+        $reflection = new \ReflectionClass(CorpusCoverage::class);
         $handle = $reflection->getMethod('handle');
         $params = $handle->getParameters();
         $this->assertSame(CorpusCoverageService::class, $params[0]->getType()->getName());

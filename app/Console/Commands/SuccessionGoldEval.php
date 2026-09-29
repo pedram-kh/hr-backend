@@ -80,7 +80,7 @@ class SuccessionGoldEval extends Command
         $tally = [
             'right' => 0,          // the rule agreed with the label
             'uncertain' => 0,      // the rule declined to claim (a miss, acceptable)
-            'wrong_successor' => 0,// THE ONE THAT MATTERS
+            'wrong_successor' => 0, // THE ONE THAT MATTERS
             'other_wrong' => 0,    // wrong, but not a confident successor claim
             'skipped' => 0,        // the pair is not in this database
         ];

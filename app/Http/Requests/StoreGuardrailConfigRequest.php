@@ -42,6 +42,10 @@ class StoreGuardrailConfigRequest extends FormRequest
             'tone_constraints' => ['sometimes', 'nullable', 'string', 'max:'.GuardrailConfigService::TONE_MAX_LEN],
             'convert_allowed_reasons' => ['sometimes', 'nullable', 'array'],
             'convert_allowed_reasons.*' => ['string', 'max:64'],
+            // Sprint 13, step 9 (plan.md §B.6.6) — null = "use the env
+            // baseline"; the AND-combination (restrict-only) lives in
+            // `GuardrailPolicy::generalLaneEnabled()`, not here.
+            'general_lane_enabled' => ['sometimes', 'nullable', 'boolean'],
         ];
     }
 }

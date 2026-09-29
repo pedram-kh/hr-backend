@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\Document;
+use App\Services\SemanticFenceService;
 use App\Services\SemanticRecheckService;
 use Illuminate\Console\Command;
 
@@ -58,7 +59,7 @@ class RulingsScanSemanticConflicts extends Command
             if ($this->option('dry-run')) {
                 // Dry run still COMPARES (it is read-only anyway) so the operator can
                 // see the scores before any flag is written.
-                $comparison = app(\App\Services\SemanticFenceService::class)->compareConvenioToRulings($doc);
+                $comparison = app(SemanticFenceService::class)->compareConvenioToRulings($doc);
                 $this->line('      max_score='.($comparison->maxScore ?? 'n/a')
                     .'  outcome='.$comparison->outcome
                     .'  reason='.$comparison->reason

@@ -1,0 +1,96 @@
+{
+    "outcome": "escalate",
+    "escalated": true,
+    "escalation_reason": "low_confidence",
+    "answer": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+    "citations": [],
+    "categories": [],
+    "authority_used": [],
+    "trace": {
+        "profile": {
+            "employee_uuid": "aa9b68ce-7818-77f6-f75c-1f513841cec9",
+            "convenio_id": "#convenio_id:1",
+            "convenio_numero": "31TEST-13-19",
+            "territory_id": "#territory_id:1",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id:1",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "#as_of_date:today"
+        },
+        "router_decision": {
+            "label": "prose",
+            "confidence": 0,
+            "source": "fail_safe",
+            "subqueries": [],
+            "model": null,
+            "note": "answer model not configured — fail-safe to prose",
+            "cross_path": false,
+            "trace_fragment": [],
+            "decomposed_queries": []
+        },
+        "guardrail_check": {
+            "fired": false,
+            "reason": null,
+            "rule": null
+        },
+        "retrieval": {
+            "eligible_total": 0,
+            "returned": 0,
+            "top_score": 0,
+            "passes": [
+                {
+                    "kind": "main",
+                    "query": "¿Cuántos días de excedencia tengo?",
+                    "returned": 0,
+                    "eligible_total": 0,
+                    "top_score": 0
+                },
+                {
+                    "kind": "national_law",
+                    "query": "¿Cuántos días de excedencia tengo?",
+                    "returned": 0,
+                    "eligible_total": 0,
+                    "top_score": 0
+                }
+            ],
+            "rerank": {
+                "pool_k": 25,
+                "pool_size": 0,
+                "epsilon": 0.0001,
+                "boosted": [],
+                "synthesis_cap": 10
+            },
+            "chunks": []
+        },
+        "floor_decision": {
+            "retrieval_score_floor": 0.4,
+            "answer_confidence_floor": 0.65,
+            "check_a_retrieval": false,
+            "outcome": "escalate",
+            "escalation_reason": "low_confidence",
+            "note": "no eligible chunks"
+        }
+    },
+    "escalation_card_facts": {
+        "reason": "low_confidence",
+        "explanation_facts": {
+            "asked": "Una pregunta de convenio/RR.HH. para la que no se encontró ningún documento relacionado.",
+            "found": "No se encontró ningún contenido relevante en los documentos disponibles.",
+            "reason": "low_confidence",
+            "fix_link": "#view=documents",
+            "fix_action": "Comprobar si existe un documento que cubra este tema y que esté correctamente cargado en el sistema; si no existe, añadirlo.",
+            "fix_surface": "Documentos",
+            "sub_outcome": "no_retrieval",
+            "employee_told": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+            "stopped_reason": "Sin contenido relevante que mostrar, el sistema nunca inventa una respuesta — se deriva a una persona."
+        },
+        "fix_action": "Comprobar si existe un documento que cubra este tema y que esté correctamente cargado en el sistema; si no existe, añadirlo.",
+        "fix_surface": "Documentos",
+        "fix_link": "#view=documents"
+    }
+}

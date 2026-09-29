@@ -1,0 +1,73 @@
+{
+    "outcome": "escalate",
+    "escalated": true,
+    "escalation_reason": "low_confidence",
+    "answer": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+    "citations": [],
+    "categories": [],
+    "authority_used": [],
+    "trace": {
+        "profile": {
+            "employee_uuid": "a072c97d-7ef5-652c-0bc5-c14b0d1e1154",
+            "convenio_id": "#convenio_id:1",
+            "convenio_numero": "31TEST-13-07",
+            "territory_id": "#territory_id:1",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id:1",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "#as_of_date:today"
+        },
+        "router_decision": {
+            "label": "salary",
+            "confidence": 1,
+            "source": "deterministic_salary_crosspath",
+            "subqueries": [
+                "cuántas vacaciones tengo"
+            ],
+            "model": null,
+            "note": "salary+prose cross-path compound — not short-circuited to SQL-only (Correction-03)",
+            "cross_path": true,
+            "trace_fragment": [],
+            "decomposed_queries": []
+        },
+        "guardrail_check": {
+            "fired": false,
+            "reason": null,
+            "rule": null
+        },
+        "floor_decision": {
+            "path": "salary_prose_crosspath",
+            "outcome": "escalate",
+            "escalation_reason": "low_confidence",
+            "cross_path": {
+                "detected_by": "deterministic_salary_crosspath",
+                "prose_subqueries": [
+                    "cuántas vacaciones tengo"
+                ]
+            },
+            "note": "salary+prose cross-path compound — escalated with note so the prose half is not silently dropped (Correction-03)"
+        }
+    },
+    "escalation_card_facts": {
+        "reason": "low_confidence",
+        "explanation_facts": {
+            "asked": "Una pregunta compuesta que combina una parte salarial con otra parte no salarial.",
+            "found": "La parte salarial se detectó, pero la parte no salarial no se respondió — para no descartarla en silencio, ambas se derivan juntas.",
+            "reason": "low_confidence",
+            "fix_link": null,
+            "fix_action": "Responder ambas partes por separado: la cifra salarial (consultable en el chat) y el tema no salarial.",
+            "fix_surface": "ninguna — respuesta manual en dos partes",
+            "sub_outcome": "cross_path",
+            "employee_told": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+            "stopped_reason": "Responder solo la parte salarial habría ignorado silenciosamente la otra mitad de la pregunta, así que se deriva completa a una persona."
+        },
+        "fix_action": "Responder ambas partes por separado: la cifra salarial (consultable en el chat) y el tema no salarial.",
+        "fix_surface": "ninguna — respuesta manual en dos partes",
+        "fix_link": null
+    }
+}

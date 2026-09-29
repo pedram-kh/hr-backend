@@ -1,0 +1,137 @@
+{
+    "outcome": "escalate",
+    "escalated": true,
+    "escalation_reason": "low_confidence",
+    "answer": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+    "citations": [],
+    "categories": [],
+    "authority_used": [
+        "official_convenio"
+    ],
+    "trace": {
+        "profile": {
+            "employee_uuid": "7b55e919-f949-7510-361b-bbb6d168582e",
+            "convenio_id": "#convenio_id:1",
+            "convenio_numero": "31TEST-13-20",
+            "territory_id": "#territory_id:1",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id:1",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "#as_of_date:today"
+        },
+        "router_decision": {
+            "label": "prose",
+            "confidence": 0.9,
+            "source": "llm",
+            "subqueries": [],
+            "model": "claude-haiku-4-5",
+            "note": null,
+            "cross_path": false,
+            "trace_fragment": [],
+            "decomposed_queries": []
+        },
+        "guardrail_check": {
+            "fired": false,
+            "reason": null,
+            "rule": null
+        },
+        "retrieval": {
+            "eligible_total": 1,
+            "returned": 1,
+            "top_score": 0.8,
+            "passes": [
+                {
+                    "kind": "main",
+                    "query": "¿Cuánto tiempo de excedencia me corresponde?",
+                    "returned": 1,
+                    "eligible_total": 1,
+                    "top_score": 0.8
+                },
+                {
+                    "kind": "national_law",
+                    "query": "¿Cuánto tiempo de excedencia me corresponde?",
+                    "returned": 1,
+                    "eligible_total": 1,
+                    "top_score": 0.8
+                }
+            ],
+            "rerank": {
+                "pool_k": 25,
+                "pool_size": 1,
+                "epsilon": 0.0001,
+                "boosted": [],
+                "synthesis_cap": 10
+            },
+            "chunks": [
+                {
+                    "chunk_id": 13200,
+                    "document_id": "#document_id:1",
+                    "page_from": 5,
+                    "page_to": 5,
+                    "score": 0.8,
+                    "authority_level": "official_convenio"
+                }
+            ]
+        },
+        "synthesis": {
+            "provider": "claude",
+            "model": "claude-sonnet-5",
+            "citation_count": 0,
+            "confidence": 0.9,
+            "grounding_signal": [],
+            "authority_used": [
+                "official_convenio"
+            ],
+            "trace_fragment": []
+        },
+        "floor_decision": {
+            "retrieval_score_floor": 0.4,
+            "answer_confidence_floor": 0.65,
+            "check_a_retrieval": true,
+            "check_b_citations": false,
+            "check_c_confidence_tiebreaker": {
+                "confidence": 0.9,
+                "below_floor": false,
+                "used_as_gate": false
+            },
+            "figure_grounding": {
+                "checked": true,
+                "grounded": true,
+                "figures": [],
+                "ungrounded": []
+            },
+            "grounding": {
+                "checked": false,
+                "reason": "short-circuited before /ground"
+            },
+            "authority_used": [
+                "official_convenio"
+            ],
+            "outcome": "escalate",
+            "escalation_reason": "low_confidence",
+            "note": "no valid citations (Check B failed)"
+        }
+    },
+    "escalation_card_facts": {
+        "reason": "low_confidence",
+        "explanation_facts": {
+            "asked": "Una pregunta de convenio/RR.HH. para la que sí había contenido relacionado disponible.",
+            "found": "El sistema no pudo respaldar ninguna parte de la respuesta con el contenido disponible (o no llegó a generar una respuesta).",
+            "reason": "low_confidence",
+            "fix_link": "#view=review&tab=tagging",
+            "fix_action": "Puede ser un fallo puntual; si se repite con la misma pregunta, avisar al equipo técnico.",
+            "fix_surface": "AI tagging (revisión)",
+            "sub_outcome": "citations_failed",
+            "employee_told": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+            "stopped_reason": "Una respuesta que no se puede respaldar con el contenido disponible nunca se muestra a la persona empleada."
+        },
+        "fix_action": "Puede ser un fallo puntual; si se repite con la misma pregunta, avisar al equipo técnico.",
+        "fix_surface": "AI tagging (revisión)",
+        "fix_link": "#view=review&tab=tagging"
+    }
+}

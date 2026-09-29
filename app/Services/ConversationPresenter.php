@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\ChatSession;
 use App\Models\MessageCitation;
 use App\Models\MessageTrace;
+use App\Services\Agent\Tools\GeneralKnowledgeTool;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
@@ -90,6 +91,7 @@ class ConversationPresenter
             } else {
                 $row['citations'] = [];
                 $row['source_labels'] = self::sourceLabels($resolvedCitations);
+                $row['general_lane'] = ['sources' => self::generalLaneSources($trace ?? [])];
             }
 
             return $row;
@@ -118,6 +120,43 @@ class ConversationPresenter
         }
 
         return $labels;
+    }
+
+    /**
+     * Sprint 13, build step 9 (plan.md §B.6.6) — the employee's OWN
+     * `general_knowledge`-lane sources, resolved to a display label + the
+     * catalogue's OWN url (never a page id, never a raw fetched excerpt —
+     * that never leaves hr-backend at all). `[]` for every other path, and
+     * for a `kind='model_knowledge'` source (v1 is web-sourced-only —
+     * {@see GeneralKnowledgeTool}'s own docblock —
+     * so this never actually fires today, kept defensive rather than
+     * assumed).
+     *
+     * @param  array<string,mixed>  $trace
+     * @return list<array{label:string,url:?string}>
+     */
+    public static function generalLaneSources(array $trace): array
+    {
+        $sources = $trace['general_lane']['sources'] ?? null;
+        if (! is_array($sources)) {
+            return [];
+        }
+
+        $catalogue = collect(config('hr.general_lane.sources', []))->keyBy('id');
+
+        $result = [];
+        foreach ($sources as $s) {
+            if (! is_array($s) || ($s['kind'] ?? null) !== 'web') {
+                continue;
+            }
+            $entry = isset($s['id']) ? $catalogue->get($s['id']) : null;
+            $result[] = [
+                'label' => (string) ($s['title'] ?? ($entry['title'] ?? '')),
+                'url' => $entry['url'] ?? null,
+            ];
+        }
+
+        return $result;
     }
 
     private function authorLabel(string $role, ?string $adminName, string $audience): ?string

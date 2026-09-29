@@ -1,0 +1,134 @@
+{
+    "outcome": "answer",
+    "escalated": false,
+    "escalation_reason": null,
+    "answer": "Tu periodo de prueba es de 90 días [Fuente 1][Fuente 2].",
+    "citations": [
+        {
+            "chunk_id": 13130,
+            "document_id": "#document_id:1",
+            "document_uuid": "8deabfaa-c505-82f5-dd64-ec43066cf489",
+            "document_title": "Convenio (texto)",
+            "authority_level": "official_convenio",
+            "page_from": 3,
+            "page_to": 3,
+            "page_number": 3,
+            "snippet": "El periodo de prueba para el personal será de 90 días naturales."
+        },
+        {
+            "chunk_id": null,
+            "document_id": "#document_id:2",
+            "document_uuid": "44137847-dd1b-30c9-75e9-683c1e1641ad",
+            "document_title": "Periodos de prueba (referencia)",
+            "authority_level": "structured_reference",
+            "page_from": null,
+            "page_to": null,
+            "page_number": null,
+            "snippet": "Dato de referencia — Convenio 13-13 (p.3 §2)",
+            "is_reference_fact": true
+        }
+    ],
+    "categories": [],
+    "authority_used": [
+        "official_convenio",
+        "structured_reference"
+    ],
+    "trace": {
+        "profile": {
+            "employee_uuid": "023b8979-386f-e039-c420-219288691ab3",
+            "convenio_id": "#convenio_id:1",
+            "convenio_numero": "31TEST-13-13",
+            "territory_id": "#territory_id:1",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id:1",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "#as_of_date:today"
+        },
+        "router_decision": {
+            "label": "reference_fact",
+            "confidence": 1,
+            "source": "deterministic_reference_fact",
+            "subqueries": [],
+            "model": null,
+            "note": "matched deterministic reference-fact pre-check (topic: periodo de prueba)",
+            "cross_path": false,
+            "trace_fragment": {
+                "matched_topic_names": [
+                    "periodo de prueba"
+                ]
+            }
+        },
+        "guardrail_check": {
+            "fired": false,
+            "reason": null,
+            "rule": null
+        },
+        "reference_fact": {
+            "convenio_id": "#convenio_id:1",
+            "topic_id": "#topic_id:1",
+            "job_category_id": null,
+            "group_label": null,
+            "as_of_date": "#as_of_date:today",
+            "fact_id": "#fact_id:1",
+            "validity_selection": "single",
+            "value": "periodo de prueba 90 días",
+            "authority_used": "structured_reference",
+            "employee_group_state": "unresolved",
+            "fact_uuid": "72419d3d-7fb3-9adf-cf1f-1186ac01b2e2",
+            "match_kind": "convenio_wide",
+            "validity_start": null,
+            "validity_end": null,
+            "outcome": "answer"
+        },
+        "composition": {
+            "detected": true,
+            "governing_on_topic_chunks": 1,
+            "governing_top_score": 0.91,
+            "check_a": true
+        },
+        "synthesis": {
+            "provider": "claude",
+            "model": "claude-sonnet-5",
+            "citation_count": 2,
+            "confidence": 0.92,
+            "authority_used": [
+                "official_convenio",
+                "structured_reference"
+            ],
+            "composition": true,
+            "trace_fragment": []
+        },
+        "floor_decision": {
+            "path": "reference_fact_composition",
+            "check_b_citations": true,
+            "grounding": {
+                "checked": true,
+                "grounded": true,
+                "claims": [
+                    {
+                        "claim": "periodo de prueba 90 días",
+                        "grounded": true,
+                        "supporting_source": 1
+                    }
+                ],
+                "ungrounded": [],
+                "error": null,
+                "gate": "entailment",
+                "trace_fragment": []
+            },
+            "authority_used": [
+                "official_convenio",
+                "structured_reference"
+            ],
+            "outcome": "answer",
+            "escalation_reason": null,
+            "note": "composed fact+convenio answer (convenio governs), grounded"
+        }
+    },
+    "escalation_card_facts": null
+}

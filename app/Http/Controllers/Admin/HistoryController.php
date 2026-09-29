@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\Admin;
 use App\Models\ChatMessage;
 use App\Models\ChatSession;
 use App\Services\ConversationAccessLogger;
@@ -44,7 +45,14 @@ class HistoryController extends Controller
             'from' => ['nullable', 'date'],
             'to' => ['nullable', 'date'],
             'reason' => ['nullable', 'string'],
-            'outcome' => ['nullable', 'in:answered,escalated'],
+            // Sprint 13, build step 8 (plan.md §E.15) — 'asked' is a THIRD,
+            // independent bucket: a session containing at least one agent-
+            // engine `ask_employee` clarifying turn (`floor_decision.outcome
+            // = 'ask'`). It is not mutually exclusive with 'escalated' in the
+            // data (a session can have both an ask turn and, separately, an
+            // escalation) — the filter just asks "does this session contain
+            // one", same posture as 'reason' above.
+            'outcome' => ['nullable', 'in:answered,escalated,asked'],
         ]);
 
         $query = ChatSession::query()
@@ -52,7 +60,11 @@ class HistoryController extends Controller
             ->withCount('messages')
             ->select('chat_sessions.*')
             ->selectRaw('exists(select 1 from escalation_cards ec where ec.chat_session_id = chat_sessions.id) as is_escalated')
-            ->selectRaw('(select reason from escalation_cards ec where ec.chat_session_id = chat_sessions.id order by id desc limit 1) as escalation_reason');
+            ->selectRaw('(select reason from escalation_cards ec where ec.chat_session_id = chat_sessions.id order by id desc limit 1) as escalation_reason')
+            ->selectRaw(
+                'exists(select 1 from message_traces mt join chat_messages am on am.id = mt.message_id '
+                ."and am.session_id = chat_sessions.id where mt.trace->'floor_decision'->>'outcome' = 'ask') as is_asked"
+            );
 
         if (! empty($data['employee_uuid'])) {
             $query->whereHas('employee', fn ($e) => $e->where('uuid', $data['employee_uuid']));
@@ -80,6 +92,11 @@ class HistoryController extends Controller
         } elseif (($data['outcome'] ?? null) === 'answered') {
             $query->whereNotExists(fn ($q) => $q->selectRaw('1')->from('escalation_cards as ec')
                 ->whereColumn('ec.chat_session_id', 'chat_sessions.id'));
+        } elseif (($data['outcome'] ?? null) === 'asked') {
+            $query->whereExists(fn ($q) => $q->selectRaw('1')->from('message_traces as mt')
+                ->join('chat_messages as am', 'am.id', '=', 'mt.message_id')
+                ->whereColumn('am.session_id', 'chat_sessions.id')
+                ->whereRaw("mt.trace->'floor_decision'->>'outcome' = 'ask'"));
         }
 
         $sessions = $query->orderByDesc('last_activity_at')->orderByDesc('id')->paginate(50);
@@ -117,7 +134,7 @@ class HistoryController extends Controller
             ->where('uuid', $sessionUuid)
             ->firstOrFail();
 
-        /** @var \App\Models\Admin $actor */
+        /** @var Admin $actor */
         $actor = $request->user();
         $this->accessLog->logView($actor, $session); // accountability — never skipped
 
@@ -157,7 +174,7 @@ class HistoryController extends Controller
         ]);
         $q = trim($data['q']);
 
-        /** @var \App\Models\Admin $actor */
+        /** @var Admin $actor */
         $actor = $request->user();
         $this->accessLog->logSearch($actor, $q);
 
@@ -202,6 +219,9 @@ class HistoryController extends Controller
             'message_count' => $s->messages_count,
             'escalated' => (bool) $s->is_escalated,
             'escalation_reason' => $s->escalation_reason,
+            // Sprint 13, build step 8 — independent of `escalated` above (see
+            // the `outcome=asked` validation comment for why).
+            'asked' => (bool) $s->is_asked,
         ];
     }
 

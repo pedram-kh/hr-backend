@@ -1,0 +1,108 @@
+{
+    "outcome": "escalate",
+    "escalated": true,
+    "escalation_reason": "conflict",
+    "answer": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+    "citations": [],
+    "categories": [],
+    "authority_used": [
+        "official_convenio",
+        "structured_reference"
+    ],
+    "trace": {
+        "profile": {
+            "employee_uuid": "5dc11be4-a166-2aad-08d7-178c47f26c46",
+            "convenio_id": "#convenio_id:1",
+            "convenio_numero": "31TEST-13-14",
+            "territory_id": "#territory_id:1",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id:1",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "#as_of_date:today"
+        },
+        "router_decision": {
+            "label": "reference_fact",
+            "confidence": 1,
+            "source": "deterministic_reference_fact",
+            "subqueries": [],
+            "model": null,
+            "note": "matched deterministic reference-fact pre-check (topic: periodo de prueba)",
+            "cross_path": false,
+            "trace_fragment": {
+                "matched_topic_names": [
+                    "periodo de prueba"
+                ]
+            }
+        },
+        "guardrail_check": {
+            "fired": false,
+            "reason": null,
+            "rule": null
+        },
+        "reference_fact": {
+            "convenio_id": "#convenio_id:1",
+            "topic_id": "#topic_id:1",
+            "job_category_id": null,
+            "group_label": null,
+            "as_of_date": "#as_of_date:today",
+            "fact_id": "#fact_id:1",
+            "validity_selection": "single",
+            "value": "periodo de prueba 90 días",
+            "authority_used": "structured_reference",
+            "employee_group_state": "unresolved",
+            "fact_uuid": "3cbc7442-e1ea-28ef-8344-fe72a29c41db",
+            "match_kind": "convenio_wide",
+            "validity_start": null,
+            "validity_end": null,
+            "outcome": "answer"
+        },
+        "composition": {
+            "detected": true,
+            "governing_on_topic_chunks": 1,
+            "governing_top_score": 0.91,
+            "check_a": true,
+            "conflict": {
+                "conflict": true,
+                "unit": "dia",
+                "fact_values": [
+                    "90"
+                ],
+                "prose_values": [
+                    "60"
+                ]
+            }
+        },
+        "floor_decision": {
+            "path": "reference_fact_composition",
+            "outcome": "escalate",
+            "escalation_reason": "conflict",
+            "authority_used": [
+                "official_convenio",
+                "structured_reference"
+            ],
+            "note": "fact vs convenio same-point conflict (dia: fact 90 vs convenio 60) — escalated, never blended (convenio governs)"
+        }
+    },
+    "escalation_card_facts": {
+        "reason": "conflict",
+        "explanation_facts": {
+            "asked": "Una pregunta cuyo tema tiene tanto un dato de referencia verificado como texto de convenio vigente.",
+            "found": "Desacuerdo en la misma unidad (dia): el dato de referencia dice 90, el convenio dice 60.",
+            "reason": "conflict",
+            "fix_link": "#view=review&tab=reference-facts&fact=3cbc7442-e1ea-28ef-8344-fe72a29c41db",
+            "fix_action": "Revisar el dato de referencia: si está desactualizado o mal capturado, corregirlo o marcarlo como pendiente de revisión.",
+            "fix_surface": "Reference facts (revisión)",
+            "sub_outcome": "fact_vs_convenio",
+            "employee_told": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+            "stopped_reason": "El convenio manda siempre; un desacuerdo real nunca se resuelve automáticamente a favor del dato — se deriva a una persona."
+        },
+        "fix_action": "Revisar el dato de referencia: si está desactualizado o mal capturado, corregirlo o marcarlo como pendiente de revisión.",
+        "fix_surface": "Reference facts (revisión)",
+        "fix_link": "#view=review&tab=reference-facts&fact=3cbc7442-e1ea-28ef-8344-fe72a29c41db"
+    }
+}

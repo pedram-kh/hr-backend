@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\ProposeDocumentTags;
+use App\Jobs\RecheckRulingsForConvenio;
 use App\Models\Convenio;
 use App\Models\Document;
 use App\Models\DocumentTopic;
@@ -339,7 +341,7 @@ class DocumentController extends Controller
             ], 422);
         }
 
-        \App\Jobs\ProposeDocumentTags::dispatch($document->id);
+        ProposeDocumentTags::dispatch($document->id);
 
         return response()->json(['status' => 'ok', 'note' => 'AI tagging proposal queued.']);
     }
@@ -532,7 +534,7 @@ class DocumentController extends Controller
         // every edit of an already-active convenio.
         if (($changes['retrieval_status'][1] ?? null) === 'active'
             && $document->authority_level === 'official_convenio') {
-            \App\Jobs\RecheckRulingsForConvenio::dispatch($document->id);
+            RecheckRulingsForConvenio::dispatch($document->id);
         }
 
         return response()->json(['status' => 'ok']);

@@ -20,6 +20,12 @@ class EscalationCard extends Model
         'reason', 'status', 'assigned_to', 'topic_id', 'resolved_at',
         // Sprint 7g Item 1 (ADR-0029) — the explanation, stored at creation.
         'explanation_facts', 'explanation_text', 'fix_action', 'fix_surface', 'fix_link',
+        // Sprint 13, build step 8 (plan.md §D.13/§E.15) — the idempotency key
+        // for the employee's "¿Quieres que lo revise RR. HH.?" button: the
+        // assistant message being reviewed. Nullable, unique only where
+        // reason = 'employee_requested_review' (migration
+        // 2026_09_28_234500_...).
+        'reviewed_message_id',
     ];
 
     protected $casts = [
@@ -50,6 +56,16 @@ class EscalationCard extends Model
     public function sourceMessage(): BelongsTo
     {
         return $this->belongsTo(ChatMessage::class, 'source_message_id');
+    }
+
+    /**
+     * Sprint 13, build step 8 — the ANSWER (assistant message) an employee
+     * asked RR. HH. to review, on an `employee_requested_review` card only.
+     * Null on every other reason.
+     */
+    public function reviewedMessage(): BelongsTo
+    {
+        return $this->belongsTo(ChatMessage::class, 'reviewed_message_id');
     }
 
     /** The admin currently working the card (null = unassigned). */

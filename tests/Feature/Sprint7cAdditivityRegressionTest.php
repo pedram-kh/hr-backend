@@ -6,6 +6,7 @@ use App\Models\AnswerModelSetting;
 use App\Models\Convenio;
 use App\Models\ConvenioJobCategory;
 use App\Models\Document;
+use App\Models\DocumentType;
 use App\Models\Employee;
 use App\Models\MessageTrace;
 use App\Models\SalaryTable;
@@ -17,6 +18,7 @@ use App\Services\ExtractionClient;
 use Database\Seeders\DocumentTypeSeeder;
 use Database\Seeders\RoleSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 /**
@@ -236,7 +238,7 @@ class Sprint7cAdditivityRegressionTest extends TestCase
 
     private function chunkRow(int $id, int $documentId, string $authority): void
     {
-        \Illuminate\Support\Facades\DB::table('document_chunks')->insert([
+        DB::table('document_chunks')->insert([
             'id' => $id, 'document_id' => $documentId, 'chunk_index' => 0,
             'page_from' => 9, 'page_to' => 9, 'content' => 'fixture chunk', 'token_count' => 10,
             'convenio_id' => $this->convenio->id, 'retrieval_status' => 'active',
@@ -247,13 +249,13 @@ class Sprint7cAdditivityRegressionTest extends TestCase
     /**
      * @param  string  $authority  the document's `authority_level`.
      * @param  string  $typeCode  its `document_types.code`. Previously this
-     *   helper took whatever `DocumentType::query()->value('id')` returned
-     *   first, which is an arbitrary type and, for the prose documents, not a
-     *   prose one. Nothing read `document_type_id` until Sprint 10a's prose-gap
-     *   classifier did, at which point the fixture described a convenio holding
-     *   chunks but owning no prose DOCUMENT — a state production cannot reach.
-     *   Naming the type explicitly makes each fixture document what it claims to
-     *   be; no asserted answer, citation or trace value depends on it.
+     *                            helper took whatever `DocumentType::query()->value('id')` returned
+     *                            first, which is an arbitrary type and, for the prose documents, not a
+     *                            prose one. Nothing read `document_type_id` until Sprint 10a's prose-gap
+     *                            classifier did, at which point the fixture described a convenio holding
+     *                            chunks but owning no prose DOCUMENT — a state production cannot reach.
+     *                            Naming the type explicitly makes each fixture document what it claims to
+     *                            be; no asserted answer, citation or trace value depends on it.
      */
     private function doc(string $title, string $authority, bool $convenio = true, string $typeCode = 'convenio_text'): Document
     {
@@ -261,7 +263,7 @@ class Sprint7cAdditivityRegressionTest extends TestCase
             'title' => $title,
             'storage_path' => 'fake/'.uniqid(),
             'convenio_id' => $convenio ? $this->convenio->id : null,
-            'document_type_id' => \App\Models\DocumentType::where('code', $typeCode)->value('id'),
+            'document_type_id' => DocumentType::where('code', $typeCode)->value('id'),
             'authority_level' => $authority,
             'retrieval_status' => 'active',
             'language' => 'es',

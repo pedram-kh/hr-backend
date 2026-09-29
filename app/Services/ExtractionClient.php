@@ -297,6 +297,45 @@ class ExtractionClient
     }
 
     /**
+     * Explain a concept in general terms via the `general_knowledge` lane
+     * (Sprint 13, step 9, plan.md §B.6.5). `$questionScrubbed` has ALREADY
+     * had PII removed by `PiiScrubber` — this call never carries the raw
+     * question, and hr-ai re-checks the pattern-level part as defence in
+     * depth. `$catalogue` is the curated `config('hr.general_lane.sources')`
+     * list; hr-ai fetches at most two, chosen locally by keyword overlap —
+     * the model never invents a URL.
+     *
+     * Returns { answer, sources, trace_fragment } or, on a provider/PII-
+     * refusal/transport failure, { error: 'provider_error'|'general_
+     * knowledge_unavailable', detail }. The caller (`GeneralKnowledgeTool`)
+     * treats either failure shape as NO_MATERIAL — never guesses.
+     *
+     * @param  list<array{id:string,url:string,title:string,topics:list<string>}>  $catalogue
+     * @param  list<string>  $allowedDomains
+     * @param  array{provider:string,model:string,endpoint:?string}  $providerConfig
+     * @return array<string,mixed>
+     */
+    public function generalKnowledge(string $questionScrubbed, array $catalogue, array $allowedDomains, string $decryptedKey, array $providerConfig): array
+    {
+        $response = Http::withHeaders(['X-Internal-Token' => $this->token()])
+            ->timeout(60)
+            ->acceptJson()
+            ->post("{$this->base()}/general-knowledge", [
+                'question_scrubbed' => $questionScrubbed,
+                'allowed_domains' => $allowedDomains,
+                'catalogue' => $catalogue,
+                'provider_api_key' => $decryptedKey,
+                'provider_config' => $providerConfig,
+            ]);
+
+        if (! $response->successful()) {
+            return ['error' => 'general_knowledge_unavailable', 'detail' => "hr-ai /general-knowledge failed ({$response->status()})"];
+        }
+
+        return $response->json();
+    }
+
+    /**
      * Classify a question salary | prose | off_domain and (for a compound
      * question) return decomposed subqueries (Sprint 2b-2, ADR-0016). Uses the
      * SMALL/FAST router model. The decrypted key is passed in the body per call
@@ -325,6 +364,42 @@ class ExtractionClient
         }
 
         return $response->json();
+    }
+
+    /**
+     * One planner round (Sprint 13, plan.md §C.7–C.10). Native tool use on
+     * hr-ai `/plan`. The decrypted key is passed in the body per call; hr-ai
+     * never persists it. Returns the planner envelope or `{ error: ... }` so
+     * the caller can throw `PlannerUnavailableException` and fall back to
+     * classic (§F.10).
+     *
+     * @param  array<string,mixed>  $scopeSummary
+     * @param  array<string,mixed>  $window
+     * @param  list<string>  $enabledTools
+     * @param  list<array<string,mixed>>  $priorSteps
+     * @param  array{provider:string,model:string,endpoint:?string}  $providerConfig
+     * @return array<string,mixed>
+     */
+    public function plan(string $question, array $scopeSummary, array $window, array $enabledTools, array $priorSteps, string $decryptedKey, array $providerConfig): array
+    {
+        $response = Http::withHeaders(['X-Internal-Token' => $this->token()])
+            ->timeout(60)
+            ->acceptJson()
+            ->post("{$this->base()}/plan", [
+                'question' => $question,
+                'scope_summary' => $scopeSummary,
+                'window' => $window,
+                'enabled_tools' => $enabledTools,
+                'prior_steps' => $priorSteps,
+                'provider_api_key' => $decryptedKey,
+                'provider_config' => $providerConfig,
+            ]);
+
+        if (! $response->successful()) {
+            return ['error' => 'planner_unavailable', 'detail' => "hr-ai /plan failed ({$response->status()})"];
+        }
+
+        return $response->json() ?? ['error' => 'planner_unavailable', 'detail' => 'hr-ai /plan returned an empty body'];
     }
 
     /**
@@ -419,9 +494,9 @@ class ExtractionClient
      */
     /**
      * @param  array<string,mixed>|null  $targetTopic  Sprint 10c (plan §A.1):
-     *     when set (`['id'=>int,'name'=>string]`), this call is FOR ONE TOPIC
-     *     ONLY — the new per-(convenio, topic) driver's path. When null, this
-     *     is byte-for-byte the original 7b-2 `reference_source` call.
+     *                                                 when set (`['id'=>int,'name'=>string]`), this call is FOR ONE TOPIC
+     *                                                 ONLY — the new per-(convenio, topic) driver's path. When null, this
+     *                                                 is byte-for-byte the original 7b-2 `reference_source` call.
      */
     public function segmentFacts(
         int $documentId,
@@ -522,8 +597,8 @@ class ExtractionClient
      *
      * @param  array{provider:string,model:string,endpoint:?string}  $providerConfig
      * @return array<string,mixed> hr-ai's /ocr-page envelope: {text, layout,
-     *   bilingual, quality, quality_notes, cost_usd, sec_per_page, engine} or
-     *   {error, detail}
+     *                             bilingual, quality, quality_notes, cost_usd, sec_per_page, engine} or
+     *                             {error, detail}
      */
     public function ocrPage(string $documentUuid, int $pageNumber, string $imageKey, string $decryptedKey, array $providerConfig): array
     {

@@ -38,6 +38,7 @@ class EscalationExplainerTest extends TestCase
             'low_confidence.cross_path' => ['low_confidence', ['floor_decision' => ['path' => 'salary_prose_crosspath']], 'cross_path'],
             'low_confidence.answer_model_not_configured' => ['low_confidence', ['floor_decision' => ['check_a_retrieval' => true, 'note' => 'answer model not configured']], 'answer_model_not_configured'],
             'low_confidence.provider_error' => ['low_confidence', ['floor_decision' => ['check_a_retrieval' => true, 'note' => 'provider error'], 'synthesis' => ['error' => 'provider_error']], 'provider_error'],
+            'low_confidence.period_unsupported' => ['low_confidence', ['agent' => ['period_unsupported' => ['matched_year' => 2023]], 'floor_decision' => ['note' => 'explicit past year (2023) in the question — no supported way to answer for a period other than today (§F.15)']], 'period_unsupported'],
             'low_confidence.unspecified' => ['low_confidence', ['floor_decision' => ['check_a_retrieval' => true, 'check_b_citations' => true, 'figure_grounding' => ['grounded' => true], 'grounding' => ['grounded' => true]]], 'unspecified'],
             'conflict.fact_vs_convenio' => ['conflict', ['composition' => ['conflict' => ['unit' => 'dia', 'fact_values' => ['90'], 'prose_values' => ['60']]], 'reference_fact' => ['fact_uuid' => 'fact-uuid-1']], 'fact_vs_convenio'],
             'salary_coverage_gap.no_convenio' => ['salary_coverage_gap', ['salary' => ['note' => 'no convenio on profile']], 'no_convenio'],
@@ -82,6 +83,30 @@ class EscalationExplainerTest extends TestCase
             'estatuto_fallback_gap.tagging_under_review' => ['estatuto_fallback_gap', ['prose_gap' => ['classification' => 'expired_only', 'reason_code' => 'UNDER_REVIEW_SCOPE', 'pending_embed' => false]], 'tagging_under_review'],
             'estatuto_fallback_gap.scan_no_text' => ['estatuto_fallback_gap', ['prose_gap' => ['classification' => 'expired_only', 'reason_code' => 'SCAN_NO_TEXT', 'pending_embed' => false]], 'scan_no_text'],
             'estatuto_fallback_gap.not_yet_embedded' => ['estatuto_fallback_gap', ['prose_gap' => ['classification' => 'expired_only', 'reason_code' => 'SCAN_NO_TEXT', 'pending_embed' => true]], 'not_yet_embedded'],
+            // Sprint 13 (plan.md §D.12) — the five agent-engine reasons. Every
+            // sub-outcome is read from the structured `trace.agent.*` block
+            // the shell stashes mid-loop (never string-parsed), per
+            // `EscalationExplainer::detectSubOutcome()`'s new match arms.
+            'general_lane_blocked.question_prescreen' => ['general_lane_blocked', ['agent' => ['general_lane_blocked' => ['sub' => 'question_prescreen']]], 'question_prescreen'],
+            'general_lane_blocked.figure' => ['general_lane_blocked', ['agent' => ['general_lane_blocked' => ['sub' => 'figure']]], 'figure'],
+            'general_lane_blocked.entitlement_language' => ['general_lane_blocked', ['agent' => ['general_lane_blocked' => ['sub' => 'entitlement_language']]], 'entitlement_language'],
+            'general_lane_blocked.ungrounded' => ['general_lane_blocked', ['agent' => ['general_lane_blocked' => ['sub' => 'ungrounded']]], 'ungrounded'],
+            'profile_incomplete.professional_group' => ['profile_incomplete', ['profile' => ['employee_uuid' => 'emp-uuid-13'], 'agent' => ['profile_incomplete' => ['field' => 'professional_group']]], 'professional_group'],
+            'profile_incomplete.job_category' => ['profile_incomplete', ['profile' => ['employee_uuid' => 'emp-uuid-13'], 'agent' => ['profile_incomplete' => ['field' => 'job_category']]], 'job_category'],
+            'profile_incomplete.seniority' => ['profile_incomplete', ['profile' => ['employee_uuid' => 'emp-uuid-13'], 'agent' => ['profile_incomplete' => ['field' => 'seniority']]], 'seniority'],
+            'profile_incomplete.contract_type' => ['profile_incomplete', ['profile' => ['employee_uuid' => 'emp-uuid-13'], 'agent' => ['profile_incomplete' => ['field' => 'contract_type']]], 'contract_type'],
+            'profile_incomplete.asserted_differs' => ['profile_incomplete', ['profile' => ['employee_uuid' => 'emp-uuid-13'], 'agent' => ['profile_incomplete' => ['field' => 'asserted_differs']]], 'asserted_differs'],
+            'employee_requested_review.answer_reviewed' => ['employee_requested_review', [], 'answer_reviewed'],
+            'planner_escalated.off_domain' => ['planner_escalated', ['agent' => ['planner_escalation' => ['category' => 'off_domain', 'reason' => 'not HR-related']]], 'off_domain'],
+            'planner_escalated.unsafe' => ['planner_escalated', ['agent' => ['planner_escalation' => ['category' => 'unsafe', 'reason' => 'risk of harm']]], 'unsafe'],
+            'planner_escalated.unanswerable' => ['planner_escalated', ['agent' => ['planner_escalation' => ['category' => 'unanswerable', 'reason' => 'no tool could resolve it']]], 'unanswerable'],
+            'planner_escalated.needs_human_judgement' => ['planner_escalated', ['agent' => ['planner_escalation' => ['category' => 'needs_human_judgement', 'reason' => 'case-specific judgement call']]], 'needs_human_judgement'],
+            'planner_escalated.other' => ['planner_escalated', ['agent' => ['planner_escalation' => ['category' => 'other', 'reason' => 'unclassified']]], 'other'],
+            'tool_budget_exhausted.rounds' => ['tool_budget_exhausted', ['agent' => ['budget_exhausted' => ['sub' => 'rounds']]], 'rounds'],
+            'tool_budget_exhausted.tool_calls' => ['tool_budget_exhausted', ['agent' => ['budget_exhausted' => ['sub' => 'tool_calls']]], 'tool_calls'],
+            'tool_budget_exhausted.clarifications' => ['tool_budget_exhausted', ['agent' => ['budget_exhausted' => ['sub' => 'clarifications']]], 'clarifications'],
+            'tool_budget_exhausted.wall_clock' => ['tool_budget_exhausted', ['agent' => ['budget_exhausted' => ['sub' => 'wall_clock']]], 'wall_clock'],
+            'tool_budget_exhausted.malformed' => ['tool_budget_exhausted', ['agent' => ['budget_exhausted' => ['sub' => 'malformed']]], 'malformed'],
         ];
     }
 

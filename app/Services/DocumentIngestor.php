@@ -2,6 +2,12 @@
 
 namespace App\Services;
 
+use App\Http\Controllers\Admin\DocumentController;
+use App\Jobs\OcrDocumentPages;
+use App\Jobs\ProposeDocumentTags;
+use App\Jobs\RecheckRulingsForConvenio;
+use App\Jobs\SegmentReferenceSource;
+use App\Models\Convenio;
 use App\Models\Document;
 use App\Models\DocumentPage;
 use App\Models\DocumentReviewTask;
@@ -33,25 +39,25 @@ class DocumentIngestor
 
     /**
      * @param  bool  $asReference  Sprint 7b-1 (ADR-0021): ingest a NON-salary
-     *   .docx/.xlsx as a `reference_source` document — the deliberate routing tag
-     *   (Invariant 2). Its content is read via hr-ai /read-structured and stored
-     *   as display `document_pages`; it is NEVER embedded (reference_source ∉
-     *   ChunksEmbed::IN_SCOPE_TYPES) and NEVER touches the salary path. The
-     *   reference FACTS are created by hand from this source (the manual path).
+     *                             .docx/.xlsx as a `reference_source` document — the deliberate routing tag
+     *                             (Invariant 2). Its content is read via hr-ai /read-structured and stored
+     *                             as display `document_pages`; it is NEVER embedded (reference_source ∉
+     *                             ChunksEmbed::IN_SCOPE_TYPES) and NEVER touches the salary path. The
+     *                             reference FACTS are created by hand from this source (the manual path).
      * @param  bool  $ocr  Sprint 7e (ADR-0026, review.md §2.1/§2.7): opt-in OCR
-     *   fallback for text-less PDF pages. Default off (unchanged Sprint-1
-     *   behavior) — forwarded verbatim to hr-ai's `/extract`; hr-ai itself never
-     *   calls the OCR model here, it only marks a page `ocr_pending`.
+     *                     fallback for text-less PDF pages. Default off (unchanged Sprint-1
+     *                     behavior) — forwarded verbatim to hr-ai's `/extract`; hr-ai itself never
+     *                     calls the OCR model here, it only marks a page `ocr_pending`.
      * @param  int  $ocrPageCap  Per-document page cap (review.md §2.7) — bounds
-     *   worst-case cost/latency for one pathological upload.
+     *                           worst-case cost/latency for one pathological upload.
      * @param  bool  $confirmScopeChange  Sprint 7g Item 3 (F-1, ADR-0029-adjacent):
-     *   a checksum (content_hash) match is an IDENTITY match — it must never
-     *   silently re-type/re-scope the existing document just because the file
-     *   arrived under a different name or a different `--as-reference` flag.
-     *   Mirrors the exact manual-edit gate ({@see \App\Http\Controllers\Admin\DocumentController::reassignFacet()}):
-     *   default false reports the collision and changes nothing; true applies
-     *   it and records an `admin_manual` provenance event (never `filename_parse`
-     *   for THIS write, since a human explicitly asked for it).
+     *                                    a checksum (content_hash) match is an IDENTITY match — it must never
+     *                                    silently re-type/re-scope the existing document just because the file
+     *                                    arrived under a different name or a different `--as-reference` flag.
+     *                                    Mirrors the exact manual-edit gate ({@see DocumentController::reassignFacet()}):
+     *                                    default false reports the collision and changes nothing; true applies
+     *                                    it and records an `admin_manual` provenance event (never `filename_parse`
+     *                                    for THIS write, since a human explicitly asked for it).
      * @return array<string,mixed> per-file outcome for the batch response
      */
     public function ingest(
@@ -339,7 +345,7 @@ class DocumentIngestor
         // tagger: it is inherently multi-scope (no single convenio), so that
         // tagger would mis-propose one convenio.
         if (! $asReference && ($tag['review']['reason'] ?? null) === 'unresolved') {
-            \App\Jobs\ProposeDocumentTags::dispatch($document->id);
+            ProposeDocumentTags::dispatch($document->id);
         }
 
         // Sprint 7e (ADR-0026, review.md §2.1): mirrors the exact
@@ -350,7 +356,7 @@ class DocumentIngestor
         // OcrPage job per pending page and returns immediately, so ingest never
         // blocks on it.
         if (collect($pages)->contains(fn ($p) => ($p['extraction_source'] ?? null) === 'ocr_pending')) {
-            \App\Jobs\OcrDocumentPages::dispatch($document->id);
+            OcrDocumentPages::dispatch($document->id);
         }
 
         // Sprint 7d (ADR-0024, §8.5): an official convenio arriving ACTIVE in a
@@ -359,7 +365,7 @@ class DocumentIngestor
         // never a demotion, never a retrieval touch), and it never rethrows, so a
         // comparison failure cannot fail ingest.
         if ($document->authority_level === 'official_convenio' && $document->retrieval_status === 'active') {
-            \App\Jobs\RecheckRulingsForConvenio::dispatch($document->id);
+            RecheckRulingsForConvenio::dispatch($document->id);
         }
 
         // Sprint 7b-2 (ADR-0022): a reference_source IS auto-segmented — but by
@@ -373,7 +379,7 @@ class DocumentIngestor
         // fresh document's window can't have drifted yet, but the job must never
         // re-read it later regardless (see SegmentReferenceSource's docblock).
         if ($asReference) {
-            \App\Jobs\SegmentReferenceSource::dispatch(
+            SegmentReferenceSource::dispatch(
                 $document->id,
                 $document->validity_start?->toDateString(),
                 $document->validity_end?->toDateString(),
@@ -427,7 +433,7 @@ class DocumentIngestor
             $changes[] = [
                 'facet' => 'convenio',
                 'old_display' => $existingConvenioId ? $existing->convenio?->numero : null,
-                'new_display' => $newConvenioId ? \App\Models\Convenio::find($newConvenioId)?->numero : null,
+                'new_display' => $newConvenioId ? Convenio::find($newConvenioId)?->numero : null,
             ];
         }
 

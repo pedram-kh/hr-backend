@@ -9,6 +9,8 @@ use App\Models\DocumentType;
 use App\Models\ReferenceFact;
 use App\Models\Sector;
 use App\Models\Territory;
+use Database\Seeders\DocumentTypeSeeder;
+use Database\Seeders\RoleSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -38,8 +40,8 @@ class CoverageLeafResolutionTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->seed(\Database\Seeders\DocumentTypeSeeder::class);
-        $this->seed(\Database\Seeders\RoleSeeder::class);
+        $this->seed(DocumentTypeSeeder::class);
+        $this->seed(RoleSeeder::class);
         $this->territory = Territory::create(['code' => '31', 'name' => 'Navarra', 'level' => 'provincial', 'aliases' => []]);
     }
 

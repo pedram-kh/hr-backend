@@ -137,6 +137,23 @@ class GuardrailPolicy
         return $reason !== null && in_array($reason, $this->convertAllowedReasons(), true);
     }
 
+    /**
+     * Sprint 13, build step 9 (plan.md §B.6.1/§B.6.6) — effective =
+     * env baseline (`config('hr.general_lane.enabled')`) AND (admin ?? true).
+     * This is a RESTRICT-only knob, the mirror image of the raise-only
+     * threshold methods above: the admin toggle can only narrow the env
+     * baseline (switch the lane OFF even when the baseline is on), never
+     * widen it (a `true` admin value can't turn the lane on when the env
+     * baseline itself is off).
+     */
+    public function generalLaneEnabled(): bool
+    {
+        $baseline = (bool) config('hr.general_lane.enabled', false);
+        $admin = $this->snapshot()['general_lane_enabled'];
+
+        return $baseline && ($admin ?? true);
+    }
+
     /** Drop the cached snapshot so the next read reflects a write. */
     public static function flush(): void
     {
@@ -163,6 +180,7 @@ class GuardrailPolicy
      *   retrieval_score_floor:?float, answer_confidence_floor:?float,
      *   router_confidence_floor:?float, off_domain_message:?string,
      *   tone_constraints:?string, convert_allowed_reasons:?list<string>,
+     *   general_lane_enabled:?bool,
      *   blocked:list<array{pattern:string, kind:string}>
      * }
      */
@@ -183,6 +201,7 @@ class GuardrailPolicy
                 'off_domain_message' => $config->off_domain_message,
                 'tone_constraints' => $config->tone_constraints,
                 'convert_allowed_reasons' => $config->convert_allowed_reasons,
+                'general_lane_enabled' => $config->general_lane_enabled,
                 'blocked' => $blocked,
             ];
         });

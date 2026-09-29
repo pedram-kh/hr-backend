@@ -10,6 +10,7 @@ use App\Models\Territory;
 use App\Models\Topic;
 use App\Models\VocabularyProposal;
 use App\Support\TextNormalizer;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
@@ -170,7 +171,7 @@ class VocabularyProposalService
      * Fold a spelling into an existing value's `aliases` (the safe default). Never
      * creates a row. Idempotent (no duplicate alias).
      *
-     * @return array{0:string,1:\Illuminate\Database\Eloquent\Model}
+     * @return array{0:string,1:Model}
      */
     private function foldAlias(string $facet, int $targetId, string $value): array
     {
@@ -199,7 +200,7 @@ class VocabularyProposalService
      * never the propose flow (alias folding for a convenio is still allowed).
      *
      * @param  array<string,mixed>  $opts
-     * @return array{0:string,1:\Illuminate\Database\Eloquent\Model}
+     * @return array{0:string,1:Model}
      */
     private function createValue(string $facet, string $value, array $opts): array
     {

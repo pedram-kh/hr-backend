@@ -10,6 +10,7 @@ use App\Models\SalaryTableRow;
 use App\Services\ExtractionClient;
 use App\Support\TextNormalizer;
 use Illuminate\Console\Command;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -187,7 +188,7 @@ class SalaryImport extends Command
         return self::SUCCESS;
     }
 
-    /** @param  \Illuminate\Support\Collection<int,Document>  $pending */
+    /** @param  Collection<int,Document>  $pending */
     private function reportPendingAndGaps($pending): void
     {
         if ($pending->isNotEmpty()) {

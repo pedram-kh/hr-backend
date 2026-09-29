@@ -1,0 +1,150 @@
+{
+    "outcome": "escalate",
+    "escalated": true,
+    "escalation_reason": "low_confidence",
+    "answer": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+    "citations": [],
+    "categories": [],
+    "authority_used": [
+        "official_convenio"
+    ],
+    "trace": {
+        "profile": {
+            "employee_uuid": "e9b24989-2bab-f87e-120f-7cad8a568125",
+            "convenio_id": "#convenio_id:1",
+            "convenio_numero": "31TEST-13-22",
+            "territory_id": "#territory_id:1",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id:1",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "#as_of_date:today"
+        },
+        "router_decision": {
+            "label": "prose",
+            "confidence": 0.9,
+            "source": "llm",
+            "subqueries": [],
+            "model": "claude-haiku-4-5",
+            "note": null,
+            "cross_path": false,
+            "trace_fragment": [],
+            "decomposed_queries": []
+        },
+        "guardrail_check": {
+            "fired": false,
+            "reason": null,
+            "rule": null
+        },
+        "retrieval": {
+            "eligible_total": 1,
+            "returned": 1,
+            "top_score": 0.8,
+            "passes": [
+                {
+                    "kind": "main",
+                    "query": "¿Cuándo puedo pedir la excedencia?",
+                    "returned": 1,
+                    "eligible_total": 1,
+                    "top_score": 0.8
+                },
+                {
+                    "kind": "national_law",
+                    "query": "¿Cuándo puedo pedir la excedencia?",
+                    "returned": 1,
+                    "eligible_total": 1,
+                    "top_score": 0.8
+                }
+            ],
+            "rerank": {
+                "pool_k": 25,
+                "pool_size": 1,
+                "epsilon": 0.0001,
+                "boosted": [],
+                "synthesis_cap": 10
+            },
+            "chunks": [
+                {
+                    "chunk_id": 13220,
+                    "document_id": "#document_id:1",
+                    "page_from": 5,
+                    "page_to": 5,
+                    "score": 0.8,
+                    "authority_level": "official_convenio"
+                }
+            ]
+        },
+        "synthesis": {
+            "provider": "claude",
+            "model": "claude-sonnet-5",
+            "citation_count": 1,
+            "confidence": 0.9,
+            "grounding_signal": [],
+            "authority_used": [
+                "official_convenio"
+            ],
+            "trace_fragment": []
+        },
+        "floor_decision": {
+            "retrieval_score_floor": 0.4,
+            "answer_confidence_floor": 0.65,
+            "check_a_retrieval": true,
+            "check_b_citations": true,
+            "check_c_confidence_tiebreaker": {
+                "confidence": 0.9,
+                "below_floor": false,
+                "used_as_gate": false
+            },
+            "figure_grounding": {
+                "checked": true,
+                "grounded": true,
+                "figures": [],
+                "ungrounded": []
+            },
+            "grounding": {
+                "checked": true,
+                "grounded": false,
+                "claims": [
+                    {
+                        "claim": "tras un año de antigüedad",
+                        "grounded": false,
+                        "supporting_source": null
+                    }
+                ],
+                "ungrounded": [
+                    "tras un año de antigüedad"
+                ],
+                "error": null,
+                "gate": "entailment",
+                "trace_fragment": []
+            },
+            "authority_used": [
+                "official_convenio"
+            ],
+            "outcome": "escalate",
+            "escalation_reason": "low_confidence",
+            "note": "ungrounded claim (per-claim entailment gate)"
+        }
+    },
+    "escalation_card_facts": {
+        "reason": "low_confidence",
+        "explanation_facts": {
+            "asked": "Una pregunta de convenio/RR.HH. con una respuesta generada a partir de documentos consultados.",
+            "found": "Al menos una afirmación de la respuesta no está respaldada literalmente por el documento consultado: tras un año de antigüedad.",
+            "reason": "low_confidence",
+            "fix_link": "#view=review&tab=tagging",
+            "fix_action": "Leer la afirmación y el documento consultado; si el convenio SÍ lo dice, puede tratarse de una redacción ambigua que dificulta la comprobación automática.",
+            "fix_surface": "AI tagging (revisión)",
+            "sub_outcome": "entailment_failed",
+            "employee_told": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+            "stopped_reason": "Cualquier afirmación que no se pueda respaldar palabra por palabra con el documento se deriva a una persona, en vez de mostrarse."
+        },
+        "fix_action": "Leer la afirmación y el documento consultado; si el convenio SÍ lo dice, puede tratarse de una redacción ambigua que dificulta la comprobación automática.",
+        "fix_surface": "AI tagging (revisión)",
+        "fix_link": "#view=review&tab=tagging"
+    }
+}

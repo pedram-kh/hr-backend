@@ -8,6 +8,7 @@ use App\Models\Employee;
 use App\Models\EscalationCard;
 use App\Models\Sector;
 use App\Models\Territory;
+use App\Services\EscalationExplanationService;
 use App\Services\ExtractionClient;
 use App\Support\EscalationExplainer;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -89,7 +90,7 @@ class EscalationExplanationServiceTest extends TestCase
         };
         $this->app->instance(ExtractionClient::class, $fake);
 
-        app(\App\Services\EscalationExplanationService::class)->generateFor($card);
+        app(EscalationExplanationService::class)->generateFor($card);
 
         $card->refresh();
         $this->assertNotNull($card->explanation_text);
@@ -112,7 +113,7 @@ class EscalationExplanationServiceTest extends TestCase
         };
         $this->app->instance(ExtractionClient::class, $fake);
 
-        app(\App\Services\EscalationExplanationService::class)->generateFor($card);
+        app(EscalationExplanationService::class)->generateFor($card);
 
         $card->refresh();
         $this->assertNull($card->explanation_text);
@@ -135,7 +136,7 @@ class EscalationExplanationServiceTest extends TestCase
         };
         $this->app->instance(ExtractionClient::class, $fake);
 
-        app(\App\Services\EscalationExplanationService::class)->generateFor($card);
+        app(EscalationExplanationService::class)->generateFor($card);
 
         $card->refresh();
         $this->assertNull($card->explanation_text);
@@ -155,7 +156,7 @@ class EscalationExplanationServiceTest extends TestCase
         };
         $this->app->instance(ExtractionClient::class, $fake);
 
-        app(\App\Services\EscalationExplanationService::class)->generateFor($card);
+        app(EscalationExplanationService::class)->generateFor($card);
 
         $card->refresh();
         $this->assertNull($card->explanation_text);
@@ -184,7 +185,7 @@ class EscalationExplanationServiceTest extends TestCase
         };
         $this->app->instance(ExtractionClient::class, $fake);
 
-        app(\App\Services\EscalationExplanationService::class)->generateFor($card);
+        app(EscalationExplanationService::class)->generateFor($card);
 
         $card->refresh();
         $this->assertNull($card->explanation_text);

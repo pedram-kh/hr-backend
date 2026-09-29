@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Admin;
+use App\Models\AnswerModelSetting;
 use App\Models\ChatMessage;
 use App\Models\ChatSession;
 use App\Models\Convenio;
@@ -12,12 +13,17 @@ use App\Models\DocumentType;
 use App\Models\Employee;
 use App\Models\EscalationCard;
 use App\Models\GuardrailConfig;
+use App\Models\MessageTrace;
 use App\Models\Sector;
 use App\Models\Territory;
+use App\Services\ChatService;
 use App\Services\ExtractionClient;
+use App\Services\GuardrailPolicy;
 use Database\Seeders\RoleSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Testing\TestResponse;
+use Spatie\Permission\PermissionRegistrar;
 use Tests\TestCase;
 
 /**
@@ -58,7 +64,7 @@ class Sprint6GuardrailInvariantTest extends TestCase
         // ChatService resolves it via AnswerModelSetting::current() (id = 1), so we
         // pin the row to id = 1 explicitly: Postgres sequences are NOT rolled back
         // between tests, so relying on the auto-increment landing on 1 is flaky.
-        $setting = new \App\Models\AnswerModelSetting(['provider' => 'claude']);
+        $setting = new AnswerModelSetting(['provider' => 'claude']);
         $setting->id = 1;
         $setting->save();
         $setting->setKey('sk-test-key-abcd', null);
@@ -66,7 +72,7 @@ class Sprint6GuardrailInvariantTest extends TestCase
         // The `array` cache driver persists for the whole test process, so a prior
         // test's GuardrailPolicy snapshot would survive this test's DB rollback.
         // Drop it so every test sees a clean baseline.
-        \App\Services\GuardrailPolicy::flush();
+        GuardrailPolicy::flush();
     }
 
     private function buildWorld(): void
@@ -131,7 +137,7 @@ class Sprint6GuardrailInvariantTest extends TestCase
     private function reset(): void
     {
         $this->app['auth']->forgetGuards();
-        app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
+        app(PermissionRegistrar::class)->forgetCachedPermissions();
     }
 
     /** @return array<string,string> */
@@ -140,14 +146,14 @@ class Sprint6GuardrailInvariantTest extends TestCase
         return ['Authorization' => 'Bearer '.$admin->createToken('t')->plainTextToken, 'Accept' => 'application/json'];
     }
 
-    private function postGuardrails(Admin $admin, array $body): \Illuminate\Testing\TestResponse
+    private function postGuardrails(Admin $admin, array $body): TestResponse
     {
         $this->reset();
 
         return $this->postJson('/admin/guardrails', $body, $this->auth($admin));
     }
 
-    private function getGuardrails(Admin $admin): \Illuminate\Testing\TestResponse
+    private function getGuardrails(Admin $admin): TestResponse
     {
         $this->reset();
 
@@ -246,7 +252,7 @@ class Sprint6GuardrailInvariantTest extends TestCase
     /** The persisted `floor_decision.retrieval_score_floor` for a message (admin-visible, full trace). */
     private function persistedFloor(int $messageId): float
     {
-        $trace = \App\Models\MessageTrace::where('message_id', $messageId)->first()?->trace ?? [];
+        $trace = MessageTrace::where('message_id', $messageId)->first()?->trace ?? [];
 
         return (float) ($trace['floor_decision']['retrieval_score_floor'] ?? -1);
     }
@@ -286,7 +292,7 @@ class Sprint6GuardrailInvariantTest extends TestCase
         // ONE fixed neutral message"). The configured message is still
         // stored/returned to HR elsewhere (guardrails settings), just never
         // shown to the employee in chat any more.
-        $this->assertSame(\App\Services\ChatService::EMPLOYEE_ESCALATION_MESSAGE, $res['answer']);
+        $this->assertSame(ChatService::EMPLOYEE_ESCALATION_MESSAGE, $res['answer']);
     }
 
     // ---- 5. Tone: synthesis-local only; /ground gets the RAW question --------

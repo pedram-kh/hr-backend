@@ -63,6 +63,16 @@ class GuardrailsController extends Controller
                 'allowed' => $this->policy->convertAllowedReasons(),
                 'locked' => ['sensitive_topic'], // never convertible — the floor
             ],
+            // Sprint 13, step 9 (plan.md §B.6.6) — RESTRICT-only (the mirror
+            // image of the threshold knobs above): `admin` can only narrow
+            // `env_baseline`, never widen it. `env_baseline` is surfaced so
+            // the UI can explain a toggle that reads as "on" but is actually
+            // off because the deploy-level flag is off.
+            'general_lane' => [
+                'admin' => $config->general_lane_enabled,
+                'env_baseline' => (bool) config('hr.general_lane.enabled', false),
+                'effective' => $this->policy->generalLaneEnabled(),
+            ],
             'blocked_topics' => GuardrailBlockedTopic::query()
                 ->orderByDesc('id')
                 ->get()

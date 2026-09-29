@@ -2,7 +2,7 @@
 
 namespace App\Support;
 
-use App\Models\ReferenceFact;
+use App\Services\ChatService;
 
 /**
  * EscalationExplainer — Sprint 7g Item 1 (ADR-0029).
@@ -53,6 +53,7 @@ final class EscalationExplainer
         'low_confidence.cross_path',
         'low_confidence.answer_model_not_configured',
         'low_confidence.provider_error',
+        'low_confidence.period_unsupported',
         'low_confidence.unspecified',
         // --- Sprint 7c Phase 2 composition ------------------------------------
         'conflict.fact_vs_convenio',
@@ -101,6 +102,27 @@ final class EscalationExplainer
         'estatuto_fallback_gap.tagging_under_review',
         'estatuto_fallback_gap.scan_no_text',
         'estatuto_fallback_gap.not_yet_embedded',
+        // --- Sprint 13 (plan.md §D.12) — the five agent-engine reasons --------
+        'general_lane_blocked.question_prescreen',
+        'general_lane_blocked.figure',
+        'general_lane_blocked.entitlement_language',
+        'general_lane_blocked.ungrounded',
+        'profile_incomplete.professional_group',
+        'profile_incomplete.job_category',
+        'profile_incomplete.seniority',
+        'profile_incomplete.contract_type',
+        'profile_incomplete.asserted_differs',
+        'employee_requested_review.answer_reviewed',
+        'planner_escalated.off_domain',
+        'planner_escalated.unsafe',
+        'planner_escalated.unanswerable',
+        'planner_escalated.needs_human_judgement',
+        'planner_escalated.other',
+        'tool_budget_exhausted.rounds',
+        'tool_budget_exhausted.tool_calls',
+        'tool_budget_exhausted.clarifications',
+        'tool_budget_exhausted.wall_clock',
+        'tool_budget_exhausted.malformed',
     ];
 
     /**
@@ -122,7 +144,7 @@ final class EscalationExplainer
             'fix_action' => $facts['fix_action'],
             'fix_surface' => $facts['fix_surface'],
             'fix_link' => $facts['fix_link'],
-            'employee_told' => \App\Services\ChatService::EMPLOYEE_ESCALATION_MESSAGE,
+            'employee_told' => ChatService::EMPLOYEE_ESCALATION_MESSAGE,
         ];
     }
 
@@ -135,7 +157,7 @@ final class EscalationExplainer
     public static function factsToSentences(array $facts): string
     {
         return trim(sprintf(
-            "%s %s %s Acción sugerida: %s.",
+            '%s %s %s Acción sugerida: %s.',
             $facts['asked'],
             $facts['found'],
             $facts['stopped_reason'],
@@ -176,6 +198,15 @@ final class EscalationExplainer
             // — not detected from a floor/router trace shape like every other
             // reason here.
             'quality_sample_wrong' => $trace['quality_sample']['failure_kind'] ?? 'other',
+            // --- Sprint 13 (plan.md §D.12) — read from the structured `agent`
+            // trace block AgentChatService/its rules stash before persisting
+            // (never string-parsed from a free-text `note`, same discipline
+            // as every other reason above). -----------------------------------
+            'general_lane_blocked' => $trace['agent']['general_lane_blocked']['sub'] ?? 'question_prescreen',
+            'profile_incomplete' => $trace['agent']['profile_incomplete']['field'] ?? 'professional_group',
+            'employee_requested_review' => 'answer_reviewed',
+            'planner_escalated' => $trace['agent']['planner_escalation']['category'] ?? 'other',
+            'tool_budget_exhausted' => $trace['agent']['budget_exhausted']['sub'] ?? 'rounds',
             default => 'unspecified',
         };
     }
@@ -201,6 +232,12 @@ final class EscalationExplainer
         $fd = $trace['floor_decision'] ?? [];
         $note = (string) ($fd['note'] ?? '');
 
+        // Sprint 13 (plan.md §F.15, user-directed) — checked FIRST: this
+        // fires at `turn_start`, before retrieval/synthesis ever run, so it
+        // must not fall through to any of the post-retrieval checks below.
+        if (isset($trace['agent']['period_unsupported'])) {
+            return 'period_unsupported';
+        }
         if (($trace['aggregation_guard']['fired'] ?? false) === true) {
             return 'aggregation';
         }
@@ -495,6 +532,14 @@ final class EscalationExplainer
                     'fix_surface' => 'AI tagging (revisión)',
                     'fix_link' => $taggingLink(),
                 ],
+                'period_unsupported' => fn (array $t) => [
+                    'asked' => sprintf('Una pregunta que menciona explícitamente un año pasado (%s).', $t['agent']['period_unsupported']['matched_year'] ?? '?'),
+                    'found' => 'El asistente todavía no sabe responder para un periodo distinto al actual — no se buscó ningún dato.',
+                    'stopped_reason' => 'Responder con los datos del año actual a una pregunta sobre un año pasado sería una respuesta segura pero incorrecta; se deriva en vez de arriesgarlo.',
+                    'fix_action' => 'Responder manualmente para el año indicado. La consulta de periodos pasados está pendiente de implementación (ver ficha de producto).',
+                    'fix_surface' => 'ninguna — funcionalidad pendiente',
+                    'fix_link' => null,
+                ],
             ],
             'conflict' => [
                 'fact_vs_convenio' => fn (array $t) => [
@@ -775,6 +820,177 @@ final class EscalationExplainer
                     'fix_action' => 'Esperar a que termine el indexado; si no avanza en unas horas, avisar al equipo técnico.',
                     'fix_surface' => 'Documentos',
                     'fix_link' => $documentsLink(),
+                ],
+            ],
+            // --- Sprint 13 (plan.md §D.12, §B.6.3/§B.4.1/§D.13/§B.5/§C.9) --------
+            'general_lane_blocked' => [
+                'question_prescreen' => fn (array $t) => [
+                    'asked' => 'El empleado hizo una pregunta que pide una cantidad, un plazo o un derecho concreto propio.',
+                    'found' => 'No se buscó ningún dato de conocimiento general — el sistema detecta este tipo de pregunta ANTES de intentar la respuesta general y la deriva directamente.',
+                    'stopped_reason' => 'El conocimiento general nunca debe responder cifras, plazos o derechos concretos de la persona empleada.',
+                    'fix_action' => 'Si la pregunta tenía una respuesta concreta en el convenio o en datos de referencia, revisar por qué no se encontró por esa vía.',
+                    'fix_surface' => 'Documentos',
+                    'fix_link' => $documentsLink(),
+                ],
+                'figure' => fn (array $t) => [
+                    'asked' => 'Una pregunta de conocimiento general (definición de un concepto laboral).',
+                    'found' => 'El sistema de conocimiento general generó una respuesta que contenía una cifra o cantidad concreta.',
+                    'stopped_reason' => 'El conocimiento general nunca debe mostrar cifras concretas — solo explicaciones. Se descarta la respuesta y se deriva.',
+                    'fix_action' => 'Revisar el detalle de la traza para ver la cifra concreta que se generó y ajustar la instrucción del conocimiento general si se repite.',
+                    'fix_surface' => 'Escalations (tarjeta)',
+                    'fix_link' => null,
+                ],
+                'entitlement_language' => fn (array $t) => [
+                    'asked' => 'Una pregunta de conocimiento general (definición de un concepto laboral).',
+                    'found' => 'El sistema de conocimiento general generó una respuesta con lenguaje de derecho concreto ("tienes derecho a…", "te corresponde…").',
+                    'stopped_reason' => 'El conocimiento general solo puede explicar conceptos en general, nunca afirmar un derecho concreto de la persona. Se descarta la respuesta y se deriva.',
+                    'fix_action' => 'Revisar el detalle de la traza; ajustar la instrucción del conocimiento general si se repite.',
+                    'fix_surface' => 'Escalations (tarjeta)',
+                    'fix_link' => null,
+                ],
+                'ungrounded' => fn (array $t) => [
+                    'asked' => 'Una pregunta de conocimiento general (definición de un concepto laboral).',
+                    'found' => 'La respuesta generada no pudo verificarse contra ninguna fuente consultada.',
+                    'stopped_reason' => 'Una respuesta de conocimiento general sin fuente verificable no se muestra — se deriva en su lugar.',
+                    'fix_action' => 'Revisar si la fuente consultada (BOE, Seguridad Social…) estaba disponible en el momento de la consulta.',
+                    'fix_surface' => 'Escalations (tarjeta)',
+                    'fix_link' => null,
+                ],
+            ],
+            'profile_incomplete' => [
+                'professional_group' => fn (array $t) => [
+                    'asked' => 'Una pregunta cuya respuesta depende del grupo profesional de la persona empleada.',
+                    'found' => 'La ficha de la persona empleada no tiene registrado el grupo profesional.',
+                    'stopped_reason' => 'El grupo profesional viene siempre del Directorio, nunca se le pregunta directamente a la persona empleada.',
+                    'fix_action' => 'Completar el grupo profesional en la ficha de la persona empleada.',
+                    'fix_surface' => 'Directorio',
+                    'fix_link' => $empLink($t['profile']['employee_uuid'] ?? null),
+                ],
+                'job_category' => fn (array $t) => [
+                    'asked' => 'Una pregunta cuya respuesta depende de la categoría de la persona empleada.',
+                    'found' => 'La ficha de la persona empleada no tiene registrada la categoría.',
+                    'stopped_reason' => 'La categoría viene siempre del Directorio, nunca se le pregunta directamente a la persona empleada.',
+                    'fix_action' => 'Completar la categoría en la ficha de la persona empleada.',
+                    'fix_surface' => 'Directorio',
+                    'fix_link' => $empLink($t['profile']['employee_uuid'] ?? null),
+                ],
+                'seniority' => fn (array $t) => [
+                    'asked' => 'Una pregunta cuya respuesta depende de la antigüedad de la persona empleada.',
+                    'found' => 'La ficha de la persona empleada no tiene registrada la fecha de alta.',
+                    'stopped_reason' => 'La antigüedad viene siempre del Directorio, nunca se le pregunta directamente a la persona empleada.',
+                    'fix_action' => 'Completar la fecha de alta en la ficha de la persona empleada.',
+                    'fix_surface' => 'Directorio',
+                    'fix_link' => $empLink($t['profile']['employee_uuid'] ?? null),
+                ],
+                'contract_type' => fn (array $t) => [
+                    'asked' => 'Una pregunta cuya respuesta depende del tipo de contrato de la persona empleada.',
+                    'found' => 'El Directorio no recoge hoy el tipo de contrato como un campo propio.',
+                    'stopped_reason' => 'El tipo de contrato no se le pregunta directamente a la persona empleada; al no estar en el Directorio, la pregunta se deriva para que RR. HH. la responda a mano.',
+                    'fix_action' => 'Responder directamente con el tipo de contrato de esta persona (no es un hueco de datos que el sistema pueda corregir por sí solo).',
+                    'fix_surface' => 'ninguna — atención directa',
+                    'fix_link' => null,
+                ],
+                'asserted_differs' => fn (array $t) => [
+                    'asked' => 'Una pregunta que da por hecho un grupo, categoría, antigüedad o tipo de contrato DISTINTO al que consta en el Directorio (p. ej. "si fuera del grupo 3…").',
+                    'found' => 'La ficha de la persona empleada ya tiene ese dato registrado, con un valor distinto al que la pregunta asume.',
+                    'stopped_reason' => 'El sistema nunca responde sobre un dato que la persona empleada afirma pero que no coincide con su ficha — puede ser un error de la ficha o una situación hipotética, y ambas necesitan que una persona lo revise.',
+                    'fix_action' => 'Confirmar con la persona empleada cuál es el dato correcto y, si la ficha está mal, corregirla en el Directorio.',
+                    'fix_surface' => 'Directorio',
+                    'fix_link' => $empLink($t['profile']['employee_uuid'] ?? null),
+                ],
+            ],
+            'employee_requested_review' => [
+                'answer_reviewed' => fn (array $t) => [
+                    'asked' => 'La persona empleada ya recibió una respuesta y pidió expresamente que RR. HH. la revise.',
+                    'found' => 'No aplica — no es un hueco de datos, es una petición directa sobre una respuesta ya dada.',
+                    'stopped_reason' => 'Petición explícita de revisión por parte de la persona empleada.',
+                    'fix_action' => 'Revisar la respuesta original (incluida en esta tarjeta) y confirmar o corregir con la persona empleada.',
+                    'fix_surface' => 'Escalations (tarjeta)',
+                    'fix_link' => null,
+                ],
+            ],
+            'planner_escalated' => [
+                'off_domain' => fn (array $t) => [
+                    'asked' => 'El asistente decidió, por su propio criterio, que la pregunta no es de RR. HH./laboral.',
+                    'found' => 'No se buscó ningún dato — el asistente derivó antes de intentar responder.',
+                    'stopped_reason' => 'El motivo concreto que dio el asistente está en el detalle de esta tarjeta.',
+                    'fix_action' => 'Revisar el motivo indicado por el asistente; si la pregunta SÍ era de RR. HH., revisar el enrutado.',
+                    'fix_surface' => 'Escalations (tarjeta)',
+                    'fix_link' => null,
+                ],
+                'unsafe' => fn (array $t) => [
+                    'asked' => 'El asistente decidió, por su propio criterio, que la pregunta no es segura de responder automáticamente.',
+                    'found' => 'No se buscó ningún dato — el asistente derivó antes de intentar responder.',
+                    'stopped_reason' => 'El motivo concreto que dio el asistente está en el detalle de esta tarjeta.',
+                    'fix_action' => 'Responder directamente a la persona empleada por otro canal.',
+                    'fix_surface' => 'ninguna — atención directa',
+                    'fix_link' => null,
+                ],
+                'unanswerable' => fn (array $t) => [
+                    'asked' => 'El asistente decidió, por su propio criterio, que no podía responder esta pregunta con las herramientas disponibles.',
+                    'found' => 'Se intentaron una o varias herramientas (ver el detalle "Agente" de la traza) sin llegar a una respuesta.',
+                    'stopped_reason' => 'El motivo concreto que dio el asistente está en el detalle de esta tarjeta.',
+                    'fix_action' => 'Revisar el detalle "Agente" de la traza para ver qué se intentó y por qué no fue suficiente.',
+                    'fix_surface' => 'Escalations (tarjeta)',
+                    'fix_link' => null,
+                ],
+                'needs_human_judgement' => fn (array $t) => [
+                    'asked' => 'El asistente decidió, por su propio criterio, que esta pregunta necesita el juicio de una persona (p. ej. una valoración de un caso concreto).',
+                    'found' => 'No aplica — es una decisión del asistente, no un hueco de datos.',
+                    'stopped_reason' => 'El motivo concreto que dio el asistente está en el detalle de esta tarjeta.',
+                    'fix_action' => 'Revisar y responder con criterio humano.',
+                    'fix_surface' => 'ninguna — atención directa',
+                    'fix_link' => null,
+                ],
+                'other' => fn (array $t) => [
+                    'asked' => 'El asistente decidió derivar esta pregunta por un motivo que no encaja en las categorías anteriores.',
+                    'found' => 'No aplica — es una decisión del asistente.',
+                    'stopped_reason' => 'El motivo concreto que dio el asistente está en el detalle de esta tarjeta.',
+                    'fix_action' => 'Revisar el motivo indicado por el asistente.',
+                    'fix_surface' => 'Escalations (tarjeta)',
+                    'fix_link' => null,
+                ],
+            ],
+            'tool_budget_exhausted' => [
+                'rounds' => fn (array $t) => [
+                    'asked' => 'Una pregunta que necesitó varios pasos de búsqueda encadenados.',
+                    'found' => 'El asistente agotó el número máximo de rondas de decisión (4) sin llegar a una respuesta ni derivar por sí mismo.',
+                    'stopped_reason' => 'Un límite de rondas evita que el asistente quede dando vueltas indefinidamente sobre una pregunta difícil.',
+                    'fix_action' => 'Revisar el detalle "Agente" de la traza para ver qué intentó en cada ronda.',
+                    'fix_surface' => 'Escalations (tarjeta)',
+                    'fix_link' => null,
+                ],
+                'tool_calls' => fn (array $t) => [
+                    'asked' => 'Una pregunta que necesitó muchas búsquedas encadenadas.',
+                    'found' => 'El asistente agotó el número máximo de búsquedas (6) sin llegar a una respuesta ni derivar por sí mismo.',
+                    'stopped_reason' => 'Un límite de búsquedas por turno evita un coste y una espera excesivos sobre una pregunta difícil.',
+                    'fix_action' => 'Revisar el detalle "Agente" de la traza para ver qué se intentó.',
+                    'fix_surface' => 'Escalations (tarjeta)',
+                    'fix_link' => null,
+                ],
+                'clarifications' => fn (array $t) => [
+                    'asked' => 'Una conversación en la que el asistente ya había pedido dos aclaraciones a la persona empleada.',
+                    'found' => 'El asistente intentó pedir una TERCERA aclaración en la misma conversación.',
+                    'stopped_reason' => 'El límite de dos aclaraciones por conversación evita un ida y vuelta indefinido con la persona empleada.',
+                    'fix_action' => 'Revisar la conversación completa; puede que la pregunta original necesite una respuesta directa de RR. HH.',
+                    'fix_surface' => 'Escalations (tarjeta)',
+                    'fix_link' => null,
+                ],
+                'wall_clock' => fn (array $t) => [
+                    'asked' => 'Una pregunta cuya resolución tardó demasiado.',
+                    'found' => 'El asistente superó el tiempo máximo permitido (45 s) para decidir sin llegar a una respuesta.',
+                    'stopped_reason' => 'Un límite de tiempo evita que la persona empleada espere indefinidamente una respuesta.',
+                    'fix_action' => 'Si esto se repite, avisar al equipo técnico — puede indicar un problema de rendimiento del asistente o de sus herramientas.',
+                    'fix_surface' => 'Escalations (tarjeta)',
+                    'fix_link' => null,
+                ],
+                'malformed' => fn (array $t) => [
+                    'asked' => 'Una pregunta cualquiera.',
+                    'found' => 'El asistente generó repetidamente una llamada a una herramienta inválida o mal formada.',
+                    'stopped_reason' => 'Tras varios intentos inválidos seguidos, el sistema prefiere derivar antes que seguir reintentando.',
+                    'fix_action' => 'Avisar al equipo técnico si esto se repite — puede indicar un problema con las herramientas o su descripción para el asistente.',
+                    'fix_surface' => 'Escalations (tarjeta)',
+                    'fix_link' => null,
                 ],
             ],
         ];

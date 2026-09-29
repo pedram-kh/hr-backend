@@ -1,0 +1,64 @@
+{
+    "outcome": "needs_category",
+    "escalated": false,
+    "escalation_reason": null,
+    "answer": "Para darte la cifra exacta necesito tu categoría profesional. Elige la que te corresponde en tu convenio:",
+    "citations": [],
+    "categories": [
+        {
+            "id": "#id:1",
+            "name": "Peón",
+            "group_code": "1"
+        }
+    ],
+    "authority_used": [],
+    "trace": {
+        "profile": {
+            "employee_uuid": "28fe1887-c142-b2cd-9c71-4d05a612b758",
+            "convenio_id": "#convenio_id:1",
+            "convenio_numero": "31TEST-13-10",
+            "territory_id": "#territory_id:1",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id:1",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "#as_of_date:today"
+        },
+        "router_decision": {
+            "label": "salary",
+            "confidence": 1,
+            "source": "deterministic_salary",
+            "subqueries": [],
+            "model": null,
+            "note": "matched deterministic salary pre-classifier",
+            "cross_path": false,
+            "trace_fragment": [],
+            "decomposed_queries": []
+        },
+        "guardrail_check": {
+            "fired": false,
+            "reason": null,
+            "rule": null
+        },
+        "salary": {
+            "convenio_id": "#convenio_id:1",
+            "as_of_date": "#as_of_date:today",
+            "table_id": "#table_id:1",
+            "year": 2026,
+            "year_selection": "exact",
+            "outcome": "needs_category",
+            "note": "profile category absent/ambiguous — constrained pick offered"
+        },
+        "floor_decision": {
+            "path": "salary_sql",
+            "outcome": "needs_category",
+            "escalation_reason": null,
+            "note": "constrained category pick offered (single-turn, §4)"
+        }
+    },
+    "escalation_card_facts": null
+}

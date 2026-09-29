@@ -1,0 +1,66 @@
+{
+    "outcome": "escalate",
+    "escalated": true,
+    "escalation_reason": "off_domain",
+    "answer": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+    "citations": [],
+    "categories": [],
+    "authority_used": [],
+    "trace": {
+        "profile": {
+            "employee_uuid": "c2a4a16c-2975-7538-e143-5236f330d1c6",
+            "convenio_id": "#convenio_id:1",
+            "convenio_numero": "31TEST-13-06",
+            "territory_id": "#territory_id:1",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id:1",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "#as_of_date:today"
+        },
+        "router_decision": {
+            "label": "off_domain",
+            "confidence": 0.9,
+            "source": "llm",
+            "subqueries": [],
+            "model": "claude-haiku-4-5",
+            "note": null,
+            "cross_path": false,
+            "trace_fragment": [],
+            "decomposed_queries": []
+        },
+        "guardrail_check": {
+            "fired": false,
+            "reason": null,
+            "rule": null
+        },
+        "floor_decision": {
+            "retrieval_score_floor": 0.4,
+            "answer_confidence_floor": 0.65,
+            "outcome": "escalate",
+            "escalation_reason": "off_domain",
+            "note": "router classified off_domain"
+        }
+    },
+    "escalation_card_facts": {
+        "reason": "off_domain",
+        "explanation_facts": {
+            "asked": "La consulta se clasificó como ajena a RR.HH./convenio.",
+            "found": "No se buscó en la documentación disponible porque la consulta no trata sobre convenio, salario o RR.HH.",
+            "reason": "off_domain",
+            "fix_link": "#view=review&tab=vocabulary",
+            "fix_action": "Si la pregunta SÍ era sobre convenio o RR.HH., revisar por qué se clasificó como ajena y avisar al equipo técnico si se repite.",
+            "fix_surface": "Revisión · Vocabulario/AI tagging",
+            "sub_outcome": "router_off_domain",
+            "employee_told": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+            "stopped_reason": "La consulta se clasificó automáticamente como fuera de este alcance."
+        },
+        "fix_action": "Si la pregunta SÍ era sobre convenio o RR.HH., revisar por qué se clasificó como ajena y avisar al equipo técnico si se repite.",
+        "fix_surface": "Revisión · Vocabulario/AI tagging",
+        "fix_link": "#view=review&tab=vocabulary"
+    }
+}

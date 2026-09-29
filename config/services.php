@@ -51,6 +51,13 @@ return [
         'router_model' => env('HR_AI_ROUTER_MODEL', 'claude-haiku-4-5'),
         'router_endpoint' => env('HR_AI_ROUTER_ENDPOINT', env('HR_AI_ANSWER_ENDPOINT', 'https://api.anthropic.com')),
 
+        // Planner (Sprint 13, plan.md §C.7) — its OWN knob, never aliased to
+        // answer_model: a future chat-quality swap must not silently change
+        // routing. Same key path (AnswerModelSetting), same EU-endpoint
+        // constraint. Endpoint defaults to the answer endpoint.
+        'planner_model' => env('HR_AI_PLANNER_MODEL', 'claude-sonnet-5'),
+        'planner_endpoint' => env('HR_AI_PLANNER_ENDPOINT', env('HR_AI_ANSWER_ENDPOINT', 'https://api.anthropic.com')),
+
         // OCR fallback for scanned/text-less pages (Sprint 7e, ADR-0026, review.md
         // §1.5/§2.2). Deliberately its OWN config value, NOT aliased to
         // answer_model — a future chat-quality-driven change to answer_model must
