@@ -1,0 +1,58 @@
+{
+    "outcome": "escalate",
+    "escalated": true,
+    "escalation_reason": "off_domain",
+    "answer": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+    "citations": [],
+    "categories": [],
+    "authority_used": [],
+    "trace": {
+        "profile": {
+            "employee_uuid": "ea866a54-24ef-06b8-1b37-e63b7ea027bd",
+            "convenio_id": "#convenio_id:1",
+            "convenio_numero": "31TEST-13-04",
+            "territory_id": "#territory_id:1",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id:1",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "#as_of_date:today"
+        },
+        "router_decision": null,
+        "guardrail_check": {
+            "fired": true,
+            "reason": "off_domain",
+            "rule": "admin_off_domain",
+            "layer": "admin",
+            "matched_pattern": "gimnasio"
+        },
+        "floor_decision": {
+            "retrieval_score_floor": 0.4,
+            "answer_confidence_floor": 0.65,
+            "outcome": "escalate",
+            "escalation_reason": "off_domain",
+            "note": "admin guardrail layer (admin_off_domain) — additive, raise-only"
+        }
+    },
+    "escalation_card_facts": {
+        "reason": "off_domain",
+        "explanation_facts": {
+            "asked": "El empleado hizo una pregunta que coincide con un tema que un administrador ha marcado como fuera de alcance.",
+            "found": "No se buscó ningún dato — la pregunta contiene un texto marcado por un administrador como fuera de alcance.",
+            "reason": "off_domain",
+            "fix_link": "#view=guardrails",
+            "fix_action": "Revisar en Guardarraíles esta regla bloqueada; ajustarla si está bloqueando preguntas legítimas.",
+            "fix_surface": "Guardarraíles (admin)",
+            "sub_outcome": "admin_off_domain",
+            "employee_told": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+            "stopped_reason": "Los administradores pueden marcar temas adicionales como fuera de alcance; esta pregunta coincidió con uno de ellos."
+        },
+        "fix_action": "Revisar en Guardarraíles esta regla bloqueada; ajustarla si está bloqueando preguntas legítimas.",
+        "fix_surface": "Guardarraíles (admin)",
+        "fix_link": "#view=guardrails"
+    }
+}

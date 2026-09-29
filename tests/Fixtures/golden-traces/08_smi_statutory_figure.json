@@ -1,0 +1,69 @@
+{
+    "outcome": "escalate",
+    "escalated": true,
+    "escalation_reason": "salary_coverage_gap",
+    "answer": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+    "citations": [],
+    "categories": [],
+    "authority_used": [],
+    "trace": {
+        "profile": {
+            "employee_uuid": "24aab857-7c1f-896b-18d0-1e643c101c5b",
+            "convenio_id": "#convenio_id:1",
+            "convenio_numero": "31TEST-13-08",
+            "territory_id": "#territory_id:1",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id:1",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "#as_of_date:today"
+        },
+        "router_decision": {
+            "label": "salary",
+            "confidence": 1,
+            "source": "deterministic_salary",
+            "subqueries": [],
+            "model": null,
+            "note": "matched deterministic salary pre-classifier",
+            "cross_path": false,
+            "trace_fragment": [],
+            "decomposed_queries": []
+        },
+        "guardrail_check": {
+            "fired": false,
+            "reason": null,
+            "rule": null
+        },
+        "salary": {
+            "outcome": "escalate",
+            "note": "statutory figure (SMI/salario mínimo) — never sourced from the employee's own convenio salary table, regardless of whether one exists (Correction-01)"
+        },
+        "floor_decision": {
+            "path": "salary_sql",
+            "outcome": "escalate",
+            "escalation_reason": "salary_coverage_gap",
+            "note": "statutory figure (SMI/salario mínimo) — never sourced from the employee's own convenio salary table, regardless of whether one exists (Correction-01)"
+        }
+    },
+    "escalation_card_facts": {
+        "reason": "salary_coverage_gap",
+        "explanation_facts": {
+            "asked": "El empleado preguntó por el SMI (salario mínimo interprofesional) u otra cifra salarial estatutaria general.",
+            "found": "No se consultó la tabla salarial del empleado — el SMI es una cifra legal general que fija el Estado, no un dato de la tabla de ningún convenio concreto, así que su categoría o tabla (exista o no) nunca iba a contener la respuesta.",
+            "reason": "salary_coverage_gap",
+            "fix_link": null,
+            "fix_action": "Responder directamente con el SMI vigente (cifra pública, no requiere revisar el perfil del empleado) o derivar a la fuente oficial (BOE/SMI anual).",
+            "fix_surface": "ninguna — cifra pública, respuesta manual",
+            "sub_outcome": "statutory_figure",
+            "employee_told": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+            "stopped_reason": "Responder con la cifra de la tabla del empleado habría sido una respuesta real pero equivocada (no responde a lo que se preguntó); el sistema nunca sustituye una cifra estatutaria por una cifra de convenio."
+        },
+        "fix_action": "Responder directamente con el SMI vigente (cifra pública, no requiere revisar el perfil del empleado) o derivar a la fuente oficial (BOE/SMI anual).",
+        "fix_surface": "ninguna — cifra pública, respuesta manual",
+        "fix_link": null
+    }
+}

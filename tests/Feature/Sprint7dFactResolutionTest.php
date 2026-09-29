@@ -4,7 +4,10 @@ namespace Tests\Feature;
 
 use App\Models\Admin;
 use App\Models\Convenio;
+use App\Models\ConvenioGroup;
+use App\Models\Employee;
 use App\Models\ReferenceFact;
+use App\Models\ReferenceFactGroupScope;
 use App\Models\Sector;
 use App\Models\TagEvent;
 use App\Models\Territory;
@@ -13,6 +16,8 @@ use App\Services\ReferenceFactAnswerService;
 use App\Support\GroupLabel;
 use Database\Seeders\RoleSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
+use Spatie\Permission\PermissionRegistrar;
 use Tests\TestCase;
 
 /**
@@ -71,21 +76,21 @@ class Sprint7dFactResolutionTest extends TestCase
      * helpers exist so the two answer-path tests below keep exercising the real
      * group tier.
      */
-    private function groupNode(string $label, string $code): \App\Models\ConvenioGroup
+    private function groupNode(string $label, string $code): ConvenioGroup
     {
-        return \App\Models\ConvenioGroup::create([
+        return ConvenioGroup::create([
             'convenio_id' => $this->convenio->id,
             'label' => $label,
             'code_normalized' => $code,
             'normalization_rule' => 'test',
-            'status' => \App\Models\ConvenioGroup::STATUS_APPROVED,
+            'status' => ConvenioGroup::STATUS_APPROVED,
             'source' => 'admin_manual',
         ]);
     }
 
-    private function employeeOnNode(string $email, \App\Models\ConvenioGroup $node): \App\Models\Employee
+    private function employeeOnNode(string $email, ConvenioGroup $node): Employee
     {
-        return \App\Models\Employee::create([
+        return Employee::create([
             'email' => $email, 'full_name' => 'Empleada G2',
             'convenio_id' => $this->convenio->id,
             'convenio_group_id' => $node->id,
@@ -94,9 +99,9 @@ class Sprint7dFactResolutionTest extends TestCase
         ]);
     }
 
-    private function bindTo(ReferenceFact $fact, \App\Models\ConvenioGroup $node): ReferenceFact
+    private function bindTo(ReferenceFact $fact, ConvenioGroup $node): ReferenceFact
     {
-        \App\Models\ReferenceFactGroupScope::create([
+        ReferenceFactGroupScope::create([
             'reference_fact_id' => $fact->id,
             'convenio_group_id' => $node->id,
             'bound_at' => now(),
@@ -124,7 +129,7 @@ class Sprint7dFactResolutionTest extends TestCase
     private function auth(): array
     {
         $this->app['auth']->forgetGuards();
-        app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
+        app(PermissionRegistrar::class)->forgetCachedPermissions();
 
         return ['Authorization' => 'Bearer '.$this->admin->createToken('t')->plainTextToken, 'Accept' => 'application/json'];
     }
@@ -312,7 +317,7 @@ class Sprint7dFactResolutionTest extends TestCase
 
         $answers = app(ReferenceFactAnswerService::class);
 
-        $before = $answers->answer($employee, $this->periodo->id, \Illuminate\Support\Carbon::parse('2026-06-01'));
+        $before = $answers->answer($employee, $this->periodo->id, Carbon::parse('2026-06-01'));
         $this->assertSame('escalate', $before['outcome']);
         $this->assertSame('ambiguous_conflict', $before['reference_fact']['validity_selection']);
 
@@ -322,7 +327,7 @@ class Sprint7dFactResolutionTest extends TestCase
             ['action' => 'supersede', 'newer_uuid' => $newer->uuid], $this->auth())
             ->assertStatus(422)->assertJson(['code' => 'newer_does_not_start_after_older']);
         $this->assertSame('escalate', $answers->answer($employee, $this->periodo->id,
-            \Illuminate\Support\Carbon::parse('2026-06-01'))['outcome'], 'A refused supersede changes nothing.');
+            Carbon::parse('2026-06-01'))['outcome'], 'A refused supersede changes nothing.');
 
         // So the human does the two things the data actually needs, both through
         // EXISTING routes: correct the older fact's start date (the 7b-1 edit path,
@@ -337,14 +342,14 @@ class Sprint7dFactResolutionTest extends TestCase
         // AFTER: the present-day question is answered, not escalated. NOTHING in the
         // answer loop changed — the older fact simply fell out of the validity
         // predicate it was always subject to. Resolution reached chat through data.
-        $after = $answers->answer($employee, $this->periodo->id, \Illuminate\Support\Carbon::parse('2026-06-01'));
+        $after = $answers->answer($employee, $this->periodo->id, Carbon::parse('2026-06-01'));
         $this->assertSame('answer', $after['outcome']);
         $this->assertStringContainsString('Cuatro meses', $after['answer']);
         $this->assertSame($newer->id, $after['reference_fact']['fact_id']);
 
         // AND HISTORY STAYS CORRECT: a 2025-dated question still gets the 2025 value.
         // This is the whole reason a supersede closes a window instead of deleting.
-        $historical = $answers->answer($employee, $this->periodo->id, \Illuminate\Support\Carbon::parse('2025-03-01'));
+        $historical = $answers->answer($employee, $this->periodo->id, Carbon::parse('2025-03-01'));
         $this->assertSame('answer', $historical['outcome']);
         $this->assertStringContainsString('Seis meses', $historical['answer']);
         $this->assertSame($older->id, $historical['reference_fact']['fact_id']);
@@ -365,7 +370,7 @@ class Sprint7dFactResolutionTest extends TestCase
         $this->bindTo($this->fact('Grupo 2', 'Cuatro meses', '2026-01-01'), $g2);
 
         $answers = app(ReferenceFactAnswerService::class);
-        $now = $answers->answer($employee, $this->periodo->id, \Illuminate\Support\Carbon::parse('2026-06-01'));
+        $now = $answers->answer($employee, $this->periodo->id, Carbon::parse('2026-06-01'));
 
         $this->assertSame('answer', $now['outcome']);
         $this->assertSame('most_recent_validity', $now['reference_fact']['validity_selection']);
@@ -449,7 +454,7 @@ class Sprint7dFactResolutionTest extends TestCase
         $auditor = Admin::create(['email' => 'auditor7d@example.com', 'full_name' => 'Auditor', 'status' => 'active']);
         $auditor->assignRole('auditor');
         $this->app['auth']->forgetGuards();
-        app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
+        app(PermissionRegistrar::class)->forgetCachedPermissions();
         $headers = ['Authorization' => 'Bearer '.$auditor->createToken('t')->plainTextToken, 'Accept' => 'application/json'];
 
         // Reads stay open (an auditor browses); the WRITE is refused.

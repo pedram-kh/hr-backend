@@ -6,19 +6,22 @@ use App\Models\Admin;
 use App\Models\Convenio;
 use App\Models\ConvenioJobCategory;
 use App\Models\Document;
-use App\Models\DocumentType;
 use App\Models\ReferenceFact;
 use App\Models\Sector;
 use App\Models\TagEvent;
 use App\Models\Territory;
 use App\Models\Topic;
+use App\Services\DocumentIngestor;
 use App\Services\ExtractionClient;
+use App\Support\VocabularyResolver;
 use Database\Seeders\DocumentTypeSeeder;
 use Database\Seeders\RoleSeeder;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use Spatie\Permission\PermissionRegistrar;
 use Tests\TestCase;
 
 /**
@@ -71,7 +74,7 @@ class Sprint7b1ReferenceFactInvariantTest extends TestCase
         // Bypass the model default by writing the column directly — the DB enum
         // CHECK must reject anything but `structured_reference`.
         DB::table('reference_facts')->insert([
-            'uuid' => (string) \Illuminate\Support\Str::uuid(),
+            'uuid' => (string) Str::uuid(),
             'convenio_id' => $this->convenio->id,
             'value' => 'intento de autoridad alta',
             'authority_level' => 'official_convenio', // ← illegal at the column
@@ -122,7 +125,7 @@ class Sprint7b1ReferenceFactInvariantTest extends TestCase
 
         // A reference_source .xlsx (the Alhambra fixture shape) ingested via the
         // reference path: mock hr-ai /read-structured (no network).
-        $ingestor = new \App\Services\DocumentIngestor($this->fakeReader());
+        $ingestor = new DocumentIngestor($this->fakeReader());
         $tmp = tempnam(sys_get_temp_dir(), 'ref').'.xlsx';
         file_put_contents($tmp, 'PK-fake-xlsx-bytes');
 
@@ -132,7 +135,7 @@ class Sprint7b1ReferenceFactInvariantTest extends TestCase
             null,
             'Tablas_acuerdo_parcial_Alhambra.xlsx',
             null,
-            new \App\Support\VocabularyResolver,
+            new VocabularyResolver,
             asReference: true,
         );
 
@@ -300,7 +303,7 @@ class Sprint7b1ReferenceFactInvariantTest extends TestCase
     private function auth(Admin $admin): array
     {
         $this->app['auth']->forgetGuards();
-        app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
+        app(PermissionRegistrar::class)->forgetCachedPermissions();
 
         return ['Authorization' => 'Bearer '.$admin->createToken('test')->plainTextToken, 'Accept' => 'application/json'];
     }

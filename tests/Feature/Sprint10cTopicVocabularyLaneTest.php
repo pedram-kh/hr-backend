@@ -8,6 +8,7 @@ use App\Models\VocabularyProposal;
 use App\Services\VocabularyProposalService;
 use Database\Seeders\RoleSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Spatie\Permission\PermissionRegistrar;
 use Tests\TestCase;
 
 /**
@@ -137,7 +138,7 @@ class Sprint10cTopicVocabularyLaneTest extends TestCase
     private function auth(Admin $admin): array
     {
         $this->app['auth']->forgetGuards();
-        app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
+        app(PermissionRegistrar::class)->forgetCachedPermissions();
 
         return ['Authorization' => 'Bearer '.$admin->createToken('test')->plainTextToken, 'Accept' => 'application/json'];
     }

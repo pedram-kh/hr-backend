@@ -12,6 +12,7 @@ use App\Models\Territory;
 use Database\Seeders\RoleSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
+use Spatie\Permission\PermissionRegistrar;
 use Tests\TestCase;
 
 /**
@@ -150,7 +151,7 @@ class Sprint8FeedbackTest extends TestCase
         $admin = Admin::create(['email' => 'fb-super@example.com', 'full_name' => 'Super', 'status' => 'active']);
         $admin->assignRole('super_admin');
         $this->app['auth']->forgetGuards();
-        app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
+        app(PermissionRegistrar::class)->forgetCachedPermissions();
         $adminHeaders = ['Authorization' => 'Bearer '.$admin->createToken('t')->plainTextToken, 'Accept' => 'application/json'];
 
         $res = $this->getJson('/admin/analytics/deflection', $adminHeaders);

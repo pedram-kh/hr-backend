@@ -10,6 +10,7 @@ use App\Support\DeflectionAnalytics;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 /**
@@ -47,12 +48,12 @@ class Sprint8AnalyticsDefinitionsTest extends TestCase
         $sector = Sector::create(['name' => 'Test Sector', 'aliases' => []]);
         $convenio = Convenio::create(['numero' => '01TESTX001', 'name' => 'Test Convenio', 'territory_id' => $territory->id, 'sector_id' => $sector->id]);
         $this->employee = Employee::create([
-            'uuid' => (string) \Illuminate\Support\Str::uuid(), 'email' => 'w@example.com', 'full_name' => 'Worker',
+            'uuid' => (string) Str::uuid(), 'email' => 'w@example.com', 'full_name' => 'Worker',
             'convenio_id' => $convenio->id, 'territory_id' => $territory->id, 'employment_type' => 'full_time', 'status' => 'active',
         ]);
 
         $sessionId = DB::table('chat_sessions')->insertGetId([
-            'uuid' => (string) \Illuminate\Support\Str::uuid(), 'employee_id' => $this->employee->id,
+            'uuid' => (string) Str::uuid(), 'employee_id' => $this->employee->id,
             'started_at' => $this->day, 'created_at' => $this->day, 'updated_at' => $this->day,
         ]);
 

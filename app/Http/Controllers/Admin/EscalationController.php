@@ -63,6 +63,12 @@ class EscalationController extends Controller
         // refuses to fall back to the Estatuto. Renamed to name that
         // specifically, so it reads as its own category everywhere it renders.
         'estatuto_fallback_gap' => 'Convenio vencido / sin texto vigente',
+        // Sprint 13 (plan.md §D.12) — the five agent-engine reasons.
+        'general_lane_blocked' => 'Información general bloqueada',
+        'profile_incomplete' => 'Perfil incompleto',
+        'employee_requested_review' => 'Revisión pedida por el empleado',
+        'planner_escalated' => 'Derivado por el asistente',
+        'tool_budget_exhausted' => 'Límite de pasos alcanzado',
     ];
 
     public function __construct(
@@ -85,7 +91,7 @@ class EscalationController extends Controller
         ]);
 
         $query = EscalationCard::query()
-            ->with(['employee:id,uuid,full_name,convenio_id', 'employee.convenio:id,numero,name', 'assignedTo:id,full_name', 'topic:id,name', 'sourceMessage:id,content'])
+            ->with(['employee:id,uuid,full_name,convenio_id', 'employee.convenio:id,numero,name', 'assignedTo:id,full_name', 'topic:id,name', 'sourceMessage:id,content', 'reviewedMessage:id,content'])
             ->orderByDesc('id');
 
         if (! empty($data['status'])) {
@@ -140,7 +146,7 @@ class EscalationController extends Controller
             'employee.jobCategory:id,name',
             'employee.convenioGroup:id,parent_id,label,code_normalized',
             'employee.convenioGroup.parent:id,label',
-            'assignedTo:id,full_name', 'topic:id,name', 'sourceMessage:id,content', 'resolution', 'events.actor:id,full_name',
+            'assignedTo:id,full_name', 'topic:id,name', 'sourceMessage:id,content', 'reviewedMessage:id,content', 'resolution', 'events.actor:id,full_name',
         ]);
 
         // Sprint-5 tightening (ADR-0018 §4.4): the conversation PAYLOAD requires
@@ -222,7 +228,7 @@ class EscalationController extends Controller
             ], 422);
         }
 
-        $card->load(['employee:id,uuid,full_name,convenio_id', 'employee.convenio:id,numero,name', 'assignedTo:id,full_name', 'topic:id,name', 'sourceMessage:id,content']);
+        $card->load(['employee:id,uuid,full_name,convenio_id', 'employee.convenio:id,numero,name', 'assignedTo:id,full_name', 'topic:id,name', 'sourceMessage:id,content', 'reviewedMessage:id,content']);
 
         return response()->json(['card' => $this->cardSummary($card)]);
     }
@@ -376,7 +382,7 @@ class EscalationController extends Controller
 
         /** @var EscalationCard $resolvedCard */
         $resolvedCard = $result['card'];
-        $resolvedCard->load(['employee:id,uuid,full_name,convenio_id', 'employee.convenio:id,numero,name', 'assignedTo:id,full_name', 'topic:id,name', 'sourceMessage:id,content']);
+        $resolvedCard->load(['employee:id,uuid,full_name,convenio_id', 'employee.convenio:id,numero,name', 'assignedTo:id,full_name', 'topic:id,name', 'sourceMessage:id,content', 'reviewedMessage:id,content']);
 
         return response()->json([
             'card' => $this->cardSummary($resolvedCard),
@@ -444,6 +450,10 @@ class EscalationController extends Controller
             'reason' => $card->reason,
             'reason_label' => self::REASON_LABELS[$card->reason] ?? $card->reason,
             'question' => $card->sourceMessage?->content,
+            // Sprint 13, build step 8 — the original answer, on an
+            // `employee_requested_review` card only (null on every other
+            // reason: `reviewed_message_id` is only ever set for this one).
+            'reviewed_message' => $card->reviewedMessage?->content,
             'employee' => $card->employee !== null ? [
                 'uuid' => $card->employee->uuid,
                 'full_name' => $card->employee->full_name,

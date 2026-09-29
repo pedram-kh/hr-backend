@@ -21,9 +21,7 @@ use Illuminate\Support\Facades\DB;
  */
 class QualitySamplingService
 {
-    public function __construct(private readonly DeflectionAnalytics $analytics)
-    {
-    }
+    public function __construct(private readonly DeflectionAnalytics $analytics) {}
 
     /**
      * §6.2 — the stratified, seeded draw for one calendar month.

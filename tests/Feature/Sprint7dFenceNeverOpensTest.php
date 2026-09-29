@@ -19,9 +19,12 @@ use App\Models\Topic;
 use App\Services\ExtractionClient;
 use App\Services\GuardrailPolicy;
 use App\Services\RulingPublisher;
+use App\Services\SemanticFenceService;
 use Database\Seeders\RoleSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Testing\TestResponse;
 use RuntimeException;
+use Spatie\Permission\PermissionRegistrar;
 use Tests\TestCase;
 
 /**
@@ -148,10 +151,10 @@ class Sprint7dFenceNeverOpensTest extends TestCase
     }
 
     /** POST the resolve+convert (publish) attempt for a card. */
-    private function attemptPublish(EscalationCard $card, ?int $topicId, bool $acknowledge = false): \Illuminate\Testing\TestResponse
+    private function attemptPublish(EscalationCard $card, ?int $topicId, bool $acknowledge = false): TestResponse
     {
         $this->app['auth']->forgetGuards();
-        app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
+        app(PermissionRegistrar::class)->forgetCachedPermissions();
 
         $body = [
             'resolution_text' => 'Las vacaciones anuales del personal de limpieza son de 30 días naturales, '
@@ -494,7 +497,7 @@ class Sprint7dFenceNeverOpensTest extends TestCase
         $paragraph = str_repeat('El personal tiene derecho a treinta días naturales de vacaciones. ', 12);
         $text = implode("\n\n", array_fill(0, 40, $paragraph));
 
-        $probes = \App\Services\SemanticFenceService::probes($text);
+        $probes = SemanticFenceService::probes($text);
 
         $this->assertLessThanOrEqual((int) config('hr.semantic_probe_max'), count($probes));
         $this->assertNotEmpty($probes);

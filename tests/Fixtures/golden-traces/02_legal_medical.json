@@ -1,0 +1,55 @@
+{
+    "outcome": "escalate",
+    "escalated": true,
+    "escalation_reason": "off_domain",
+    "answer": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+    "citations": [],
+    "categories": [],
+    "authority_used": [],
+    "trace": {
+        "profile": {
+            "employee_uuid": "3c1cba1f-9fda-66bf-1222-34a30c32a08e",
+            "convenio_id": "#convenio_id:1",
+            "convenio_numero": "31TEST-13-02",
+            "territory_id": "#territory_id:1",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id:1",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "#as_of_date:today"
+        },
+        "router_decision": null,
+        "guardrail_check": {
+            "fired": true,
+            "reason": "off_domain",
+            "rule": "legal_medical"
+        },
+        "floor_decision": {
+            "retrieval_score_floor": 0.4,
+            "answer_confidence_floor": 0.65,
+            "outcome": "escalate",
+            "escalation_reason": "off_domain"
+        }
+    },
+    "escalation_card_facts": {
+        "reason": "off_domain",
+        "explanation_facts": {
+            "asked": "El empleado pidió consejo legal o médico (asesoramiento jurídico, diagnóstico, tratamiento).",
+            "found": "No se buscó ningún dato — el sistema no da este tipo de consejo, tenga o no información relacionada en el convenio.",
+            "reason": "off_domain",
+            "fix_link": null,
+            "fix_action": "Responder directamente o derivar a asesoría legal/médica externa; no hay nada que corregir en el sistema.",
+            "fix_surface": "ninguna — atención directa",
+            "sub_outcome": "legal_medical",
+            "employee_told": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+            "stopped_reason": "Es una limitación intencionada del sistema, siempre activa: nunca da asesoramiento legal ni médico."
+        },
+        "fix_action": "Responder directamente o derivar a asesoría legal/médica externa; no hay nada que corregir en el sistema.",
+        "fix_surface": "ninguna — atención directa",
+        "fix_link": null
+    }
+}

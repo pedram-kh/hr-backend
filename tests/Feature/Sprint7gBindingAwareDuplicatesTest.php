@@ -2,7 +2,6 @@
 
 namespace Tests\Feature;
 
-use App\Models\Admin;
 use App\Models\Convenio;
 use App\Models\ConvenioGroup;
 use App\Models\ReferenceFact;
@@ -13,6 +12,7 @@ use App\Models\Territory;
 use App\Models\Topic;
 use Database\Seeders\RoleSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Artisan;
 use Tests\TestCase;
 
 /**
@@ -119,8 +119,8 @@ class Sprint7gBindingAwareDuplicatesTest extends TestCase
         $this->bind($this->fact('Grupo 2 (área 5)', '45 días', '2024-01-01'), $area5);
         $this->bind($this->fact('Grupo 2 (resto de áreas)', '30 días', '2024-01-01'), $resto);
 
-        \Illuminate\Support\Facades\Artisan::call('facts:scan-duplicates', ['--dry-run' => true]);
-        $output = \Illuminate\Support\Facades\Artisan::output();
+        Artisan::call('facts:scan-duplicates', ['--dry-run' => true]);
+        $output = Artisan::output();
         $this->assertStringContainsString('no overlapping-group version pairs found', $output);
     }
 

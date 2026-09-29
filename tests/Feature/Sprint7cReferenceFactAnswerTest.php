@@ -7,6 +7,7 @@ use App\Models\Convenio;
 use App\Models\ConvenioGroup;
 use App\Models\ConvenioJobCategory;
 use App\Models\Document;
+use App\Models\DocumentType;
 use App\Models\Employee;
 use App\Models\MessageTrace;
 use App\Models\ReferenceFact;
@@ -67,7 +68,7 @@ class Sprint7cReferenceFactAnswerTest extends TestCase
         $this->topic = Topic::firstOrCreate(['name' => 'periodo de prueba'], ['status' => 'approved']);
         $this->sourceDoc = Document::create([
             'title' => 'Periodos de prueba (referencia)', 'storage_path' => 'fake/ref.docx',
-            'convenio_id' => $this->convenio->id, 'document_type_id' => \App\Models\DocumentType::query()->value('id'),
+            'convenio_id' => $this->convenio->id, 'document_type_id' => DocumentType::query()->value('id'),
             'authority_level' => 'official_convenio', 'retrieval_status' => 'active', 'language' => 'es',
             'tagging_status' => 'verified',
         ]);

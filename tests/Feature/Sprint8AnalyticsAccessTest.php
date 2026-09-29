@@ -13,6 +13,9 @@ use App\Models\Territory;
 use App\Services\IdentityPresenter;
 use Database\Seeders\RoleSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Str;
+use Illuminate\Testing\TestResponse;
+use Spatie\Permission\PermissionRegistrar;
 use Tests\TestCase;
 
 /**
@@ -58,7 +61,7 @@ class Sprint8AnalyticsAccessTest extends TestCase
         $sector = Sector::create(['name' => 'Test Sector', 'aliases' => []]);
         $convenio = Convenio::create(['numero' => '01TESTM001', 'name' => 'Test Convenio', 'territory_id' => $territory->id, 'sector_id' => $sector->id]);
         $employee = Employee::create([
-            'uuid' => (string) \Illuminate\Support\Str::uuid(), 'email' => 'm@example.com', 'full_name' => 'Matrix Worker',
+            'uuid' => (string) Str::uuid(), 'email' => 'm@example.com', 'full_name' => 'Matrix Worker',
             'convenio_id' => $convenio->id, 'territory_id' => $territory->id, 'employment_type' => 'full_time', 'status' => 'active',
         ]);
         $session = ChatSession::create(['employee_id' => $employee->id, 'started_at' => now(), 'last_activity_at' => now()]);
@@ -87,17 +90,17 @@ class Sprint8AnalyticsAccessTest extends TestCase
     private function resetPermCache(): void
     {
         $this->app['auth']->forgetGuards();
-        app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
+        app(PermissionRegistrar::class)->forgetCachedPermissions();
     }
 
-    private function getAs(Admin $admin, string $url): \Illuminate\Testing\TestResponse
+    private function getAs(Admin $admin, string $url): TestResponse
     {
         $this->resetPermCache();
 
         return $this->getJson($url, $this->auth($admin));
     }
 
-    private function postAs(Admin $admin, string $url, array $payload = []): \Illuminate\Testing\TestResponse
+    private function postAs(Admin $admin, string $url, array $payload = []): TestResponse
     {
         $this->resetPermCache();
 

@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\AnswerModelSetting;
 use App\Models\Convenio;
 use App\Models\Document;
+use App\Models\DocumentType;
 use App\Models\Employee;
 use App\Models\MessageTrace;
 use App\Models\ReferenceFact;
@@ -15,6 +16,8 @@ use App\Services\ChatService;
 use App\Services\ExtractionClient;
 use Database\Seeders\DocumentTypeSeeder;
 use Database\Seeders\RoleSeeder;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 /**
@@ -35,7 +38,7 @@ use Tests\TestCase;
  */
 class Sprint7cCompositionTest extends TestCase
 {
-    use \Illuminate\Foundation\Testing\RefreshDatabase;
+    use RefreshDatabase;
 
     private Convenio $convenio;
 
@@ -63,7 +66,7 @@ class Sprint7cCompositionTest extends TestCase
         ]);
         $this->topic = Topic::firstOrCreate(['name' => 'periodo de prueba'], ['status' => 'approved']);
 
-        $docTypeId = \App\Models\DocumentType::query()->value('id');
+        $docTypeId = DocumentType::query()->value('id');
         $this->factDoc = Document::create([
             'title' => 'Periodos de prueba (referencia)', 'storage_path' => 'fake/ref.docx',
             'convenio_id' => $this->convenio->id, 'document_type_id' => $docTypeId,
@@ -249,9 +252,7 @@ class Sprint7cCompositionTest extends TestCase
         $fake = new class($chunk, $synth, $ground) extends ExtractionClient
         {
             /** @param array<string,mixed> $chunk */
-            public function __construct(private array $chunk, private ?array $synth, private ?array $ground)
-            {
-            }
+            public function __construct(private array $chunk, private ?array $synth, private ?array $ground) {}
 
             public function retrieve(array $params): array
             {
@@ -286,7 +287,7 @@ class Sprint7cCompositionTest extends TestCase
         $this->app->instance(ExtractionClient::class, $fake);
 
         // The cited convenio chunk must exist (message_citations.chunk_id FK).
-        \Illuminate\Support\Facades\DB::table('document_chunks')->insert([
+        DB::table('document_chunks')->insert([
             'id' => 7001, 'document_id' => $this->proseDoc->id, 'chunk_index' => 0,
             'page_from' => 3, 'page_to' => 3, 'content' => $proseContent, 'token_count' => 12,
             'convenio_id' => $this->convenio->id, 'retrieval_status' => 'active',

@@ -295,7 +295,7 @@ class FactResolutionService
      * Sprint 7f (ADR-0028) gave facts a GROUND-TRUTH scope: `groupScopes()`,
      * bound nodes in a convenio's approved group tree. When BOTH facts in a
      * pair have at least one binding, compare the NODES directly instead of
-     * the `group_label` TEXT-token overlap {@see \App\Support\GroupLabel::relate()}
+     * the `group_label` TEXT-token overlap {@see GroupLabel::relate()}
      * has always used:
      *
      *   - the SAME node, or one bound node is the PARENT/CHILD of the

@@ -121,7 +121,7 @@ class GuardrailConfigService
         return DB::transaction(function () use ($data, $actor) {
             $config = GuardrailConfig::current();
 
-            $fields = ['retrieval_score_floor', 'answer_confidence_floor', 'router_confidence_floor', 'off_domain_message', 'tone_constraints', 'convert_allowed_reasons'];
+            $fields = ['retrieval_score_floor', 'answer_confidence_floor', 'router_confidence_floor', 'off_domain_message', 'tone_constraints', 'convert_allowed_reasons', 'general_lane_enabled'];
             foreach ($fields as $field) {
                 if (! array_key_exists($field, $data)) {
                     continue;
@@ -189,6 +189,9 @@ class GuardrailConfigService
         if ($v === null) {
             return null;
         }
+        if (is_bool($v)) {
+            return $v ? 'true' : 'false';
+        }
 
         return is_array($v) ? json_encode(array_values($v)) : (string) $v;
     }
@@ -201,6 +204,16 @@ class GuardrailConfigService
             sort($copy);
 
             return json_encode($copy) ?: '';
+        }
+
+        // `general_lane_enabled` (Sprint 13, step 9) is the first boolean
+        // routed through this method — `(string) false === '' === (string)
+        // null`'s existing collision (harmless for the string/array fields
+        // above, where "" and null are already treated as equivalent) would
+        // silently no-op a genuine null->false toggle. Bools get their own,
+        // non-colliding tokens; every other type's behaviour is unchanged.
+        if (is_bool($v)) {
+            return $v ? 'bool:1' : 'bool:0';
         }
 
         return $v === null ? '' : (string) $v;

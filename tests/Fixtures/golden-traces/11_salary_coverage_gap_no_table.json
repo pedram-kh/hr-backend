@@ -1,0 +1,72 @@
+{
+    "outcome": "escalate",
+    "escalated": true,
+    "escalation_reason": "salary_coverage_gap",
+    "answer": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+    "citations": [],
+    "categories": [],
+    "authority_used": [],
+    "trace": {
+        "profile": {
+            "employee_uuid": "f516d2a1-4e9f-5b58-87c8-347f1a1528c0",
+            "convenio_id": "#convenio_id:1",
+            "convenio_numero": "31TEST-13-11",
+            "territory_id": "#territory_id:1",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id:1",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "#as_of_date:today"
+        },
+        "router_decision": {
+            "label": "salary",
+            "confidence": 1,
+            "source": "deterministic_salary",
+            "subqueries": [],
+            "model": null,
+            "note": "matched deterministic salary pre-classifier",
+            "cross_path": false,
+            "trace_fragment": [],
+            "decomposed_queries": []
+        },
+        "guardrail_check": {
+            "fired": false,
+            "reason": null,
+            "rule": null
+        },
+        "salary": {
+            "convenio_id": "#convenio_id:1",
+            "as_of_date": "#as_of_date:today",
+            "outcome": "escalate",
+            "year_selection": "no_table",
+            "note": "no salary table for this convenio (coverage gap — salary may be PDF-only)"
+        },
+        "floor_decision": {
+            "path": "salary_sql",
+            "outcome": "escalate",
+            "escalation_reason": "salary_coverage_gap",
+            "note": "no salary table for this convenio (coverage gap — salary may be PDF-only)"
+        }
+    },
+    "escalation_card_facts": {
+        "reason": "salary_coverage_gap",
+        "explanation_facts": {
+            "asked": "El empleado preguntó por su salario.",
+            "found": "No existe ninguna tabla salarial cargada para este convenio (posiblemente solo en PDF, sin convertir).",
+            "reason": "salary_coverage_gap",
+            "fix_link": "#view=documents",
+            "fix_action": "Cargar la tabla salarial de este convenio; si el origen es un PDF, puede necesitar conversión previa por el equipo técnico.",
+            "fix_surface": "Documentos",
+            "sub_outcome": "no_table",
+            "employee_told": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+            "stopped_reason": "Sin una tabla salarial cargada, el sistema nunca adivina una cifra."
+        },
+        "fix_action": "Cargar la tabla salarial de este convenio; si el origen es un PDF, puede necesitar conversión previa por el equipo técnico.",
+        "fix_surface": "Documentos",
+        "fix_link": "#view=documents"
+    }
+}

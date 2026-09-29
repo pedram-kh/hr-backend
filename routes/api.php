@@ -58,6 +58,11 @@ Route::get('/chat/session', [ChatController::class, 'session'])
 Route::post('/chat/message/{messageId}/feedback', [ChatController::class, 'feedback'])
     ->middleware(['auth:sanctum', 'active']);
 
+// Sprint 13, build step 8 (plan.md §D.13/§E.15) — "¿Quieres que lo revise
+// RR. HH.?" on an answered turn. Self-scoped; employee-only; idempotent.
+Route::post('/chat/message/{messageId}/review', [ChatController::class, 'requestReview'])
+    ->middleware(['auth:sanctum', 'active']);
+
 /*
 | Admin knowledge-management API (Sprint 1). Admin-only (Sanctum + admin guard).
 | Documents ingestion, the verification table/detail, and tag confirm/re-assign.

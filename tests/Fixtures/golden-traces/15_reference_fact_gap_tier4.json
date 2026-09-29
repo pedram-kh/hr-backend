@@ -1,0 +1,87 @@
+{
+    "outcome": "escalate",
+    "escalated": true,
+    "escalation_reason": "reference_fact_coverage_gap",
+    "answer": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+    "citations": [],
+    "categories": [],
+    "authority_used": [
+        "structured_reference"
+    ],
+    "trace": {
+        "profile": {
+            "employee_uuid": "f5bafa35-ddde-9a47-e78b-da83886e6d8b",
+            "convenio_id": "#convenio_id:1",
+            "convenio_numero": "31TEST-13-15",
+            "territory_id": "#territory_id:1",
+            "job_category_id": "#job_category_id:1"
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id:1",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "#as_of_date:today"
+        },
+        "router_decision": {
+            "label": "reference_fact",
+            "confidence": 1,
+            "source": "deterministic_reference_fact",
+            "subqueries": [],
+            "model": null,
+            "note": "matched deterministic reference-fact pre-check (topic: periodo de prueba)",
+            "cross_path": false,
+            "trace_fragment": {
+                "matched_topic_names": [
+                    "periodo de prueba"
+                ]
+            }
+        },
+        "guardrail_check": {
+            "fired": false,
+            "reason": null,
+            "rule": null
+        },
+        "reference_fact": {
+            "convenio_id": "#convenio_id:1",
+            "topic_id": "#topic_id:1",
+            "job_category_id": "#job_category_id:1",
+            "group_label": null,
+            "as_of_date": "#as_of_date:today",
+            "fact_id": null,
+            "validity_selection": null,
+            "value": null,
+            "authority_used": "structured_reference",
+            "employee_group_state": "unresolved",
+            "outcome": "escalate",
+            "note": "only per-group/per-category facts exist; employee scope does not confidently match one (group unresolved or different group) — never guess"
+        },
+        "floor_decision": {
+            "path": "reference_fact",
+            "outcome": "escalate",
+            "escalation_reason": "reference_fact_coverage_gap",
+            "authority_used": [
+                "structured_reference"
+            ],
+            "note": "only per-group/per-category facts exist; employee scope does not confidently match one (group unresolved or different group) — never guess"
+        }
+    },
+    "escalation_card_facts": {
+        "reason": "reference_fact_coverage_gap",
+        "explanation_facts": {
+            "asked": "El empleado preguntó por un tema cuyo dato de referencia está segmentado por grupo/categoría en este convenio.",
+            "found": "El empleado no tiene un grupo/sub-área asignado en su perfil.",
+            "reason": "reference_fact_coverage_gap",
+            "fix_link": "#view=directory&emp=f5bafa35-ddde-9a47-e78b-da83886e6d8b",
+            "fix_action": "Asignar el grupo/sub-área del empleado en el Directorio.",
+            "fix_surface": "Directorio",
+            "sub_outcome": "employee_group_unknown",
+            "employee_told": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+            "stopped_reason": "Sin un grupo asignado, el sistema nunca adivina cuál de los datos por grupo le corresponde."
+        },
+        "fix_action": "Asignar el grupo/sub-área del empleado en el Directorio.",
+        "fix_surface": "Directorio",
+        "fix_link": "#view=directory&emp=f5bafa35-ddde-9a47-e78b-da83886e6d8b"
+    }
+}

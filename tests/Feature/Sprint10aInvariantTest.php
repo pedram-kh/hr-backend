@@ -15,6 +15,7 @@ use App\Services\ChatService;
 use App\Services\ExtractionClient;
 use App\Support\CorpusCoverageService;
 use App\Support\EscalationExplainer;
+use App\Support\KnowledgeMap;
 use Database\Seeders\DocumentTypeSeeder;
 use Database\Seeders\RoleSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -297,7 +298,7 @@ class Sprint10aInvariantTest extends TestCase
         );
         $this->assertNotContains(
             (int) $sourceDoc->document_type_id,
-            \App\Support\KnowledgeMap::proseTypeIds(),
+            KnowledgeMap::proseTypeIds(),
             'the fact source must not be a prose type, or the fixture stops being a full gap'
         );
         ReferenceFact::create([

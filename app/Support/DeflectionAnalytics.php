@@ -115,19 +115,25 @@ class DeflectionAnalytics
      * Aggregate a set of turn rows (from `liveTurns()`) into the summary the
      * `stats:deflection` command / Analítica screen shows (plan.md §2.1).
      *
-     * @return array{answered:int,escalated:int,needs_category:int,deflection_rate:?float,path_split:array<string,int>,authority_split:array<string,int>}
+     * @return array{answered:int,escalated:int,needs_category:int,ask:int,deflection_rate:?float,path_split:array<string,int>,authority_split:array<string,int>}
      */
     public function summarize(Collection $turns): array
     {
         $answered = $turns->where('outcome', 'answer')->count();
         $escalated = $turns->where('outcome', 'escalate')->count();
         $needsCategory = $turns->where('outcome', 'needs_category')->count();
-        $denominator = $answered + $escalated; // needs_category excluded (§2.1, resolved q2).
+        // Sprint 13, build step 8 (plan.md §E.15) — the agent engine's
+        // `ask_employee` clarifying turn. Same posture as `needs_category`
+        // just above: its own figure, excluded from the deflection-rate
+        // denominator (it is neither an answer nor an escalation).
+        $ask = $turns->where('outcome', 'ask')->count();
+        $denominator = $answered + $escalated; // needs_category/ask excluded (§2.1, resolved q2).
 
         return [
             'answered' => $answered,
             'escalated' => $escalated,
             'needs_category' => $needsCategory,
+            'ask' => $ask,
             'deflection_rate' => $denominator > 0 ? round($answered / $denominator, 4) : null,
             'path_split' => $turns->groupBy(fn ($t) => $t['path'] ?? 'unknown')->map->count()->all(),
             'authority_split' => $turns->groupBy(fn ($t) => $t['authority_used_key'] ?? 'none')->map->count()->all(),
@@ -279,12 +285,14 @@ class DeflectionAnalytics
         $answered = (int) $rows->where('outcome', 'answer')->sum('turn_count');
         $escalated = (int) $rows->where('outcome', 'escalate')->sum('turn_count');
         $needsCategory = (int) $rows->where('outcome', 'needs_category')->sum('turn_count');
+        $ask = (int) $rows->where('outcome', 'ask')->sum('turn_count');
         $denominator = $answered + $escalated;
 
         return [
             'answered' => $answered,
             'escalated' => $escalated,
             'needs_category' => $needsCategory,
+            'ask' => $ask,
             'deflection_rate' => $denominator > 0 ? round($answered / $denominator, 4) : null,
             'path_split' => $rows->groupBy(fn ($r) => $r->path ?? 'unknown')->map(fn ($g) => (int) $g->sum('turn_count'))->all(),
             'authority_split' => $rows->groupBy(fn ($r) => $r->authority_used_key ?? 'none')->map(fn ($g) => (int) $g->sum('turn_count'))->all(),

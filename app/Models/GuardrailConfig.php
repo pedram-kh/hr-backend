@@ -27,6 +27,13 @@ class GuardrailConfig extends Model
         'off_domain_message',
         'tone_constraints',
         'convert_allowed_reasons',
+        // Sprint 13, step 9 (plan.md §B.6.6): additive, nullable — null means
+        // "use the env baseline", never a raw admin value (see
+        // `GuardrailPolicy::generalLaneEnabled()` for the AND combination —
+        // this is a RESTRICT-only knob, the mirror image of the raise-only
+        // threshold columns above: an admin can only turn the lane OFF, never
+        // force it on when the env baseline itself is off).
+        'general_lane_enabled',
         'updated_by',
     ];
 
@@ -35,6 +42,7 @@ class GuardrailConfig extends Model
         'answer_confidence_floor' => 'float',
         'router_confidence_floor' => 'float',
         'convert_allowed_reasons' => 'array',
+        'general_lane_enabled' => 'boolean',
     ];
 
     /**

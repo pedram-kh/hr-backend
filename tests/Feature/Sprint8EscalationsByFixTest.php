@@ -11,6 +11,7 @@ use App\Support\EscalationFixAnalytics;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 /**
@@ -42,7 +43,7 @@ class Sprint8EscalationsByFixTest extends TestCase
         $sector = Sector::create(['name' => 'Test Sector', 'aliases' => []]);
         $convenio = Convenio::create(['numero' => '01TESTF001', 'name' => 'Test Convenio', 'territory_id' => $territory->id, 'sector_id' => $sector->id]);
         $this->employee = Employee::create([
-            'uuid' => (string) \Illuminate\Support\Str::uuid(), 'email' => 'w2@example.com', 'full_name' => 'Worker Two',
+            'uuid' => (string) Str::uuid(), 'email' => 'w2@example.com', 'full_name' => 'Worker Two',
             'convenio_id' => $convenio->id, 'territory_id' => $territory->id, 'employment_type' => 'full_time', 'status' => 'active',
         ]);
         $this->agent = Admin::create(['full_name' => 'Agent One', 'email' => 'agent1@example.com', 'status' => 'active']);
@@ -70,7 +71,7 @@ class Sprint8EscalationsByFixTest extends TestCase
     private function makeCard(string $reason, string $subOutcome, string $status, Carbon $createdAt, ?Carbon $resolvedAt): int
     {
         return DB::table('escalation_cards')->insertGetId([
-            'uuid' => (string) \Illuminate\Support\Str::uuid(),
+            'uuid' => (string) Str::uuid(),
             'employee_id' => $this->employee->id,
             'reason' => $reason,
             'status' => $status,
@@ -134,7 +135,7 @@ class Sprint8EscalationsByFixTest extends TestCase
 
         // A pre-7g card with null explanation_facts.
         DB::table('escalation_cards')->insert([
-            'uuid' => (string) \Illuminate\Support\Str::uuid(), 'employee_id' => $this->employee->id,
+            'uuid' => (string) Str::uuid(), 'employee_id' => $this->employee->id,
             'reason' => 'low_confidence', 'status' => 'new', 'created_at' => $this->day, 'updated_at' => $this->day,
         ]);
         $this->assertSame(1, $analytics->unexplainedCount());

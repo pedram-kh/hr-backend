@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Models\Convenio;
 use App\Models\Document;
 use App\Models\EscalationResolution;
 use App\Services\ExtractionClient;
@@ -215,7 +216,7 @@ class FenceCalibrateSemantic extends Command
 
         foreach ($anchors as $anchor) {
             $convenioNumero = (string) ($anchor['convenio_numero'] ?? '');
-            $convenioId = \App\Models\Convenio::where('numero', $convenioNumero)->value('id');
+            $convenioId = Convenio::where('numero', $convenioNumero)->value('id');
             if ($convenioId === null) {
                 $rows[] = ['id' => $anchor['id'] ?? '?', 'class' => $anchor['class'] ?? '?', 'skipped' => "convenio {$convenioNumero} not in this database"];
 

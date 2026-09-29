@@ -6,6 +6,7 @@ use App\Models\Admin;
 use App\Models\LoginCode;
 use App\Support\StagingFixedOtpGuard;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\RateLimiter;
 use RuntimeException;
 use Tests\TestCase;
@@ -110,7 +111,7 @@ class Sprint11aStagingOtpInvariantTest extends TestCase
         // can prove the real path is untouched by confirming an arbitrary
         // wrong code fails distinctly from the fixed-code branch, and that
         // resetting the hash to a known code and verifying it succeeds.
-        $loginCode->update(['code_hash' => \Illuminate\Support\Facades\Hash::make('111222')]);
+        $loginCode->update(['code_hash' => Hash::make('111222')]);
 
         $response = $this->postJson('/auth/verify-code', [
             'email' => 'real-admin@example.org',

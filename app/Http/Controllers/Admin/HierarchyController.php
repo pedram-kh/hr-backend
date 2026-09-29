@@ -11,8 +11,10 @@ use App\Models\Topic;
 use App\Support\AdminLinks;
 use App\Support\CorpusCoverageService;
 use App\Support\KnowledgeMap;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -409,9 +411,9 @@ class HierarchyController extends Controller
      * Sum two pluck maps (keyed by the same id) into one — lets a scope that has
      * only reference facts (no documents) still draw a branch.
      *
-     * @return \Illuminate\Support\Collection<int,int>
+     * @return Collection<int,int>
      */
-    private function mergeCounts(\Illuminate\Support\Collection $a, \Illuminate\Support\Collection $b): \Illuminate\Support\Collection
+    private function mergeCounts(Collection $a, Collection $b): Collection
     {
         $merged = $a->map(fn ($v) => (int) $v);
         foreach ($b as $key => $cnt) {
@@ -493,7 +495,7 @@ class HierarchyController extends Controller
      * @param  array<int,string>  $leafGapByDocId
      * @param  list<array<string,mixed>>  $factNodes
      */
-    private function leaves(\Illuminate\Database\Eloquent\Builder $query, array $leafGapByDocId, array $factNodes = []): JsonResponse
+    private function leaves(Builder $query, array $leafGapByDocId, array $factNodes = []): JsonResponse
     {
         $docs = $query->with(['documentType:id,code,name'])
             ->orderByDesc('id')

@@ -3,8 +3,9 @@
 namespace App\Console\Commands;
 
 use App\Models\ChatMessage;
+use App\Models\ChatSession;
 use App\Models\Employee;
-use App\Services\ChatService;
+use App\Services\AnswerEngineDispatcher;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
@@ -30,6 +31,22 @@ use Illuminate\Support\Facades\DB;
  * test, so each question persists a session, two messages, citations and a
  * trace exactly as an employee asking it would. It therefore runs against the
  * seeded test accounts only and refuses any other address.
+ *
+ * Sprint 13, build step 7 (plan.md §E.15 step 7's own table row: "estatuto
+ * gold-eval — Almost — add --engine and a fresh session per question."):
+ * `--engine=classic|agent` runs the SAME 15/13-question fixture through
+ * `AnswerEngineDispatcher::handle()` with an explicit engine rather than
+ * `ChatService::handleMessage()` directly (classic remains the default, so
+ * every existing invocation of this command is unaffected byte-for-byte).
+ * Each question now runs in its OWN freshly-created `ChatSession` — not the
+ * employee's reused 24h session `resolveSession()` would otherwise pick —
+ * per the 10b §9 incident (`sprint-10b/review.md` §9: a "freshly-generated"
+ * session_uuid does NOT force isolation on its own, because `resolveSession()`
+ * only reuses a uuid it can already find; a session row created HERE, before
+ * the call, is what actually gets found and honoured, since it already
+ * exists). This also matters for the agent engine specifically: 15 unrelated
+ * eval questions sharing one session would otherwise leak into each other's
+ * conversation window (§B.4.4), which classic never had to worry about.
  */
 class EstatutoGoldEval extends Command
 {
@@ -38,6 +55,7 @@ class EstatutoGoldEval extends Command
                             {--email= : override the profile\'s account (must be a test-*@example.com address)}
                             {--file= : gold fixture path (default hr-docs/sprints/sprint-10a/eval/fallback-gold.json)}
                             {--only= : run one question id}
+                            {--engine=classic : classic|agent (Sprint 13, plan.md §E.15 step 7)}
                             {--json : machine-readable output}';
 
     protected $description = 'Run the Estatuto fallback gold set (positive) or the trigger-split negative set. Persists chat turns; test accounts only.';
@@ -48,11 +66,18 @@ class EstatutoGoldEval extends Command
         'second-negative' => 'test-midingest@example.com',
     ];
 
-    public function handle(ChatService $chat): int
+    public function handle(AnswerEngineDispatcher $dispatcher): int
     {
         $profile = (string) $this->option('profile');
         if (! isset(self::PROFILES[$profile])) {
             $this->error("Unknown --profile={$profile}. One of: ".implode(', ', array_keys(self::PROFILES)));
+
+            return self::FAILURE;
+        }
+
+        $engine = (string) $this->option('engine');
+        if (! in_array($engine, ['classic', 'agent'], true)) {
+            $this->error("Unknown --engine={$engine}. One of: classic|agent.");
 
             return self::FAILURE;
         }
@@ -91,10 +116,10 @@ class EstatutoGoldEval extends Command
         $negative = $profile !== 'positive';
         $rows = [];
         foreach ($questions as $q) {
-            $rows[] = $this->runQuestion($chat, $employee, $q, $negative);
+            $rows[] = $this->runQuestion($dispatcher, $employee, $q, $negative, $engine);
         }
 
-        return $this->option('json') ? $this->reportJson($rows, $profile, $email) : $this->report($rows, $profile, $email, $negative);
+        return $this->option('json') ? $this->reportJson($rows, $profile, $email) : $this->report($rows, $profile, $email, $negative, $engine);
     }
 
     /**
@@ -106,7 +131,7 @@ class EstatutoGoldEval extends Command
      * @param  array<string,mixed>  $q
      * @return array<string,mixed>
      */
-    private function runQuestion(ChatService $chat, Employee $employee, array $q, bool $negative): array
+    private function runQuestion(AnswerEngineDispatcher $dispatcher, Employee $employee, array $q, bool $negative, string $engine): array
     {
         $expected = $negative && $q['expect'] === 'answer' ? 'escalate_fallback_gap' : (string) $q['expect'];
         $expectedNegativeSplit = $negative && $q['expect'] === 'answer';
@@ -118,10 +143,16 @@ class EstatutoGoldEval extends Command
         // the loop working as designed, and both still satisfy the split. So the
         // gate below is the invariant itself; the reason is reported, not judged.
 
-        $chat->handleMessage($employee, (string) $q['question'], null, null);
+        // Step 7: a brand-new session, created and persisted BEFORE the call —
+        // not a bare uuid handed in and hoped for — so `SessionResolver::
+        // resolve()` actually finds and reuses THIS row rather than falling
+        // through to the employee's last-24h session (the 10b §9 trap).
+        $session = ChatSession::create([
+            'employee_id' => $employee->id, 'started_at' => now(), 'last_activity_at' => now(),
+        ]);
+        $dispatcher->handle($employee, (string) $q['question'], $session->uuid, null, $engine);
 
-        $msg = ChatMessage::where('role', 'assistant')
-            ->whereHas('session', fn ($s) => $s->where('employee_id', $employee->id))
+        $msg = ChatMessage::where('session_id', $session->id)->where('role', 'assistant')
             ->with(['trace', 'citations'])
             ->orderByDesc('id')->first();
 
@@ -175,9 +206,9 @@ class EstatutoGoldEval extends Command
     /**
      * @param  list<array<string,mixed>>  $rows
      */
-    private function report(array $rows, string $profile, string $email, bool $negative): int
+    private function report(array $rows, string $profile, string $email, bool $negative, string $engine = 'classic'): int
     {
-        $this->info("Estatuto fallback gold eval — {$profile} profile ({$email})");
+        $this->info("Estatuto fallback gold eval — {$profile} profile ({$email}) — engine={$engine}");
         $this->newLine();
 
         foreach ($rows as $r) {

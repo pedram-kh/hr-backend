@@ -1,0 +1,55 @@
+{
+    "outcome": "escalate",
+    "escalated": true,
+    "escalation_reason": "off_domain",
+    "answer": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+    "citations": [],
+    "categories": [],
+    "authority_used": [],
+    "trace": {
+        "profile": {
+            "employee_uuid": "f45052ca-9944-d40b-99cb-7e43f4de1b21",
+            "convenio_id": "#convenio_id:1",
+            "convenio_numero": "31TEST-13-03",
+            "territory_id": "#territory_id:1",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id:1",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "#as_of_date:today"
+        },
+        "router_decision": null,
+        "guardrail_check": {
+            "fired": true,
+            "reason": "off_domain",
+            "rule": "other_employee_data"
+        },
+        "floor_decision": {
+            "retrieval_score_floor": 0.4,
+            "answer_confidence_floor": 0.65,
+            "outcome": "escalate",
+            "escalation_reason": "off_domain"
+        }
+    },
+    "escalation_card_facts": {
+        "reason": "off_domain",
+        "explanation_facts": {
+            "asked": "El empleado preguntó por datos de OTRA persona (p. ej. cuánto gana/cobra alguien nombrado).",
+            "found": "No se buscó ningún dato — la pregunta nombra a un tercero; el sistema nunca responde sobre los datos de otra persona.",
+            "reason": "off_domain",
+            "fix_link": null,
+            "fix_action": "Nada que corregir; si la pregunta era legítima sobre el propio empleado, pedirle que la reformule sin nombrar a otra persona.",
+            "fix_surface": "ninguna — atención directa",
+            "sub_outcome": "other_employee_data",
+            "employee_told": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+            "stopped_reason": "Proteger la privacidad de otras personas es una regla siempre activa, sin excepciones."
+        },
+        "fix_action": "Nada que corregir; si la pregunta era legítima sobre el propio empleado, pedirle que la reformule sin nombrar a otra persona.",
+        "fix_surface": "ninguna — atención directa",
+        "fix_link": null
+    }
+}

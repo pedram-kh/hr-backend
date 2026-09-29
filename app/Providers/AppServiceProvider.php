@@ -3,6 +3,8 @@
 namespace App\Providers;
 
 use App\Http\Controllers\AuthController;
+use App\Services\Agent\HrAiPlannerClient;
+use App\Services\Agent\PlannerClient;
 use App\Support\StagingFixedOtpGuard;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
@@ -16,7 +18,12 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        // Sprint 13, build step 6: the real hr-ai `/plan` transport. A
+        // missing key or a provider error still throws
+        // `PlannerUnavailableException`, so `AgentChatService` falls back
+        // to classic for that turn (§F.10) — the same safety
+        // `UnavailablePlannerClient` used to provide by always throwing.
+        $this->app->bind(PlannerClient::class, HrAiPlannerClient::class);
     }
 
     /**

@@ -12,6 +12,7 @@ use App\Support\QualitySamplingService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 /**
@@ -53,16 +54,16 @@ class Sprint8QualitySampleStratificationTest extends TestCase
         $convenioB = Convenio::create(['numero' => '02TESTQ001', 'name' => 'Convenio B', 'territory_id' => $this->territoryB->id, 'sector_id' => $sector->id]);
 
         $this->employeeA = Employee::create([
-            'uuid' => (string) \Illuminate\Support\Str::uuid(), 'email' => 'qa@example.com', 'full_name' => 'Quality Asker A',
+            'uuid' => (string) Str::uuid(), 'email' => 'qa@example.com', 'full_name' => 'Quality Asker A',
             'convenio_id' => $convenioA->id, 'territory_id' => $this->territoryA->id, 'employment_type' => 'full_time', 'status' => 'active',
         ]);
         $this->employeeB = Employee::create([
-            'uuid' => (string) \Illuminate\Support\Str::uuid(), 'email' => 'qb@example.com', 'full_name' => 'Quality Asker B',
+            'uuid' => (string) Str::uuid(), 'email' => 'qb@example.com', 'full_name' => 'Quality Asker B',
             'convenio_id' => $convenioB->id, 'territory_id' => $this->territoryB->id, 'employment_type' => 'full_time', 'status' => 'active',
         ]);
 
-        $sessionA = DB::table('chat_sessions')->insertGetId(['uuid' => (string) \Illuminate\Support\Str::uuid(), 'employee_id' => $this->employeeA->id, 'started_at' => $this->day, 'created_at' => $this->day, 'updated_at' => $this->day]);
-        $sessionB = DB::table('chat_sessions')->insertGetId(['uuid' => (string) \Illuminate\Support\Str::uuid(), 'employee_id' => $this->employeeB->id, 'started_at' => $this->day, 'created_at' => $this->day, 'updated_at' => $this->day]);
+        $sessionA = DB::table('chat_sessions')->insertGetId(['uuid' => (string) Str::uuid(), 'employee_id' => $this->employeeA->id, 'started_at' => $this->day, 'created_at' => $this->day, 'updated_at' => $this->day]);
+        $sessionB = DB::table('chat_sessions')->insertGetId(['uuid' => (string) Str::uuid(), 'employee_id' => $this->employeeB->id, 'started_at' => $this->day, 'created_at' => $this->day, 'updated_at' => $this->day]);
 
         // Stratum (prose, territory A): 5 answered turns — the common path.
         for ($i = 1; $i <= 5; $i++) {
@@ -189,7 +190,7 @@ class Sprint8QualitySampleStratificationTest extends TestCase
         $sample = QualitySample::where('sampled_for_month', '2026-09')->first();
 
         DB::table('escalation_cards')->insert([
-            'uuid' => (string) \Illuminate\Support\Str::uuid(),
+            'uuid' => (string) Str::uuid(),
             'chat_session_id' => $sample->message->session_id,
             'employee_id' => $this->employeeA->id,
             'reason' => 'low_confidence',

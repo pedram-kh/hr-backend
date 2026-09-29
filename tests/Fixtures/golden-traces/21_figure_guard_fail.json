@@ -1,0 +1,141 @@
+{
+    "outcome": "escalate",
+    "escalated": true,
+    "escalation_reason": "low_confidence",
+    "answer": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+    "citations": [],
+    "categories": [],
+    "authority_used": [
+        "official_convenio"
+    ],
+    "trace": {
+        "profile": {
+            "employee_uuid": "6fd9bc4b-cd6f-e285-6577-ec6f5032493c",
+            "convenio_id": "#convenio_id:1",
+            "convenio_numero": "31TEST-13-21",
+            "territory_id": "#territory_id:1",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id:1",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "#as_of_date:today"
+        },
+        "router_decision": {
+            "label": "prose",
+            "confidence": 0.9,
+            "source": "llm",
+            "subqueries": [],
+            "model": "claude-haiku-4-5",
+            "note": null,
+            "cross_path": false,
+            "trace_fragment": [],
+            "decomposed_queries": []
+        },
+        "guardrail_check": {
+            "fired": false,
+            "reason": null,
+            "rule": null
+        },
+        "retrieval": {
+            "eligible_total": 1,
+            "returned": 1,
+            "top_score": 0.8,
+            "passes": [
+                {
+                    "kind": "main",
+                    "query": "¿Cuánto dura la excedencia?",
+                    "returned": 1,
+                    "eligible_total": 1,
+                    "top_score": 0.8
+                },
+                {
+                    "kind": "national_law",
+                    "query": "¿Cuánto dura la excedencia?",
+                    "returned": 1,
+                    "eligible_total": 1,
+                    "top_score": 0.8
+                }
+            ],
+            "rerank": {
+                "pool_k": 25,
+                "pool_size": 1,
+                "epsilon": 0.0001,
+                "boosted": [],
+                "synthesis_cap": 10
+            },
+            "chunks": [
+                {
+                    "chunk_id": 13210,
+                    "document_id": "#document_id:1",
+                    "page_from": 5,
+                    "page_to": 5,
+                    "score": 0.8,
+                    "authority_level": "official_convenio"
+                }
+            ]
+        },
+        "synthesis": {
+            "provider": "claude",
+            "model": "claude-sonnet-5",
+            "citation_count": 1,
+            "confidence": 0.9,
+            "grounding_signal": [],
+            "authority_used": [
+                "official_convenio"
+            ],
+            "trace_fragment": []
+        },
+        "floor_decision": {
+            "retrieval_score_floor": 0.4,
+            "answer_confidence_floor": 0.65,
+            "check_a_retrieval": true,
+            "check_b_citations": true,
+            "check_c_confidence_tiebreaker": {
+                "confidence": 0.9,
+                "below_floor": false,
+                "used_as_gate": false
+            },
+            "figure_grounding": {
+                "checked": true,
+                "grounded": false,
+                "figures": [
+                    "5 años"
+                ],
+                "ungrounded": [
+                    "5 años"
+                ]
+            },
+            "grounding": {
+                "checked": false,
+                "reason": "short-circuited before /ground"
+            },
+            "authority_used": [
+                "official_convenio"
+            ],
+            "outcome": "escalate",
+            "escalation_reason": "low_confidence",
+            "note": "answer figure not grounded in cited chunk (figure-guard pre-check)"
+        }
+    },
+    "escalation_card_facts": {
+        "reason": "low_confidence",
+        "explanation_facts": {
+            "asked": "Una pregunta de convenio/RR.HH. cuya respuesta generada incluye una cifra.",
+            "found": "La respuesta incluía una cifra que no aparece en ningún documento consultado: 5 años.",
+            "reason": "low_confidence",
+            "fix_link": "#view=documents",
+            "fix_action": "Revisar el documento consultado; si el dato correcto existe en el convenio pero en otra parte del texto, puede ser un problema de cómo está dividido el documento.",
+            "fix_surface": "Documentos",
+            "sub_outcome": "figure_not_grounded",
+            "employee_told": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+            "stopped_reason": "Una cifra que no se puede respaldar con ningún documento consultado nunca se muestra a la persona empleada."
+        },
+        "fix_action": "Revisar el documento consultado; si el dato correcto existe en el convenio pero en otra parte del texto, puede ser un problema de cómo está dividido el documento.",
+        "fix_surface": "Documentos",
+        "fix_link": "#view=documents"
+    }
+}

@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\ProposeSuccession;
 use App\Models\Admin;
 use App\Models\Convenio;
 use App\Models\Document;
@@ -14,7 +15,9 @@ use App\Services\ExtractionClient;
 use App\Services\SuccessionProposalService;
 use Database\Seeders\RoleSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use RuntimeException;
+use Spatie\Permission\PermissionRegistrar;
 use Tests\TestCase;
 
 /**
@@ -101,7 +104,7 @@ class Sprint7dSuccessionProposalTest extends TestCase
     private function auth(): array
     {
         $this->app['auth']->forgetGuards();
-        app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
+        app(PermissionRegistrar::class)->forgetCachedPermissions();
 
         return ['Authorization' => 'Bearer '.$this->admin->createToken('t')->plainTextToken, 'Accept' => 'application/json'];
     }
@@ -317,13 +320,13 @@ class Sprint7dSuccessionProposalTest extends TestCase
 
     public function test_the_expiry_scan_queues_a_proposal_without_touching_any_document(): void
     {
-        \Illuminate\Support\Facades\Queue::fake();
+        Queue::fake();
 
         // The expiring document's validity_end is in the past → it qualifies.
         $this->artisan('reviews:scan-expiry')->assertExitCode(0);
 
         $task = DocumentReviewTask::where('type', 'expiry')->where('document_id', $this->expiring->id)->sole();
-        \Illuminate\Support\Facades\Queue::assertPushed(\App\Jobs\ProposeSuccession::class,
+        Queue::assertPushed(ProposeSuccession::class,
             fn ($job) => $job->taskId === $task->id);
 
         // The command's own contract is unchanged: no status, no lineage.
@@ -409,7 +412,7 @@ class Sprint7dSuccessionProposalTest extends TestCase
         $auditor = Admin::create(['email' => 'auditor7dc@example.com', 'full_name' => 'Auditor', 'status' => 'active']);
         $auditor->assignRole('auditor');
         $this->app['auth']->forgetGuards();
-        app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
+        app(PermissionRegistrar::class)->forgetCachedPermissions();
         $headers = ['Authorization' => 'Bearer '.$auditor->createToken('t')->plainTextToken, 'Accept' => 'application/json'];
 
         // The queue READ stays open (an auditor browses read-only) and shows the

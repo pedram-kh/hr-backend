@@ -1,0 +1,71 @@
+{
+    "outcome": "escalate",
+    "escalated": true,
+    "escalation_reason": "estatuto_fallback_gap",
+    "answer": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+    "citations": [],
+    "categories": [],
+    "authority_used": [],
+    "trace": {
+        "profile": {
+            "employee_uuid": "d3fedd59-19b5-c2ed-d0e1-a3bb8763e93b",
+            "convenio_id": "#convenio_id:1",
+            "convenio_numero": "31TEST-13-17",
+            "territory_id": "#territory_id:1",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id:1",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "#as_of_date:today"
+        },
+        "router_decision": {
+            "label": "prose",
+            "confidence": 0,
+            "source": "fail_safe",
+            "subqueries": [],
+            "model": null,
+            "note": "answer model not configured — fail-safe to prose",
+            "cross_path": false,
+            "trace_fragment": [],
+            "decomposed_queries": []
+        },
+        "guardrail_check": {
+            "fired": false,
+            "reason": null,
+            "rule": null
+        },
+        "prose_gap": {
+            "classification": "expired_only",
+            "reason_code": "SCAN_NO_TEXT",
+            "pending_embed": true
+        },
+        "floor_decision": {
+            "retrieval_score_floor": 0.4,
+            "answer_confidence_floor": 0.65,
+            "outcome": "escalate",
+            "escalation_reason": "estatuto_fallback_gap",
+            "note": "convenio prose exists but is not retrievable — the Estatuto fallback is not allowed to substitute for it (ADR-0032)"
+        }
+    },
+    "escalation_card_facts": {
+        "reason": "estatuto_fallback_gap",
+        "explanation_facts": {
+            "asked": "El empleado preguntó por una condición regulada normalmente en su convenio colectivo.",
+            "found": "El texto del convenio de este empleado está cargado y activo, pero su indexado para búsqueda todavía no ha terminado.",
+            "reason": "estatuto_fallback_gap",
+            "fix_link": "#view=documents",
+            "fix_action": "Esperar a que termine el indexado; si no avanza en unas horas, avisar al equipo técnico.",
+            "fix_surface": "Documentos",
+            "sub_outcome": "not_yet_embedded",
+            "employee_told": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+            "stopped_reason": "Es un estado transitorio de la carga del documento, no un hueco real de cobertura: el texto llegará. El sistema escala en lugar de responder con el mínimo legal mientras tanto."
+        },
+        "fix_action": "Esperar a que termine el indexado; si no avanza en unas horas, avisar al equipo técnico.",
+        "fix_surface": "Documentos",
+        "fix_link": "#view=documents"
+    }
+}

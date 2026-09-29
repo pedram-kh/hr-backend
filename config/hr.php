@@ -42,6 +42,16 @@ return [
     // routes to SQL. Only the uncertain middle defaults to the safe prose path.
     'router_confidence_floor' => (float) env('HR_ROUTER_CONFIDENCE_FLOOR', 0.50),
 
+    // --- Answer engine switch (Sprint 13, plan.md §E.15 step 2, §F.14) --------
+    // `classic` (default) is `ChatService::handleMessage()`, unchanged. `agent`
+    // is the deterministic-shell + planner loop (App\Services\Agent). This is
+    // only the ENV BASELINE — `AnswerEngineDispatcher::effectiveEngine()` also
+    // checks the `answer_engine_settings` single-row DB override (settable
+    // without a deploy via `php artisan answer-engine:set`, super_admin only)
+    // and prefers it when set. Classic stays the default through CP-1; only
+    // CP-2 (plan.md §E.15) flips this default.
+    'answer_engine' => env('HR_ANSWER_ENGINE', 'classic'),
+
     // --- Widened-pool precedence re-rank (Sprint 2b-2, Correction-03) ----------
     // The prose recall-hardening union retrieves a WIDER candidate pool per pass
     // (this many chunks) BEFORE the precedence re-rank + truncation to
@@ -199,5 +209,77 @@ return [
     'succession_sibling_ceiling' => (float) env('HR_SUCCESSION_SIBLING_CEILING', 0.55),
     'succession_probe_max' => (int) env('HR_SUCCESSION_PROBE_MAX', 12),
     'succession_candidate_max' => (int) env('HR_SUCCESSION_CANDIDATE_MAX', 20),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Sprint 13, build step 9 — the `general_knowledge` lane (plan.md §B.6)
+    |--------------------------------------------------------------------------
+    |
+    | OFF by default (`enabled` — env `HR_GENERAL_LANE_ENABLED`): the tool is
+    | not even registered (`AgentServiceProvider`) when this is false, so it
+    | never appears in the planner's `enabled_tools` list at all (§B.6.1
+    | condition 1). The Guardarraíles admin toggle (`GuardrailConfig.
+    | general_lane_enabled`, `GuardrailPolicy::generalLaneEnabled()`) can only
+    | narrow this further (AND, restrict-only) — it can never turn the lane on
+    | when this baseline is off.
+    |
+    | `domains` is the fetcher's allowlist (§B.6.5) — only these hosts (or a
+    | subdomain of one) may ever be fetched, https-only, regardless of what a
+    | `sources` entry's `url` says. `sources` is the curated catalogue the
+    | lane's local keyword-match (`select_sources`, hr-ai `app/general_lane.
+    | py`) picks from — the model never invents a URL, only a catalogue `id`.
+    | Deliberately tiny at launch: general LABOUR-LAW CONCEPT pages only
+    | (never a numbers/figures page — the post-check would block those answers
+    | anyway), one official host per topic area, added deliberately over time.
+    */
+    'general_lane' => [
+        'enabled' => (bool) env('HR_GENERAL_LANE_ENABLED', false),
+
+        'domains' => [
+            'boe.es',
+            'mites.gob.es',
+            'seg-social.es',
+            'sepe.es',
+        ],
+
+        'sources' => [
+            // CP-1 decision (2026-09-29): rows 1, 2, 4, 5, 6 of the verified
+            // proposal (review.md "CP-1 follow-up" §5), each checked with a real
+            // fetch on staging. Topic terms carry both accented and unaccented
+            // spellings because the local question match is accent-sensitive
+            // (the excerpt windowing itself is not). Excedencia / finiquito have
+            // no verified HTML page — ticketed (Guía Laboral PDF support).
+            [
+                'id' => 'sepe-caracteristicas-contrato',
+                'url' => 'https://www.sepe.es/HomeSepe/empresas/Contratos-de-trabajo/caracteristicas-contrato.html',
+                'title' => 'SEPE — Características de los contratos de trabajo',
+                'topics' => ['periodo de prueba', 'período de prueba', 'jornada completa', 'contrato indefinido'],
+            ],
+            [
+                'id' => 'segsocial-it-situaciones-protegidas',
+                'url' => 'https://www.seg-social.es/wps/portal/wss/internet/Trabajadores/PrestacionesPensionesTrabajadores/10952/28362/28363',
+                'title' => 'Seguridad Social — Incapacidad temporal: situaciones protegidas',
+                'topics' => ['incapacidad temporal', 'baja médica', 'baja medica', 'baja laboral', 'parte de baja'],
+            ],
+            [
+                'id' => 'segsocial-nacimiento-cuidado-menor',
+                'url' => 'https://www.seg-social.es/wps/portal/wss/internet/Trabajadores/PrestacionesPensionesTrabajadores/6b96a085-4dc0-47af-b2cb-97e00716791e',
+                'title' => 'Seguridad Social — Nacimiento y cuidado de menor',
+                'topics' => ['permiso por nacimiento', 'nacimiento', 'cuidado de menor', 'conciliación', 'conciliacion'],
+            ],
+            [
+                'id' => 'segsocial-corresponsabilidad-lactante',
+                'url' => 'https://www.seg-social.es/wps/portal/wss/internet/Trabajadores/PrestacionesPensionesTrabajadores/61f8b540-c867-43cf-926d-77476b975f36',
+                'title' => 'Seguridad Social — Corresponsabilidad en el cuidado del lactante',
+                'topics' => ['lactancia', 'lactante', 'permiso de lactancia', 'corresponsabilidad'],
+            ],
+            [
+                'id' => 'boe-rdl-8-2019-registro-jornada',
+                'url' => 'https://www.boe.es/buscar/act.php?id=BOE-A-2019-3481',
+                'title' => 'BOE — Real Decreto-ley 8/2019 (registro de jornada)',
+                'topics' => ['registro de jornada', 'registro diario de jornada', 'jornada'],
+            ],
+        ],
+    ],
 
 ];

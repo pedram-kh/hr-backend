@@ -1,0 +1,68 @@
+{
+    "outcome": "answer",
+    "escalated": false,
+    "escalation_reason": null,
+    "answer": "Para la categoría Peón (grupo 1), según la tabla salarial de 2026 de tu convenio: bruto anual de 21.000,00 €; salario base mensual de 1.500,00 € en 14 pagas. (Cifra exacta de la tabla salarial estructurada; si tu categoría no es la indicada, dímelo y la ajusto.)",
+    "citations": [],
+    "categories": [],
+    "authority_used": [],
+    "trace": {
+        "profile": {
+            "employee_uuid": "7dafc3a7-1a9b-68b9-aea2-f9d1b9dab4ac",
+            "convenio_id": "#convenio_id:1",
+            "convenio_numero": "31TEST-13-09",
+            "territory_id": "#territory_id:1",
+            "job_category_id": "#job_category_id:1"
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id:1",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "#as_of_date:today"
+        },
+        "router_decision": {
+            "label": "salary",
+            "confidence": 1,
+            "source": "deterministic_salary",
+            "subqueries": [],
+            "model": null,
+            "note": "matched deterministic salary pre-classifier",
+            "cross_path": false,
+            "trace_fragment": [],
+            "decomposed_queries": []
+        },
+        "guardrail_check": {
+            "fired": false,
+            "reason": null,
+            "rule": null
+        },
+        "salary": {
+            "convenio_id": "#convenio_id:1",
+            "as_of_date": "#as_of_date:today",
+            "table_id": "#table_id:1",
+            "year": 2026,
+            "year_selection": "exact",
+            "job_category_id": "#job_category_id:1",
+            "category_source": "profile",
+            "outcome": "answer",
+            "row": {
+                "gross_annual": "21000.00",
+                "base_salary_monthly": "1500.00",
+                "base_salary_monthly_label": null,
+                "pagas_count": 14,
+                "hourly_rate": null,
+                "extra_pay": null,
+                "night_plus": null
+            }
+        },
+        "floor_decision": {
+            "path": "salary_sql",
+            "outcome": "answer",
+            "escalation_reason": null,
+            "note": "exact figure from salary_tables (year 2026)"
+        }
+    },
+    "escalation_card_facts": null
+}

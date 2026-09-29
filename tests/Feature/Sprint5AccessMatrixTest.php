@@ -9,13 +9,14 @@ use App\Models\Convenio;
 use App\Models\ConvenioJobCategory;
 use App\Models\ConversationAccessLog;
 use App\Models\Employee;
-use App\Models\EmployeeAuditLog;
 use App\Models\EscalationCard;
 use App\Models\Sector;
 use App\Models\Territory;
 use Database\Seeders\RoleSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Testing\TestResponse;
+use Spatie\Permission\PermissionRegistrar;
 use Tests\TestCase;
 
 /**
@@ -108,10 +109,10 @@ class Sprint5AccessMatrixTest extends TestCase
     private function resetPermCache(): void
     {
         $this->app['auth']->forgetGuards();
-        app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
+        app(PermissionRegistrar::class)->forgetCachedPermissions();
     }
 
-    private function getAs(Admin $admin, string $url): \Illuminate\Testing\TestResponse
+    private function getAs(Admin $admin, string $url): TestResponse
     {
         $this->resetPermCache();
 

@@ -1,0 +1,56 @@
+{
+    "outcome": "escalate",
+    "escalated": true,
+    "escalation_reason": "explicit_request",
+    "answer": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+    "citations": [],
+    "categories": [],
+    "authority_used": [],
+    "trace": {
+        "profile": {
+            "employee_uuid": "f867426e-bd00-befe-3c44-7780181fa788",
+            "convenio_id": "#convenio_id:1",
+            "convenio_numero": "31TEST-13-05",
+            "territory_id": "#territory_id:1",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id:1",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "#as_of_date:today"
+        },
+        "router_decision": null,
+        "guardrail_check": {
+            "fired": false,
+            "reason": null,
+            "rule": null
+        },
+        "floor_decision": {
+            "retrieval_score_floor": 0.4,
+            "answer_confidence_floor": 0.65,
+            "outcome": "escalate",
+            "escalation_reason": "explicit_request",
+            "note": "employee explicitly asked to speak with a person (deterministic pre-check, before router)"
+        }
+    },
+    "escalation_card_facts": {
+        "reason": "explicit_request",
+        "explanation_facts": {
+            "asked": "El empleado pidió explícitamente hablar con una persona de Recursos Humanos.",
+            "found": "No aplica — es una petición directa, no una búsqueda fallida.",
+            "reason": "explicit_request",
+            "fix_link": null,
+            "fix_action": "Atender la conversación normalmente; no hay nada que corregir en el sistema.",
+            "fix_surface": "ninguna — atención directa",
+            "sub_outcome": "explicit_request",
+            "employee_told": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+            "stopped_reason": "Petición explícita del empleado."
+        },
+        "fix_action": "Atender la conversación normalmente; no hay nada que corregir en el sistema.",
+        "fix_surface": "ninguna — atención directa",
+        "fix_link": null
+    }
+}

@@ -1,0 +1,55 @@
+{
+    "outcome": "escalate",
+    "escalated": true,
+    "escalation_reason": "sensitive_topic",
+    "answer": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+    "citations": [],
+    "categories": [],
+    "authority_used": [],
+    "trace": {
+        "profile": {
+            "employee_uuid": "52930f6e-836c-e470-2884-1780dad5c1f6",
+            "convenio_id": "#convenio_id:1",
+            "convenio_numero": "31TEST-13-01",
+            "territory_id": "#territory_id:1",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id:1",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "#as_of_date:today"
+        },
+        "router_decision": null,
+        "guardrail_check": {
+            "fired": true,
+            "reason": "sensitive_topic",
+            "rule": "sensitive_topic"
+        },
+        "floor_decision": {
+            "retrieval_score_floor": 0.4,
+            "answer_confidence_floor": 0.65,
+            "outcome": "escalate",
+            "escalation_reason": "sensitive_topic"
+        }
+    },
+    "escalation_card_facts": {
+        "reason": "sensitive_topic",
+        "explanation_facts": {
+            "asked": "El empleado hizo una pregunta que coincide con un tema sensible (acoso, salud mental, o un procedimiento disciplinario/despido).",
+            "found": "No se buscó ningún dato — el sistema detiene automáticamente este tipo de consultas antes de intentar responder, para proteger la privacidad y la seguridad de la persona empleada.",
+            "reason": "sensitive_topic",
+            "fix_link": null,
+            "fix_action": "Responder directamente a la persona empleada por otro canal; no hay nada que corregir en el sistema.",
+            "fix_surface": "ninguna — atención directa",
+            "sub_outcome": "pattern_baseline",
+            "employee_told": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+            "stopped_reason": "Estos temas se derivan siempre a una persona, sin excepción, para proteger a la persona empleada."
+        },
+        "fix_action": "Responder directamente a la persona empleada por otro canal; no hay nada que corregir en el sistema.",
+        "fix_surface": "ninguna — atención directa",
+        "fix_link": null
+    }
+}

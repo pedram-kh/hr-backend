@@ -1,0 +1,70 @@
+{
+    "outcome": "escalate",
+    "escalated": true,
+    "escalation_reason": "low_confidence",
+    "answer": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+    "citations": [],
+    "categories": [],
+    "authority_used": [],
+    "trace": {
+        "profile": {
+            "employee_uuid": "a9468fd7-169f-48fd-6b0f-bc0ccb98210e",
+            "convenio_id": "#convenio_id:1",
+            "convenio_numero": "31TEST-13-16",
+            "territory_id": "#territory_id:1",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id:1",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "#as_of_date:today"
+        },
+        "router_decision": {
+            "label": "prose",
+            "confidence": 0,
+            "source": "fail_safe",
+            "subqueries": [],
+            "model": null,
+            "note": "answer model not configured — fail-safe to prose",
+            "cross_path": false,
+            "trace_fragment": [],
+            "decomposed_queries": []
+        },
+        "guardrail_check": {
+            "fired": false,
+            "reason": null,
+            "rule": null
+        },
+        "aggregation_guard": {
+            "fired": true,
+            "shape": "vague_total_dias_libres"
+        },
+        "floor_decision": {
+            "retrieval_score_floor": 0.4,
+            "answer_confidence_floor": 0.65,
+            "outcome": "escalate",
+            "escalation_reason": "low_confidence",
+            "note": "aggregation/vague-total query — summing leave types is not a single grounded fact (Correction-03)"
+        }
+    },
+    "escalation_card_facts": {
+        "reason": "low_confidence",
+        "explanation_facts": {
+            "asked": "El empleado preguntó por un TOTAL agregado de varios tipos de días libres (p. ej. \"días libres en total\").",
+            "found": "No se buscó una respuesta automática — sumar varios tipos de permiso distintos no es un dato único que se pueda garantizar con exactitud.",
+            "reason": "low_confidence",
+            "fix_link": null,
+            "fix_action": "Responder desglosando cada tipo de día libre por separado (vacaciones, asuntos propios, permisos específicos).",
+            "fix_surface": "ninguna — respuesta manual desglosada",
+            "sub_outcome": "aggregation",
+            "employee_told": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+            "stopped_reason": "Las preguntas que piden un total sumando varios conceptos distintos se derivan siempre a una persona, para evitar un cálculo automático incorrecto."
+        },
+        "fix_action": "Responder desglosando cada tipo de día libre por separado (vacaciones, asuntos propios, permisos específicos).",
+        "fix_surface": "ninguna — respuesta manual desglosada",
+        "fix_link": null
+    }
+}

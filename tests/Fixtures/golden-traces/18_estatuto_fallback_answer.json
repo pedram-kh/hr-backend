@@ -1,0 +1,152 @@
+{
+    "outcome": "answer",
+    "escalated": false,
+    "escalation_reason": null,
+    "answer": "Según el Estatuto de los Trabajadores, las vacaciones son de 30 días naturales. [Fuente 1]\n\nEsta respuesta se basa en el Estatuto de los Trabajadores, que establece los mínimos legales para cualquier persona trabajadora. Tu convenio colectivo puede mejorar estas condiciones (nunca empeorarlas). Para confirmar lo que se aplica en tu caso concreto, consulta con Recursos Humanos.",
+    "citations": [
+        {
+            "chunk_id": 13180,
+            "document_id": "#document_id:1",
+            "document_uuid": "3a2ccb3b-e377-4a3d-4866-eeb0d5f0fb62",
+            "document_title": "Estatuto de los Trabajadores",
+            "authority_level": "national_law",
+            "page_from": 38,
+            "page_to": 38,
+            "page_number": 38,
+            "snippet": "El periodo de vacaciones anuales será de 30 días naturales."
+        }
+    ],
+    "categories": [],
+    "authority_used": [
+        "national_law"
+    ],
+    "trace": {
+        "profile": {
+            "employee_uuid": "be0ff905-49ab-b3d2-1a3d-e47ee71f5e02",
+            "convenio_id": "#convenio_id:1",
+            "convenio_numero": "31TEST-13-18",
+            "territory_id": "#territory_id:1",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id:1",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "#as_of_date:today"
+        },
+        "router_decision": {
+            "label": "prose",
+            "confidence": 0.9,
+            "source": "llm",
+            "subqueries": [],
+            "model": "claude-haiku-4-5",
+            "note": null,
+            "cross_path": false,
+            "trace_fragment": [],
+            "decomposed_queries": []
+        },
+        "guardrail_check": {
+            "fired": false,
+            "reason": null,
+            "rule": null
+        },
+        "prose_gap": {
+            "classification": "never_ingested",
+            "reason_code": null
+        },
+        "retrieval": {
+            "eligible_total": 1,
+            "returned": 1,
+            "top_score": 0.85,
+            "passes": [
+                {
+                    "kind": "main",
+                    "query": "¿Cuántos días de vacaciones tengo?",
+                    "returned": 1,
+                    "eligible_total": 1,
+                    "top_score": 0.85
+                },
+                {
+                    "kind": "national_law",
+                    "query": "¿Cuántos días de vacaciones tengo?",
+                    "returned": 1,
+                    "eligible_total": 1,
+                    "top_score": 0.85
+                }
+            ],
+            "rerank": {
+                "skipped": "estatuto_fallback — national-law-only pool, no convenio side to re-rank against",
+                "synthesis_cap": 10
+            },
+            "chunks": [
+                {
+                    "chunk_id": 13180,
+                    "document_id": "#document_id:1",
+                    "page_from": 38,
+                    "page_to": 38,
+                    "score": 0.85,
+                    "authority_level": "national_law"
+                }
+            ]
+        },
+        "synthesis": {
+            "provider": "claude",
+            "model": "claude-sonnet-5",
+            "citation_count": 1,
+            "confidence": 0.9,
+            "grounding_signal": {
+                "grounded": true,
+                "citation_count": 1,
+                "top_chunk_score": 0.85
+            },
+            "authority_used": [
+                "national_law"
+            ],
+            "trace_fragment": []
+        },
+        "floor_decision": {
+            "retrieval_score_floor": 0.4,
+            "answer_confidence_floor": 0.65,
+            "check_a_retrieval": true,
+            "check_b_citations": true,
+            "check_c_confidence_tiebreaker": {
+                "confidence": 0.9,
+                "below_floor": false,
+                "used_as_gate": false
+            },
+            "figure_grounding": {
+                "checked": true,
+                "grounded": true,
+                "figures": [
+                    "30 días"
+                ],
+                "ungrounded": []
+            },
+            "grounding": {
+                "checked": true,
+                "grounded": true,
+                "claims": [
+                    {
+                        "claim": "30 días naturales",
+                        "grounded": true,
+                        "supporting_source": 13180
+                    }
+                ],
+                "ungrounded": [],
+                "error": null,
+                "gate": "entailment",
+                "trace_fragment": []
+            },
+            "authority_used": [
+                "national_law"
+            ],
+            "outcome": "answer",
+            "escalation_reason": null,
+            "note": null,
+            "fallback": "estatuto_gap"
+        }
+    },
+    "escalation_card_facts": null
+}

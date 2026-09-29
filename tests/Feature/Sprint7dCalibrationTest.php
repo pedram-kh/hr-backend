@@ -4,11 +4,15 @@ namespace Tests\Feature;
 
 use App\Models\Convenio;
 use App\Models\Document;
+use App\Models\DocumentReviewTask;
 use App\Models\DocumentType;
+use App\Models\EscalationEvent;
 use App\Models\Sector;
+use App\Models\TagEvent;
 use App\Models\Territory;
 use App\Services\ExtractionClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\File;
 use Tests\TestCase;
 
@@ -94,12 +98,12 @@ class Sprint7dCalibrationTest extends TestCase
     /** @return array<string,mixed> */
     private function calibrate(): array
     {
-        $exit = \Illuminate\Support\Facades\Artisan::call('fence:calibrate-semantic', [
+        $exit = Artisan::call('fence:calibrate-semantic', [
             '--anchors' => true, '--anchors-file' => $this->fixture, '--json' => true,
         ]);
         $this->assertSame(0, $exit);
 
-        return json_decode(\Illuminate\Support\Facades\Artisan::output(), true) ?? [];
+        return json_decode(Artisan::output(), true) ?? [];
     }
 
     public function test_it_refuses_to_recommend_a_block_threshold_without_labeled_evidence(): void
@@ -167,17 +171,17 @@ class Sprint7dCalibrationTest extends TestCase
 
         $before = [
             'documents' => Document::count(),
-            'events' => \App\Models\EscalationEvent::count(),
-            'tasks' => \App\Models\DocumentReviewTask::count(),
-            'tag_events' => \App\Models\TagEvent::count(),
+            'events' => EscalationEvent::count(),
+            'tasks' => DocumentReviewTask::count(),
+            'tag_events' => TagEvent::count(),
         ];
 
         $this->calibrate();
 
         $this->assertSame($before['documents'], Document::count());
-        $this->assertSame($before['events'], \App\Models\EscalationEvent::count());
-        $this->assertSame($before['tasks'], \App\Models\DocumentReviewTask::count());
-        $this->assertSame($before['tag_events'], \App\Models\TagEvent::count());
+        $this->assertSame($before['events'], EscalationEvent::count());
+        $this->assertSame($before['tasks'], DocumentReviewTask::count());
+        $this->assertSame($before['tag_events'], TagEvent::count());
     }
 }
 

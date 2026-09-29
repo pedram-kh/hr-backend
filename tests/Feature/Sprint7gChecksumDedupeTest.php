@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Http\Controllers\Admin\DocumentController;
 use App\Models\Admin;
 use App\Models\Document;
 use App\Models\Sector;
@@ -13,7 +14,7 @@ use App\Support\VocabularyResolver;
 use Database\Seeders\DocumentTypeSeeder;
 use Database\Seeders\RoleSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
@@ -22,7 +23,7 @@ use Tests\TestCase;
  * document. Re-ingesting a file whose SHA-256 matches an already-ingested
  * document must NOT change `document_type_id`/`convenio_id`/
  * `validity_start`/`validity_end` without the SAME `confirm_scope_change`
- * gate a manual edit ({@see \App\Http\Controllers\Admin\DocumentController::reassignFacet()})
+ * gate a manual edit ({@see DocumentController::reassignFacet()})
  * requires. Default: report "already exists as document N (type X)", change
  * nothing. Explicit confirm/`--retype` applies it with an `admin_manual`
  * event.
@@ -166,14 +167,14 @@ class Sprint7gChecksumDedupeTest extends TestCase
         $this->app->instance(ExtractionClient::class, $this->fakeReader());
 
         $bytes = 'PK-fake-xlsx-bytes-identical-every-time-http';
-        $file1 = \Illuminate\Http\UploadedFile::fake()->createWithContent('Tabla_salarial_Hosteleria.xlsx', $bytes);
+        $file1 = UploadedFile::fake()->createWithContent('Tabla_salarial_Hosteleria.xlsx', $bytes);
         $this->postJson('/admin/documents/upload', ['files' => [$file1]], $auth)->assertOk();
 
         $doc = Document::first();
         $this->assertSame('salary_tables', $doc->documentType->code);
 
         // Same bytes, same name, but as_reference=true → 409, nothing changed.
-        $file2 = \Illuminate\Http\UploadedFile::fake()->createWithContent('Tabla_salarial_Hosteleria.xlsx', $bytes);
+        $file2 = UploadedFile::fake()->createWithContent('Tabla_salarial_Hosteleria.xlsx', $bytes);
         $this->postJson('/admin/documents/upload', ['files' => [$file2], 'as_reference' => true], $auth)
             ->assertStatus(409)
             ->assertJsonPath('scope_affecting', true)
@@ -184,7 +185,7 @@ class Sprint7gChecksumDedupeTest extends TestCase
         $this->assertSame(1, Document::count());
 
         // Confirming applies it.
-        $file3 = \Illuminate\Http\UploadedFile::fake()->createWithContent('Tabla_salarial_Hosteleria.xlsx', $bytes);
+        $file3 = UploadedFile::fake()->createWithContent('Tabla_salarial_Hosteleria.xlsx', $bytes);
         $this->postJson('/admin/documents/upload', ['files' => [$file3], 'as_reference' => true, 'confirm_scope_change' => true], $auth)
             ->assertOk();
 

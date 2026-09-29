@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Jobs\ProposeSuccession;
 use App\Models\Document;
 use App\Models\DocumentReviewTask;
 use Illuminate\Console\Command;
@@ -88,7 +89,7 @@ class ReviewsScanExpiry extends Command
                 // still "NEVER changes retrieval_status and NEVER writes
                 // predecessor_document_id" exactly as documented above.
                 if (! $this->option('no-propose')) {
-                    \App\Jobs\ProposeSuccession::dispatch($task->id);
+                    ProposeSuccession::dispatch($task->id);
                 }
             }
         }
