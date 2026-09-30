@@ -315,6 +315,11 @@ class AnswerGate extends Command
                 $pass = $pass && str_contains(mb_strtolower($answer), mb_strtolower((string) $needle));
             }
         }
+        if (isset($expect['value_not_contains']) && is_array($expect['value_not_contains'])) {
+            foreach ($expect['value_not_contains'] as $needle) {
+                $pass = $pass && ! str_contains(mb_strtolower($answer), mb_strtolower((string) $needle));
+            }
+        }
         if (isset($expect['outcome_in']) && is_array($expect['outcome_in'])) {
             $pass = $pass && in_array($outcome, $expect['outcome_in'], true);
         }
@@ -352,6 +357,44 @@ class AnswerGate extends Command
                 $anyOk = $anyOk || $ok;
             }
             $pass = $pass && $anyOk;
+        }
+        // Slice 13d (ADR-0037): complementary fact sets. `expect.fact_set` = {facts_selected:[ids] (set-equal),
+        // cited_min:int, cited_all:bool}. The cited/offered checks apply only when a composition offered facts
+        // (Phase 1 quotes carry no composition block); "every cited ∈ offered" is always checked independently.
+        $factTrace = $this->factSetRow($trace);
+        $factSetOk = null;
+        if (isset($expect['fact_set']) && is_array($expect['fact_set'])) {
+            $fe = $expect['fact_set'];
+            if ($fe['absent'] ?? false) {
+                // A precedence case (a group fact won outright): no set may have been formed or offered.
+                $factSetOk = $factTrace === null || ($factTrace['facts_selected'] === [] && $factTrace['fact_ids_offered'] === []);
+            } elseif ($factTrace === null) {
+                $factSetOk = false;
+            } else {
+                $factSetOk = true;
+                if (isset($fe['selected_count'])) {
+                    $factSetOk = count($factTrace['facts_selected']) === (int) $fe['selected_count'];
+                }
+                if ($factSetOk && isset($fe['facts_selected'])) {
+                    $want = array_map('intval', (array) $fe['facts_selected']);
+                    $got = $factTrace['facts_selected'];
+                    sort($want);
+                    sort($got);
+                    $factSetOk = $want === $got;
+                }
+                if ($factSetOk && $factTrace['fact_ids_offered'] !== []) {
+                    $offered = $factTrace['fact_ids_offered'];
+                    $cited = $factTrace['fact_ids_cited'];
+                    $factSetOk = array_diff($cited, $offered) === [];
+                    if ($factSetOk && isset($fe['cited_min'])) {
+                        $factSetOk = count($cited) >= (int) $fe['cited_min'];
+                    }
+                    if ($factSetOk && ($fe['cited_all'] ?? false)) {
+                        $factSetOk = array_diff($offered, $cited) === [];
+                    }
+                }
+            }
+            $pass = $pass && $factSetOk;
         }
         if ($violatedHard) {
             $pass = false;
@@ -471,6 +514,51 @@ class AnswerGate extends Command
             'phrasing' => $case['phrasing'] ?? null,
             'situational' => $case['situational'] ?? false,
             'norm' => $this->normRow($trace),
+            'fact_trace' => $factTrace,
+            'fact_set_ok' => $factSetOk,
+        ];
+    }
+
+    /**
+     * Slice 13d — the complementary-set facts of one turn, wherever the engine nested the reference-fact trace
+     * (classic: trace.reference_fact / trace.composition; agent: inside the tool step). Null when no set was formed
+     * and no composition offered a fact id.
+     *
+     * @param  array<string,mixed>  $trace
+     * @return array{composition:?string, facts_selected:list<int>, fact_ids_offered:list<int>, fact_ids_cited:list<int>, conflict_fact_id:?int, validity_selection:?string}|null
+     */
+    private function factSetRow(array $trace): ?array
+    {
+        $found = ['fact_set' => null, 'fact_ids_offered' => null, 'fact_ids_cited' => null, 'conflict' => null, 'validity_selection' => null];
+        $walk = function ($node) use (&$walk, &$found) {
+            if (! is_array($node)) {
+                return;
+            }
+            foreach ($node as $k => $v) {
+                if (is_string($k) && array_key_exists($k, $found) && $found[$k] === null && $v !== null) {
+                    if ($k === 'conflict' && ! (is_array($v) && array_key_exists('fact_id', $v))) {
+                        continue;
+                    }
+                    $found[$k] = $v;
+                }
+                $walk($v);
+            }
+        };
+        $walk($trace);
+
+        $ints = fn ($v) => is_array($v) ? array_values(array_map('intval', $v)) : [];
+        $fs = is_array($found['fact_set']) ? $found['fact_set'] : null;
+        if ($fs === null && $found['fact_ids_offered'] === null) {
+            return null;
+        }
+
+        return [
+            'composition' => $fs['composition'] ?? null,
+            'facts_selected' => $ints($fs['facts_selected'] ?? []),
+            'fact_ids_offered' => $ints($found['fact_ids_offered']),
+            'fact_ids_cited' => $ints($found['fact_ids_cited']),
+            'conflict_fact_id' => isset($found['conflict']['fact_id']) ? (int) $found['conflict']['fact_id'] : null,
+            'validity_selection' => is_string($found['validity_selection']) ? $found['validity_selection'] : null,
         ];
     }
 
@@ -818,6 +906,11 @@ class AnswerGate extends Command
             $this->line("  [{$r['id']}] {$r['engine']} {$mark}{$hard} outcome={$r['outcome']} path=".($r['path'] ?? '—').' reason='.($r['reason'] ?? '—').' first_tool='.($r['first_tool'] ?? '—'));
             if ($r['note']) {
                 $this->line('        note: '.$r['note']);
+            }
+            if (! empty($r['fact_trace'])) {
+                $ft = $r['fact_trace'];
+                $this->line('        facts: selected=['.implode(',', $ft['facts_selected']).'] offered=['.implode(',', $ft['fact_ids_offered']).'] cited=['.implode(',', $ft['fact_ids_cited']).']'
+                    .($r['fact_set_ok'] === null ? '' : ' fact_set_ok='.($r['fact_set_ok'] ? 'yes' : 'NO')));
             }
         }
 

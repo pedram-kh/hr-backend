@@ -100,12 +100,15 @@ class ReferenceFactPath
             }
 
             // --- Phase 1 fallback: quote the exact verified value (skip /ground) -
+            $isSet = count($result['facts'] ?? []) >= 2; // Slice 13d — a complementary set (single fact: no `facts` key)
             $trace['floor_decision'] = [
                 'path' => 'reference_fact',
                 'outcome' => 'answer',
                 'escalation_reason' => null,
                 'authority_used' => [ReferenceFact::AUTHORITY_LEVEL],
-                'note' => 'exact verified reference fact (fact_id '.($result['reference_fact']['fact_id'] ?? '?').') — quoted value, /ground skipped',
+                'note' => $isSet
+                    ? 'exact verified complementary reference facts x'.count($result['facts']).' (fact_id '.($result['reference_fact']['fact_id'] ?? '?').') — quoted values, /ground skipped'
+                    : 'exact verified reference fact (fact_id '.($result['reference_fact']['fact_id'] ?? '?').') — quoted value, /ground skipped',
             ];
 
             return new TurnOutcome('answer', $result['answer'], $result['citations'], $trace, null);
@@ -159,6 +162,21 @@ class ReferenceFactPath
             return null; // a fact with no citable source can't enter the composed set
         }
 
+        // Slice 13d (ADR-0037): a COMPLEMENTARY SET rides as an ordered list of facts. A single fact
+        // (no `facts` key — every pre-13d result) leaves `$factSet` empty and every array below
+        // is built exactly as before. `$factSet` maps fact_id => ['value','citation'], in set order.
+        $factSet = [];
+        foreach (($factResult['facts'] ?? []) as $f) {
+            if (($f['citation'] ?? null) === null || (string) ($f['value'] ?? '') === '') {
+                return null; // one uncitable member → the whole set falls back to the Phase 1 quote
+            }
+            $factSet[(int) $f['id']] = ['value' => (string) $f['value'], 'citation' => $f['citation']];
+        }
+        if (count($factSet) < 2) {
+            $factSet = [];
+        }
+        $isSet = $factSet !== [];
+
         // Recall-hardened retrieval (reuse the prose union; single-topic → no
         // subqueries). Sprint 10b (ADR-0033): decomposedQueries defaults to []
         // and is deliberately not wired here — the reference-fact path never
@@ -207,13 +225,27 @@ class ReferenceFactPath
             'governing_top_score' => round($governingTop, 6),
             'check_a' => true,
         ];
+        if ($isSet) {
+            $trace['composition']['fact_ids_offered'] = array_keys($factSet);
+        }
 
         // Same-point conflict (escalate-not-blend): the fact's load-bearing figures
         // vs the governing convenio chunks' figures on the same unit. A same-unit /
         // different-value disagreement is a genuine conflict → escalate (the
         // convenio governs; never blend or silently prefer the fact). Deterministic
         // and conservative (it errs toward escalation, the safe direction).
+        // A set is checked PER FACT over the same governing chunks; any conflict escalates.
         $conflict = $this->detectFactProseConflict($factValue, $governingOnTopic);
+        if ($isSet) {
+            foreach ($factSet as $setFactId => $member) {
+                $memberConflict = $this->detectFactProseConflict($member['value'], $governingOnTopic);
+                if ($memberConflict['conflict']) {
+                    $conflict = $memberConflict + ['fact_id' => $setFactId];
+                    break;
+                }
+                $conflict = $memberConflict;
+            }
+        }
         if ($conflict['conflict']) {
             unset($decryptedKey);
             $trace['composition']['conflict'] = $conflict;
@@ -245,13 +277,34 @@ class ReferenceFactPath
             'authority_level' => ReferenceFact::AUTHORITY_LEVEL,
         ];
 
+        // The fact source(s): one for a single fact (byte-identical to pre-13d, NO `fact_id` key);
+        // one per member, in set order, for a set — each carries its `fact_id` so two facts from the
+        // SAME document stay separately citable (hr-ai keys a null-chunk source on it, ADR-0037).
+        $factSources = [$factSource];
+        if ($isSet) {
+            $factSources = [];
+            foreach ($factSet as $setFactId => $member) {
+                $factSources[] = [
+                    'chunk_id' => null,
+                    'source_type' => 'reference_fact',
+                    'document_id' => (int) $member['citation']['document_id'],
+                    'page_from' => null,
+                    'page_to' => null,
+                    'content' => $member['value'],
+                    'score' => 1.0,
+                    'authority_level' => ReferenceFact::AUTHORITY_LEVEL,
+                    'fact_id' => $setFactId,
+                ];
+            }
+        }
+
         $synthesisSources = [];
         $factInserted = false;
         foreach ($orderedChunks as $c) {
-            // Insert the structured_reference fact right after the governing
+            // Insert the structured_reference fact(s) right after the governing
             // convenio/ruling block and before the national_law baseline.
             if (! $factInserted && ($c['authority_level'] ?? null) === 'national_law') {
-                $synthesisSources[] = $factSource;
+                array_push($synthesisSources, ...$factSources);
                 $factInserted = true;
             }
             $synthesisSources[] = [
@@ -266,7 +319,7 @@ class ReferenceFactPath
             ];
         }
         if (! $factInserted) {
-            $synthesisSources[] = $factSource; // no national_law baseline present
+            array_push($synthesisSources, ...$factSources); // no national_law baseline present
         }
 
         $providerConfig = [
@@ -299,10 +352,20 @@ class ReferenceFactPath
         // Check B: every cited source was provided (reject hallucinated citations).
         // A citation is valid when it is a provided chunk OR the fact source.
         $validCitations = [];
+        $citedFactIds = [];
         foreach (($synth['citations'] ?? []) as $cit) {
             $isFact = ($cit['source_type'] ?? 'chunk') === 'reference_fact'
                 || (($cit['chunk_id'] ?? null) === null && (int) ($cit['document_id'] ?? 0) === (int) $factCitation['document_id']);
             if ($isFact) {
+                if ($isSet) {
+                    // A set: a fact-type citation is valid ONLY if its `fact_id` is one of the offered
+                    // facts (hallucinated / missing id → dropped, fail closed). One entry per fact.
+                    $citedId = isset($cit['fact_id']) ? (int) $cit['fact_id'] : null;
+                    if ($citedId === null || ! isset($factSet[$citedId]) || in_array($citedId, $citedFactIds, true)) {
+                        continue;
+                    }
+                    $citedFactIds[] = $citedId;
+                }
                 $validCitations[] = ['source_type' => 'reference_fact'] + $cit;
 
                 continue;
@@ -313,6 +376,9 @@ class ReferenceFactPath
             }
         }
         $checkB = count($validCitations) >= 1 && $answer !== '';
+        if ($isSet) {
+            $trace['composition']['fact_ids_cited'] = $citedFactIds;
+        }
 
         // The composed answer is GENERATED → it MUST /ground (each substantive
         // claim entailed against ITS cited source: the fact's claim vs the fact,
@@ -323,7 +389,7 @@ class ReferenceFactPath
         if (! $checkB) {
             $note = 'no valid citations (Check B failed)';
         } else {
-            $citedForGround = $this->compositionCitedForGrounding($validCitations, $chunks, $factValue, (int) $factCitation['document_id']);
+            $citedForGround = $this->compositionCitedForGrounding($validCitations, $chunks, $factValue, (int) $factCitation['document_id'], array_map(fn (array $m) => $m['value'], $factSet));
             $groundingResult = $this->grounding->check($question, $answer, $citedForGround, $decryptedKey, $providerConfig);
             $note = $groundingResult['grounded'] ? null : 'ungrounded claim in composed answer (per-claim entailment gate)';
         }
@@ -367,7 +433,7 @@ class ReferenceFactPath
 
         // Citation set = the cited convenio chunks (resolved) + the fact citation
         // (chunk_id=null) when the fact was cited.
-        $citations = $this->compositionCitations($validCitations, $chunks, $factCitation);
+        $citations = $this->compositionCitations($validCitations, $chunks, $factCitation, array_map(fn (array $m) => $m['citation'], $factSet));
 
         return new TurnOutcome('answer', $answer, $citations, $trace, null);
     }
@@ -457,9 +523,10 @@ class ReferenceFactPath
      *
      * @param  list<array<string,mixed>>  $validCitations
      * @param  list<array<string,mixed>>  $chunks
+     * @param  array<int,string>  $factValuesById  Slice 13d — a set only: each cited fact is entailed against ITS OWN value
      * @return list<array<string,mixed>>
      */
-    private function compositionCitedForGrounding(array $validCitations, array $chunks, string $factValue, int $factDocumentId): array
+    private function compositionCitedForGrounding(array $validCitations, array $chunks, string $factValue, int $factDocumentId, array $factValuesById = []): array
     {
         $byChunkId = collect($chunks)->keyBy(fn ($c) => (int) $c['id']);
         $out = [];
@@ -468,7 +535,7 @@ class ReferenceFactPath
                 $out[] = [
                     'chunk_id' => null,
                     'source_type' => 'reference_fact',
-                    'content' => $factValue,
+                    'content' => $factValuesById[(int) ($cit['fact_id'] ?? 0)] ?? $factValue,
                     'authority_level' => ReferenceFact::AUTHORITY_LEVEL,
                 ];
 
@@ -499,14 +566,15 @@ class ReferenceFactPath
      * @param  list<array<string,mixed>>  $validCitations
      * @param  list<array<string,mixed>>  $chunks
      * @param  array<string,mixed>  $factCitation
+     * @param  array<int,array<string,mixed>>  $factCitationsById  Slice 13d — a set only: each cited fact resolves to ITS citation
      * @return list<array<string,mixed>>
      */
-    private function compositionCitations(array $validCitations, array $chunks, array $factCitation): array
+    private function compositionCitations(array $validCitations, array $chunks, array $factCitation, array $factCitationsById = []): array
     {
         $out = [];
         foreach ($validCitations as $cit) {
             if (($cit['source_type'] ?? 'chunk') === 'reference_fact') {
-                $out[] = $factCitation; // chunk_id=null, is_reference_fact
+                $out[] = $factCitationsById[(int) ($cit['fact_id'] ?? 0)] ?? $factCitation; // chunk_id=null, is_reference_fact
 
                 continue;
             }

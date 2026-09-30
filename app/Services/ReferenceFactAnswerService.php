@@ -7,6 +7,7 @@ use App\Models\Document;
 use App\Models\Employee;
 use App\Models\ReferenceFact;
 use App\Models\ReferenceFactGroupScope;
+use App\Support\FactSetClassifier;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 
@@ -36,6 +37,13 @@ use Illuminate\Support\Collection;
  * TWO VERIFIED MATCHES in a tier (Q-safe rule): most-recent validity wins; a
  * genuine same-validity conflict (differing value) escalates. Rich conflict /
  * version RESOLUTION is Sprint 7d — this is the deterministic safe rule only.
+ *
+ * SLICE 13d (ADR-0037) narrows exactly ONE case of that escalation: a same-validity
+ * tie whose facts are about PROVABLY DIFFERENT quantities (disjoint `raw_values`
+ * keys, {@see FactSetClassifier}) is a COMPLEMENTARY SET, answered together and
+ * each fact cited. `selectMostRecent()` is untouched and still runs first; the set
+ * logic is reachable only from its `ambiguous_conflict` result, and anything the
+ * classifier cannot prove complementary still escalates, as before.
  */
 class ReferenceFactAnswerService
 {
@@ -167,8 +175,24 @@ class ReferenceFactAnswerService
         [$fact, $selection] = $this->selectMostRecent($tier);
 
         if ($fact === null) {
+            // Slice 13d (ADR-0037): the ONLY input that reaches the set logic is the
+            // one the legacy rule above just called `ambiguous_conflict` (same top
+            // validity_start, differing values). Everything else — single fact,
+            // recency pick — never gets here, and `selectMostRecent()` is unedited.
+            $verdict = $this->classifyTieCohort($tier);
+            if ($verdict['composition'] === FactSetClassifier::SET_COMPLEMENTARY) {
+                return $this->answerFactSet($verdict, $rf, $matchKind, $node);
+            }
+
             $rf['validity_selection'] = $selection; // 'ambiguous_conflict'
             $rf['match_kind'] = $matchKind;
+            $rf['fact_set'] = [
+                'composition' => FactSetClassifier::SET_CONFLICT,
+                'facts_selected' => $verdict['cohort_ids'],
+                'facts_omitted' => [],
+                'order_rule' => null,
+                'pairs' => $verdict['pairs'],
+            ];
             if ($node !== null) {
                 $rf['group_node_id'] = $node->id;
             }
@@ -202,6 +226,107 @@ class ReferenceFactAnswerService
             'escalation_reason' => null,
             'reference_fact' => $rf,
         ];
+    }
+
+    /**
+     * Slice 13d — classify the tie cohort the legacy rule refused to pick from: the
+     * facts sharing the top `validity_start`, one per distinct value (byte-identical
+     * duplicates collapse to the lowest id). Reached ONLY after `selectMostRecent()`
+     * returned `ambiguous_conflict`, so the cohort always holds >= 2 distinct values.
+     *
+     * @param  Collection<int, ReferenceFact>  $tier
+     * @return array{composition:string, cohort_ids:list<int>, pairs:list<array<string,mixed>>, cohort:list<ReferenceFact>}
+     */
+    private function classifyTieCohort($tier): array
+    {
+        $startOf = fn (ReferenceFact $f) => $f->validity_start?->timestamp ?? PHP_INT_MIN;
+        $topStart = $tier->map($startOf)->max();
+        $cohort = FactSetClassifier::distinctByValue($tier->filter(fn (ReferenceFact $f) => $startOf($f) === $topStart));
+
+        return FactSetClassifier::classifySet($cohort) + ['cohort' => $cohort];
+    }
+
+    /**
+     * Slice 13d — answer a COMPLEMENTARY set: the ordered (cap 3) facts, each quoted
+     * verbatim and each cited. `reference_fact.fact_id/value/...` keep meaning "the
+     * primary (first) fact" so every existing reader keeps working; the set rides in
+     * `facts` (result) and `reference_fact.fact_set` (trace).
+     *
+     * @param  array{composition:string, cohort_ids:list<int>, pairs:list<array<string,mixed>>, cohort:list<ReferenceFact>}  $verdict
+     * @param  array<string,mixed>  $rf
+     * @return array<string,mixed>
+     */
+    private function answerFactSet(array $verdict, array $rf, string $matchKind, ?ConvenioGroup $node): array
+    {
+        $ordered = FactSetClassifier::order($verdict['cohort']);
+        $selected = array_slice($ordered, 0, FactSetClassifier::MAX_SET);
+        $omitted = array_slice($ordered, FactSetClassifier::MAX_SET);
+        $primary = $selected[0];
+
+        $rf['fact_id'] = $primary->id;
+        $rf['fact_uuid'] = $primary->uuid;
+        $rf['value'] = $primary->value;
+        $rf['validity_selection'] = 'same_validity_complementary';
+        $rf['match_kind'] = $matchKind;
+        $rf['group_label'] = $primary->group_label;
+        if ($node !== null) {
+            $rf['group_node_id'] = $node->id;
+            $rf['group_node_label'] = $node->label;
+        }
+        $rf['validity_start'] = $primary->validity_start?->toDateString();
+        $rf['validity_end'] = $primary->validity_end?->toDateString();
+        $rf['fact_set'] = [
+            'composition' => FactSetClassifier::SET_COMPLEMENTARY,
+            'facts_selected' => array_map(fn (ReferenceFact $f) => (int) $f->id, $selected),
+            'facts_omitted' => array_map(fn (ReferenceFact $f) => (int) $f->id, $omitted),
+            'order_rule' => FactSetClassifier::ORDER_RULE,
+            'pairs' => $verdict['pairs'],
+        ];
+        $rf['outcome'] = 'answer';
+
+        $facts = [];
+        $citations = [];
+        foreach ($selected as $f) {
+            $citation = $this->referenceFactCitation($f);
+            $facts[] = [
+                'id' => (int) $f->id,
+                'uuid' => $f->uuid,
+                'value' => (string) $f->value,
+                'raw_values' => $f->raw_values,
+                'citation' => $citation[0] ?? null,
+            ];
+            $citations = array_merge($citations, $citation);
+        }
+
+        return [
+            'outcome' => self::OUTCOME_ANSWER,
+            'answer' => $this->composeSetAnswer($selected),
+            'citations' => $citations,
+            'escalation_reason' => null,
+            'reference_fact' => $rf,
+            'facts' => $facts,
+        ];
+    }
+
+    /**
+     * Phase 1 quote of a set: each fact verbatim, in order, numbered, with its own
+     * `raw_values` breakdown — same renderer, same whole-entry cap as a single fact.
+     *
+     * @param  list<ReferenceFact>  $facts
+     */
+    private function composeSetAnswer(array $facts): string
+    {
+        $lines = [];
+        foreach ($facts as $i => $fact) {
+            $value = trim((string) $fact->value);
+            $breakdown = $this->renderRawValues($fact->raw_values);
+            $detail = $breakdown !== '' ? " ({$breakdown})" : '';
+            $lines[] = ($i + 1).". {$value}{$detail}";
+        }
+
+        return "Según los datos de referencia verificados de tu convenio sobre este tema:\n"
+            .implode("\n", $lines)."\n"
+            .'(Datos estructurados exactos, citados a su fuente; si tu categoría o grupo no es el indicado, dímelo.)';
     }
 
     /**

@@ -660,7 +660,160 @@ class Sprint13GoldenTraceTest extends TestCase
         $this->assertGoldenTrace('22_entailment_fail', $result);
     }
 
+    // =========================================================================
+    // Slice 13d (ADR-0037) — multiple verified facts on one topic.
+    //
+    // 23/24/25 were RECORDED ON THE UNMODIFIED TREE FIRST (fixtures = "before":
+    // the same-start tie escalated `ambiguous_conflict` for all three), then
+    // deliberately re-recorded once `FactSetClassifier` landed, so the diff of
+    // each fixture in git IS the behaviour change. 01–22 are untouched.
+    // =========================================================================
+
+    // 23. Two convenio-wide verified facts, same start, DISJOINT quantities
+    //     (convenio 20's real 140/143 shape) + governing prose → composed answer
+    //     citing each fact (Phase 2).
+    public function test_23_reference_fact_set_complementary_composition(): void
+    {
+        $convenio = $this->convenio('13-23');
+        $topic = Topic::firstOrCreate(['name' => 'jornada'], ['status' => 'approved']);
+        $factDoc = $this->doc($convenio, 'Convenio (texto)', 'official_convenio');
+        $this->jornadaPair($convenio, $topic, $factDoc);
+        $prose = 'La jornada máxima anual será de 1704 horas en 2025. En jornada continuada de más de 6 horas '
+            .'habrá un descanso de 15 minutos. Cada trabajador tendrá 2 días de libre disposición.';
+        $employee = $this->employee($convenio);
+        $this->configureAnswerModel();
+        DB::table('document_chunks')->insert([
+            'id' => 13230, 'document_id' => $factDoc->id, 'chunk_index' => 0,
+            'page_from' => 9, 'page_to' => 10, 'content' => $prose,
+            'token_count' => 40, 'convenio_id' => $convenio->id, 'retrieval_status' => 'active',
+            'authority_level' => 'official_convenio', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->bindAi([
+            'retrieve' => fn (array $p) => ($p['convenio_id'] ?? null) === null
+                ? ['chunks' => [], 'eligible_total' => 0]
+                : ['chunks' => [[
+                    'id' => 13230, 'document_id' => $factDoc->id, 'page_from' => 9, 'page_to' => 10,
+                    'content' => $prose, 'score' => 0.93, 'authority_level' => 'official_convenio',
+                ]], 'eligible_total' => 1],
+            // Reached only once the tie is a complementary SET (before the change it
+            // escalates ahead of /synthesise, so this closure is never called).
+            'synthesise' => function (string $question, array $chunks) use ($factDoc) {
+                $factIds = collect($chunks)->where('source_type', 'reference_fact')->pluck('fact_id')->values()->all();
+
+                return [
+                    'answer' => 'Tu jornada máxima anual es de 1704 horas en 2025 [Fuente 2]; además, en jornadas continuadas de más de 6 horas hay un descanso de 15 minutos y tienes 2 días de libre disposición [Fuente 3].',
+                    'confidence' => 0.92,
+                    'authority_used' => ['official_convenio', 'structured_reference'],
+                    'citations' => [
+                        ['chunk_id' => null, 'source_type' => 'reference_fact', 'document_id' => $factDoc->id, 'authority_level' => 'structured_reference', 'fact_id' => $factIds[0] ?? null],
+                        ['chunk_id' => null, 'source_type' => 'reference_fact', 'document_id' => $factDoc->id, 'authority_level' => 'structured_reference', 'fact_id' => $factIds[1] ?? null],
+                    ],
+                    'trace_fragment' => [],
+                ];
+            },
+            'ground' => ['grounded' => true, 'claims' => [['claim' => 'jornada anual 1704 horas', 'grounded' => true, 'supporting_source' => 1]], 'ungrounded' => [], 'trace_fragment' => []],
+        ]);
+
+        $result = app(ChatService::class)->handleMessage($employee, '¿Cuál es mi jornada máxima anual?');
+
+        $this->assertSame('answer', $result['outcome']);
+        $this->assertSame('reference_fact_composition', $result['trace']['floor_decision']['path']);
+        $this->assertCount(2, $result['citations']);
+        $this->assertSame([true, true], array_column($result['citations'], 'is_reference_fact'));
+        $fs = $result['trace']['reference_fact']['fact_set'];
+        $this->assertSame('complementary', $fs['composition']);
+        $this->assertCount(2, $fs['facts_selected']);
+        $this->assertSame($fs['facts_selected'], $result['trace']['composition']['fact_ids_offered']);
+        $this->assertSame($fs['facts_selected'], $result['trace']['composition']['fact_ids_cited']);
+        $this->assertGoldenTrace('23_reference_fact_set_complementary', $result);
+    }
+
+    // 24. Same start, OVERLAPPING quantity key + different values → still
+    //     escalates `ambiguous_conflict` (the safety branch). Only the added
+    //     `fact_set` diagnostics may differ from the "before" recording.
+    public function test_24_reference_fact_set_contradictory_escalates(): void
+    {
+        $convenio = $this->convenio('13-24');
+        $topic = Topic::firstOrCreate(['name' => 'jornada'], ['status' => 'approved']);
+        $doc = $this->doc($convenio, 'Convenio (texto)', 'official_convenio');
+        foreach ([['a', '1704 horas anuales', 1704], ['b', '1720 horas anuales', 1720]] as [$tag, $value, $hours]) {
+            ReferenceFact::create([
+                'uuid' => $this->deterministicUuid('fact-'.$convenio->numero.'-'.$tag),
+                'convenio_id' => $convenio->id, 'topic_id' => $topic->id,
+                'job_category_id' => null, 'group_label' => null,
+                'value' => $value, 'raw_values' => ['2025' => $hours],
+                'authority_level' => ReferenceFact::AUTHORITY_LEVEL,
+                'source' => 'ai_agent', 'status' => 'verified', 'validity_start' => '2025-01-01',
+                'source_document_id' => $doc->id, 'source_locator' => 'p.9',
+            ]);
+        }
+        $employee = $this->employee($convenio);
+        $this->bindAi([]); // escalates in the service — no hr-ai call may happen
+
+        $result = app(ChatService::class)->handleMessage($employee, '¿Cuál es mi jornada máxima anual?');
+
+        $this->assertSame('escalate', $result['outcome']);
+        $this->assertSame('reference_fact_coverage_gap', $result['escalation_reason']);
+        $rf = $result['trace']['reference_fact'];
+        $this->assertSame('ambiguous_conflict', $rf['validity_selection']);
+        $this->assertSame('conflict', $rf['fact_set']['composition']);
+        $this->assertSame('same_quantity', $rf['fact_set']['pairs'][0]['reason']);
+        $this->assertSame(['2025'], $rf['fact_set']['pairs'][0]['shared_keys']);
+        $this->assertGoldenTrace('24_reference_fact_set_contradictory', $result);
+    }
+
+    // 25. The complementary pair on the Phase 1 path (no answer model → bare
+    //     quote of every fact, /ground skipped).
+    public function test_25_reference_fact_set_complementary_phase1_quote(): void
+    {
+        $convenio = $this->convenio('13-25');
+        $topic = Topic::firstOrCreate(['name' => 'jornada'], ['status' => 'approved']);
+        $doc = $this->doc($convenio, 'Convenio (texto)', 'official_convenio');
+        $this->jornadaPair($convenio, $topic, $doc);
+        $employee = $this->employee($convenio);
+        $this->bindAi([]); // no answer model → Phase 1; exploding AI proves no synthesise/ground
+
+        $result = app(ChatService::class)->handleMessage($employee, '¿Cuál es mi jornada máxima anual?');
+
+        $this->assertSame('answer', $result['outcome']);
+        $this->assertSame('reference_fact', $result['trace']['floor_decision']['path']);
+        $this->assertStringContainsString('1704 horas', $result['answer']);
+        $this->assertStringContainsString('2 días de libre disposición', $result['answer']);
+        $this->assertLessThan(strpos($result['answer'], '2 días de libre'), strpos($result['answer'], '1704 horas'), 'figure-bearing fact first');
+        $this->assertCount(2, $result['citations']);
+        $this->assertArrayNotHasKey('grounding', $result['trace']['floor_decision']);
+        $this->assertGoldenTrace('25_reference_fact_set_complementary_phase1', $result);
+    }
+
     // ---- helpers --------------------------------------------------------------
+
+    /** Convenio 20's real facts 140 / 143 (staging), same document, same start, disjoint `raw_values`. */
+    private function jornadaPair(Convenio $convenio, Topic $topic, Document $doc): void
+    {
+        $common = [
+            'convenio_id' => $convenio->id, 'topic_id' => $topic->id,
+            'job_category_id' => null, 'group_label' => null,
+            'authority_level' => ReferenceFact::AUTHORITY_LEVEL,
+            'source' => 'ai_agent', 'status' => 'verified',
+            'validity_start' => '2025-01-01', 'validity_end' => '2028-12-31',
+            'source_document_id' => $doc->id,
+        ];
+        ReferenceFact::create($common + [
+            'uuid' => $this->deterministicUuid('fact-'.$convenio->numero.'-140'),
+            'value' => 'Con carácter general, salvo para los Técnicos de Actividad deportiva y los Técnicos de Sala, que tienen jornada propia: Jornada anual a tiempo completo con carácter general (art. 84.2 y 34 ET): Año 2025: 1704 horas de trabajo efectivo; Año 2026: 1700 horas; Año 2027: 1696 horas; Año 2028: 1692 horas.',
+            'raw_values' => ['2025' => '1704 horas', '2026' => '1700 horas', '2027' => '1696 horas', '2028' => '1692 horas'],
+            'source_locator' => 'p9',
+        ]);
+        ReferenceFact::create($common + [
+            'uuid' => $this->deterministicUuid('fact-'.$convenio->numero.'-143'),
+            'value' => 'Reglas generales de jornada aplicables a todo el personal: en jornadas diarias continuadas de más de 6 horas se establece un descanso de 15 minutos, que no tiene la consideración de tiempo de trabajo efectivo; cada trabajador podrá disfrutar, en cada año de vigencia del convenio, de 2 días de libre disposición de carácter no recuperable.',
+            'raw_values' => [
+                'jornada_irregular' => '0%', 'computo_tiempo_trabajo' => 'en el puesto de trabajo',
+                'dias_libre_disposicion' => '2 días', 'descanso_jornada_continuada' => '15 minutos',
+            ],
+            'source_locator' => 'p10',
+        ]);
+    }
 
     private function convenio(string $numero): Convenio
     {
@@ -803,6 +956,9 @@ class Sprint13GoldenTraceTest extends TestCase
         'convenio_id', 'document_id', 'fact_id', 'job_category_id', 'table_id', 'territory_id', 'topic_id',
     ];
 
+    /** Slice 13d — list-valued keys holding fact ids (see `normalizeAutoincrementIds`). */
+    private const NORMALIZED_FACT_ID_LISTS = ['facts_selected', 'facts_omitted', 'fact_ids_offered', 'fact_ids_cited'];
+
     /** Bucket the value should be recorded/looked-up under, given the (key, value) pair. Handles the one exception — `categories[].id`, which is a `job_category_id` under a bare `id` key. */
     private function normalizedIdBucket(string $key): ?string
     {
@@ -838,6 +994,29 @@ class Sprint13GoldenTraceTest extends TestCase
 
         $out = [];
         foreach ($value as $k => $v) {
+            // Slice 13d: fact ids also ride in LISTS (`fact_set.facts_selected`, `composition.fact_ids_*`)
+            // and as a pair's `a`/`b`. Same sequence-drift problem, same placeholder family (`fact_id`).
+            // Only keys that did not exist before 13d — every 01–22 fixture is unaffected.
+            if (is_string($k) && in_array($k, self::NORMALIZED_FACT_ID_LISTS, true) && is_array($v)) {
+                $out[$k] = array_map(function ($id) use (&$seen) {
+                    if (! is_int($id)) {
+                        return $id;
+                    }
+                    $seen['fact_id'] ??= [];
+                    $seen['fact_id'][$id] ??= count($seen['fact_id']) + 1;
+
+                    return "#fact_id:{$seen['fact_id'][$id]}";
+                }, $v);
+
+                continue;
+            }
+            if (($k === 'a' || $k === 'b') && is_int($v) && isset($value['relation'], $value['reason'])) {
+                $seen['fact_id'] ??= [];
+                $seen['fact_id'][$v] ??= count($seen['fact_id']) + 1;
+                $out[$k] = "#fact_id:{$seen['fact_id'][$v]}";
+
+                continue;
+            }
             $bucket = is_string($k) && is_int($v) ? $this->normalizedIdBucket($k) : null;
             if ($bucket !== null && $k === 'id' && ! isset($value['group_code'])) {
                 $bucket = null; // a bare `id` outside of a categories[] entry is NOT a known id family — leave it alone.
