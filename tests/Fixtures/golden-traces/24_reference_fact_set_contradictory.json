@@ -1,0 +1,108 @@
+{
+    "outcome": "escalate",
+    "escalated": true,
+    "escalation_reason": "reference_fact_coverage_gap",
+    "answer": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+    "citations": [],
+    "categories": [],
+    "authority_used": [
+        "structured_reference"
+    ],
+    "trace": {
+        "profile": {
+            "employee_uuid": "35deebf0-f6d4-f1cb-d7a2-9c8379e9b677",
+            "convenio_id": "#convenio_id:1",
+            "convenio_numero": "31TEST-13-24",
+            "territory_id": "#territory_id:1",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id:1",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "#as_of_date:today"
+        },
+        "router_decision": {
+            "label": "reference_fact",
+            "confidence": 1,
+            "source": "deterministic_reference_fact",
+            "subqueries": [],
+            "model": null,
+            "note": "matched deterministic reference-fact pre-check (topic: jornada)",
+            "cross_path": false,
+            "trace_fragment": {
+                "matched_topic_names": [
+                    "jornada"
+                ]
+            }
+        },
+        "guardrail_check": {
+            "fired": false,
+            "reason": null,
+            "rule": null
+        },
+        "reference_fact": {
+            "convenio_id": "#convenio_id:1",
+            "topic_id": "#topic_id:1",
+            "job_category_id": null,
+            "group_label": null,
+            "as_of_date": "#as_of_date:today",
+            "fact_id": null,
+            "validity_selection": "ambiguous_conflict",
+            "value": null,
+            "authority_used": "structured_reference",
+            "employee_group_state": "unresolved",
+            "match_kind": "convenio_wide",
+            "fact_set": {
+                "composition": "conflict",
+                "facts_selected": [
+                    "#fact_id:1",
+                    "#fact_id:2"
+                ],
+                "facts_omitted": [],
+                "order_rule": null,
+                "pairs": [
+                    {
+                        "a": "#fact_id:1",
+                        "b": "#fact_id:2",
+                        "relation": "contradictory",
+                        "reason": "same_quantity",
+                        "shared_keys": [
+                            "2025"
+                        ]
+                    }
+                ]
+            },
+            "outcome": "escalate",
+            "note": "two verified facts with the same most-recent validity and differing values — escalate, do not blend (resolution is 7d)"
+        },
+        "floor_decision": {
+            "path": "reference_fact",
+            "outcome": "escalate",
+            "escalation_reason": "reference_fact_coverage_gap",
+            "authority_used": [
+                "structured_reference"
+            ],
+            "note": "two verified facts with the same most-recent validity and differing values — escalate, do not blend (resolution is 7d)"
+        }
+    },
+    "escalation_card_facts": {
+        "reason": "reference_fact_coverage_gap",
+        "explanation_facts": {
+            "asked": "El empleado preguntó por un tema con más de un dato de referencia verificado en el mismo nivel de alcance.",
+            "found": "Dos datos verificados comparten la validez más reciente pero tienen valores distintos.",
+            "reason": "reference_fact_coverage_gap",
+            "fix_link": "#view=review&tab=reference-facts",
+            "fix_action": "Revisar ambos datos verificados y corregir/retirar el que esté desactualizado o mal capturado.",
+            "fix_surface": "Reference facts (revisión)",
+            "sub_outcome": "same_validity_conflict",
+            "employee_told": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+            "stopped_reason": "Un conflicto genuino nunca se resuelve automáticamente ni al azar — se deriva a una persona para decidir cuál es correcto."
+        },
+        "fix_action": "Revisar ambos datos verificados y corregir/retirar el que esté desactualizado o mal capturado.",
+        "fix_surface": "Reference facts (revisión)",
+        "fix_link": "#view=review&tab=reference-facts"
+    }
+}

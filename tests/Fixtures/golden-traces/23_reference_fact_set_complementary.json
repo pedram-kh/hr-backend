@@ -1,0 +1,161 @@
+{
+    "outcome": "answer",
+    "escalated": false,
+    "escalation_reason": null,
+    "answer": "Tu jornada máxima anual es de 1704 horas en 2025 [Fuente 2]; además, en jornadas continuadas de más de 6 horas hay un descanso de 15 minutos y tienes 2 días de libre disposición [Fuente 3].",
+    "citations": [
+        {
+            "chunk_id": null,
+            "document_id": "#document_id:1",
+            "document_uuid": "0a85d0d5-73b1-d608-4758-1e44ce5d86ab",
+            "document_title": "Convenio (texto)",
+            "authority_level": "structured_reference",
+            "page_from": null,
+            "page_to": null,
+            "page_number": null,
+            "snippet": "Dato de referencia — Convenio 13-23 (p9)",
+            "is_reference_fact": true
+        },
+        {
+            "chunk_id": null,
+            "document_id": "#document_id:1",
+            "document_uuid": "0a85d0d5-73b1-d608-4758-1e44ce5d86ab",
+            "document_title": "Convenio (texto)",
+            "authority_level": "structured_reference",
+            "page_from": null,
+            "page_to": null,
+            "page_number": null,
+            "snippet": "Dato de referencia — Convenio 13-23 (p10)",
+            "is_reference_fact": true
+        }
+    ],
+    "categories": [],
+    "authority_used": [
+        "official_convenio",
+        "structured_reference"
+    ],
+    "trace": {
+        "profile": {
+            "employee_uuid": "01029e52-4a79-3fa6-9190-3fbc4837d19a",
+            "convenio_id": "#convenio_id:1",
+            "convenio_numero": "31TEST-13-23",
+            "territory_id": "#territory_id:1",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id:1",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "#as_of_date:today"
+        },
+        "router_decision": {
+            "label": "reference_fact",
+            "confidence": 1,
+            "source": "deterministic_reference_fact",
+            "subqueries": [],
+            "model": null,
+            "note": "matched deterministic reference-fact pre-check (topic: jornada)",
+            "cross_path": false,
+            "trace_fragment": {
+                "matched_topic_names": [
+                    "jornada"
+                ]
+            }
+        },
+        "guardrail_check": {
+            "fired": false,
+            "reason": null,
+            "rule": null
+        },
+        "reference_fact": {
+            "convenio_id": "#convenio_id:1",
+            "topic_id": "#topic_id:1",
+            "job_category_id": null,
+            "group_label": null,
+            "as_of_date": "#as_of_date:today",
+            "fact_id": "#fact_id:1",
+            "validity_selection": "same_validity_complementary",
+            "value": "Con carácter general, salvo para los Técnicos de Actividad deportiva y los Técnicos de Sala, que tienen jornada propia: Jornada anual a tiempo completo con carácter general (art. 84.2 y 34 ET): Año 2025: 1704 horas de trabajo efectivo; Año 2026: 1700 horas; Año 2027: 1696 horas; Año 2028: 1692 horas.",
+            "authority_used": "structured_reference",
+            "employee_group_state": "unresolved",
+            "fact_uuid": "b0eae7f9-6016-674e-d217-b501ea18553b",
+            "match_kind": "convenio_wide",
+            "validity_start": "2025-01-01",
+            "validity_end": "2028-12-31",
+            "fact_set": {
+                "composition": "complementary",
+                "facts_selected": [
+                    "#fact_id:1",
+                    "#fact_id:2"
+                ],
+                "facts_omitted": [],
+                "order_rule": "figures_desc,length_asc,id_asc",
+                "pairs": [
+                    {
+                        "a": "#fact_id:1",
+                        "b": "#fact_id:2",
+                        "relation": "complementary",
+                        "reason": "disjoint_quantity_keys",
+                        "shared_keys": []
+                    }
+                ]
+            },
+            "outcome": "answer"
+        },
+        "composition": {
+            "detected": true,
+            "governing_on_topic_chunks": 1,
+            "governing_top_score": 0.93,
+            "check_a": true,
+            "fact_ids_offered": [
+                "#fact_id:1",
+                "#fact_id:2"
+            ],
+            "fact_ids_cited": [
+                "#fact_id:1",
+                "#fact_id:2"
+            ]
+        },
+        "synthesis": {
+            "provider": "claude",
+            "model": "claude-sonnet-5",
+            "citation_count": 2,
+            "confidence": 0.92,
+            "authority_used": [
+                "official_convenio",
+                "structured_reference"
+            ],
+            "composition": true,
+            "trace_fragment": []
+        },
+        "floor_decision": {
+            "path": "reference_fact_composition",
+            "check_b_citations": true,
+            "grounding": {
+                "checked": true,
+                "grounded": true,
+                "claims": [
+                    {
+                        "claim": "jornada anual 1704 horas",
+                        "grounded": true,
+                        "supporting_source": 1
+                    }
+                ],
+                "ungrounded": [],
+                "error": null,
+                "gate": "entailment",
+                "trace_fragment": []
+            },
+            "authority_used": [
+                "official_convenio",
+                "structured_reference"
+            ],
+            "outcome": "answer",
+            "escalation_reason": null,
+            "note": "composed fact+convenio answer (convenio governs), grounded"
+        }
+    },
+    "escalation_card_facts": null
+}
