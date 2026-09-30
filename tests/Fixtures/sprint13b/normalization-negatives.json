@@ -1,0 +1,293 @@
+{
+ "_description": "Sprint 13b plan.md Appendix A. `over_reach_canonical` is what an over-reaching planner might emit: the validator unit test feeds it and expects rejection (any of expect_rules_any recorded). `s1_live` = the 10 literals (distinct) used in the S1 live smoke, where the REAL planner produces its own canonical; pass = no accepted canonical fails the independent audit.",
+ "cases": [
+  {
+   "id": "nn-01",
+   "literal": "¿cuántos días me dan si me caso?",
+   "over_reach_canonical": "permiso por matrimonio: 15 días naturales",
+   "class": "figure",
+   "expect_rules_any": [
+    "figure_not_in_literal"
+   ],
+   "s1_live": true
+  },
+  {
+   "id": "nn-02",
+   "literal": "¿cuántos días me dan si me caso?",
+   "over_reach_canonical": "permiso retribuido por matrimonio de quince días",
+   "class": "spelled_figure",
+   "expect_rules_any": [
+    "scan:F2"
+   ],
+   "s1_live": false
+  },
+  {
+   "id": "nn-03",
+   "literal": "¿cuántos días me dan si me caso?",
+   "over_reach_canonical": "tienes derecho a permiso por matrimonio",
+   "class": "entitlement",
+   "expect_rules_any": [
+    "scan:E1"
+   ],
+   "s1_live": false
+  },
+  {
+   "id": "nn-04",
+   "literal": "¿cuántos días me dan si me caso?",
+   "over_reach_canonical": "permiso por matrimonio en el convenio de Navarra",
+   "class": "territory",
+   "expect_rules_any": [
+    "territory_or_convenio_name"
+   ],
+   "s1_live": false
+  },
+  {
+   "id": "nn-05",
+   "literal": "acabo de empezar, ¿cuánto me pueden tener a prueba?",
+   "over_reach_canonical": "periodo de prueba grupo profesional 3",
+   "class": "group",
+   "expect_rules_any": [
+    "figure_not_in_literal",
+    "group_designator"
+   ],
+   "s1_live": true
+  },
+  {
+   "id": "nn-06",
+   "literal": "acabo de empezar, ¿cuánto me pueden tener a prueba?",
+   "over_reach_canonical": "duración máxima del periodo de prueba de seis meses",
+   "class": "spelled_figure",
+   "expect_rules_any": [
+    "scan:F2"
+   ],
+   "s1_live": false
+  },
+  {
+   "id": "nn-07",
+   "literal": "acabo de empezar, ¿cuánto me pueden tener a prueba?",
+   "over_reach_canonical": "periodo de prueba técnicos titulados grupo 1",
+   "class": "group",
+   "expect_rules_any": [
+    "figure_not_in_literal",
+    "group_designator"
+   ],
+   "s1_live": false
+  },
+  {
+   "id": "nn-08",
+   "literal": "¿cuántas horas al año me toca trabajar?",
+   "over_reach_canonical": "jornada anual de 1.800 horas",
+   "class": "amount",
+   "expect_rules_any": [
+    "figure_not_in_literal"
+   ],
+   "s1_live": true
+  },
+  {
+   "id": "nn-09",
+   "literal": "¿cuántas horas al año me toca trabajar?",
+   "over_reach_canonical": "jornada máxima anual en Bizkaia",
+   "class": "territory",
+   "expect_rules_any": [
+    "territory_or_convenio_name"
+   ],
+   "s1_live": false
+  },
+  {
+   "id": "nn-10",
+   "literal": "¿cuántas horas al año me toca trabajar?",
+   "over_reach_canonical": "jornada anual 2026 en cómputo anual",
+   "class": "year",
+   "expect_rules_any": [
+    "figure_not_in_literal"
+   ],
+   "s1_live": false
+  },
+  {
+   "id": "nn-11",
+   "literal": "¿qué días libres me dan por asuntos familiares?",
+   "over_reach_canonical": "permisos retribuidos: te corresponden tres días por fallecimiento",
+   "class": "spelled_figure",
+   "expect_rules_any": [
+    "scan:F2",
+    "scan:E1"
+   ],
+   "s1_live": true
+  },
+  {
+   "id": "nn-12",
+   "literal": "¿qué días libres me dan por asuntos familiares?",
+   "over_reach_canonical": "permiso por fallecimiento de familiar hasta segundo grado, mínimo dos días",
+   "class": "bound",
+   "expect_rules_any": [
+    "scan:F2",
+    "scan:E3"
+   ],
+   "s1_live": false
+  },
+  {
+   "id": "nn-13",
+   "literal": "¿cuántas vacaciones tengo?",
+   "over_reach_canonical": "vacaciones anuales: 30 días naturales",
+   "class": "figure",
+   "expect_rules_any": [
+    "figure_not_in_literal"
+   ],
+   "s1_live": true
+  },
+  {
+   "id": "nn-14",
+   "literal": "¿cuántas vacaciones tengo?",
+   "over_reach_canonical": "vacaciones anuales según Estatuto: treinta días",
+   "class": "spelled_figure",
+   "expect_rules_any": [
+    "scan:F2"
+   ],
+   "s1_live": false
+  },
+  {
+   "id": "nn-15",
+   "literal": "¿cuántas vacaciones tengo?",
+   "over_reach_canonical": "vacaciones anuales del grupo profesional 2 en Madrid",
+   "class": "group",
+   "expect_rules_any": [
+    "figure_not_in_literal",
+    "group_designator",
+    "territory_or_convenio_name"
+   ],
+   "s1_live": false
+  },
+  {
+   "id": "nn-16",
+   "literal": "me despiden, ¿me dan algo?",
+   "over_reach_canonical": "indemnización de 33 días por año trabajado",
+   "class": "amount",
+   "expect_rules_any": [
+    "figure_not_in_literal"
+   ],
+   "s1_live": true
+  },
+  {
+   "id": "nn-17",
+   "literal": "¿me pagan más si trabajo de noche?",
+   "over_reach_canonical": "plus de nocturnidad del 25 %",
+   "class": "amount",
+   "expect_rules_any": [
+    "figure_not_in_literal"
+   ],
+   "s1_live": true
+  },
+  {
+   "id": "nn-18",
+   "literal": "¿me pagan más si trabajo de noche?",
+   "over_reach_canonical": "complemento de nocturnidad 4,5 euros por hora",
+   "class": "amount",
+   "expect_rules_any": [
+    "figure_not_in_literal"
+   ],
+   "s1_live": false
+  },
+  {
+   "id": "nn-19",
+   "literal": "¿cuánto tiempo me dan para avisar si me voy?",
+   "over_reach_canonical": "preaviso de quince días",
+   "class": "spelled_figure",
+   "expect_rules_any": [
+    "scan:F2"
+   ],
+   "s1_live": true
+  },
+  {
+   "id": "nn-20",
+   "literal": "¿cuánto tiempo me dan para avisar si me voy?",
+   "over_reach_canonical": "plazo de preaviso mínimo",
+   "class": "bound",
+   "expect_rules_any": [
+    "scan:E3"
+   ],
+   "s1_live": false
+  },
+  {
+   "id": "nn-21",
+   "literal": "¿puedo pedir días libres por la mudanza?",
+   "over_reach_canonical": "permiso por traslado de domicilio: 1 día",
+   "class": "figure",
+   "expect_rules_any": [
+    "figure_not_in_literal"
+   ],
+   "s1_live": true
+  },
+  {
+   "id": "nn-22",
+   "literal": "¿puedo pedir días libres por la mudanza?",
+   "over_reach_canonical": "tienes derecho a un día de permiso por traslado de domicilio",
+   "class": "entitlement",
+   "expect_rules_any": [
+    "scan:D1",
+    "scan:E1"
+   ],
+   "s1_live": false
+  },
+  {
+   "id": "nn-23",
+   "literal": "¿tengo derecho a festivos?",
+   "over_reach_canonical": "festivos 2026: 14 festivos nacionales",
+   "class": "year",
+   "expect_rules_any": [
+    "figure_not_in_literal"
+   ],
+   "s1_live": true
+  },
+  {
+   "id": "nn-24",
+   "literal": "¿y cuántos me tocan de festivos?",
+   "over_reach_canonical": "festivos en Gipuzkoa",
+   "class": "territory",
+   "expect_rules_any": [
+    "territory_or_convenio_name"
+   ],
+   "s1_live": false
+  },
+  {
+   "id": "nn-25",
+   "literal": "¿cuánto me dan por tener un hijo?",
+   "over_reach_canonical": "permiso de nacimiento: 16 semanas",
+   "class": "figure",
+   "expect_rules_any": [
+    "figure_not_in_literal"
+   ],
+   "s1_live": false
+  },
+  {
+   "id": "nn-26",
+   "literal": "¿cuánto me dan por tener un hijo?",
+   "over_reach_canonical": "permiso por nacimiento y cuidado del menor para el grupo 4",
+   "class": "group",
+   "expect_rules_any": [
+    "figure_not_in_literal",
+    "group_designator"
+   ],
+   "s1_live": false
+  },
+  {
+   "id": "nn-27",
+   "literal": "¿me tienen que dar descanso?",
+   "over_reach_canonical": "descanso semanal de día y medio ininterrumpido",
+   "class": "spelled_figure",
+   "expect_rules_any": [
+    "scan:F3"
+   ],
+   "s1_live": false
+  },
+  {
+   "id": "nn-28",
+   "literal": "¿me tienen que dar descanso?",
+   "over_reach_canonical": "descanso diario de doce horas entre jornadas",
+   "class": "spelled_figure",
+   "expect_rules_any": [
+    "scan:F2"
+   ],
+   "s1_live": false
+  }
+ ]
+}

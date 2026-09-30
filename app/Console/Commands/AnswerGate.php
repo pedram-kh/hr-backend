@@ -2,18 +2,15 @@
 
 namespace App\Console\Commands;
 
+use App\Console\Commands\Concerns\ResolvesGateCases;
 use App\Models\ChatMessage;
 use App\Models\ChatSession;
 use App\Models\Convenio;
-use App\Models\ConvenioGroup;
-use App\Models\ConvenioJobCategory;
 use App\Models\Employee;
-use App\Models\Territory;
 use App\Services\Agent\Rules\AskEmployeeWhitelist;
 use App\Services\AnswerEngineDispatcher;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 
 /**
  * Sprint 13, build step 7 (plan.md §E.14, §E.15 step 7) — run one gate
@@ -58,6 +55,8 @@ use Illuminate\Support\Str;
  */
 class AnswerGate extends Command
 {
+    use ResolvesGateCases;
+
     protected $signature = 'answer:gate
         {--engine=classic : classic|agent|both}
         {--set= : path to a gate fixture json}
@@ -66,11 +65,16 @@ class AnswerGate extends Command
         {--filter= : run only cases whose id matches this regex (chunk a long set)}
         {--class= : run only cases of this class}
         {--stream= : append every scored row as a JSON line to this file as it finishes (a long run survives a crash)}
+        {--budget-usd= : Sprint 13b — hard spend cap for THIS run (list price). Refuses to start when the projection exceeds it, and stops mid-run when the measured spend reaches it}
+        {--est-turn-usd=0.04 : projected cost per turn for the --budget-usd start-up check}
+        {--allow-unfrozen : skip the MANIFEST.sha256 check on a frozen bank (never for a gate stage)}
         {--json : machine-readable output}';
 
     protected $description = 'Run a gate fixture through classic/agent/both and report pass rate, path/authority distribution, and (agent) routing accuracy.';
 
     private const ENGINES = ['classic', 'agent'];
+
+    private bool $aborted = false;
 
     /** claude-sonnet-5 $3/$15 per MTok (sprint-10-M review §1, re-confirmed sprint-13 review step 6) — reporting only, never production logic. */
     private const PRICE_PER_MTOK = [
@@ -103,6 +107,14 @@ class AnswerGate extends Command
         $repeat = max(1, (int) $this->option('repeat'));
         $persist = (bool) $this->option('persist');
 
+        // Sprint 13b (plan.md §7.1): a frozen bank whose sha256 differs from MANIFEST.sha256 is refused.
+        $frozen = $this->frozenBankCheck((string) $path);
+        if ($frozen !== null && ! $this->option('allow-unfrozen')) {
+            $this->error($frozen);
+
+            return self::FAILURE;
+        }
+
         /** @var array{cases?:list<array<string,mixed>>} $fixture */
         $fixture = json_decode((string) file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
         $rawCases = $fixture['cases'] ?? [];
@@ -122,144 +134,41 @@ class AnswerGate extends Command
         }
         $stream = $this->option('stream');
 
+        // Projected-spend guard: refuse to START a run whose projection exceeds the cap.
+        $budget = $this->option('budget-usd') !== null && $this->option('budget-usd') !== '' ? (float) $this->option('budget-usd') : null;
+        $turns = count($cases) * count($engines) * $repeat;
+        $projected = $turns * (float) $this->option('est-turn-usd');
+        if ($budget !== null) {
+            $this->line(sprintf('  projected spend: %d turns × $%.3f = $%.2f (cap $%.2f)', $turns, (float) $this->option('est-turn-usd'), $projected, $budget));
+            if ($projected > $budget) {
+                $this->error('Projected spend exceeds --budget-usd; refusing to start. Narrow the run (--filter/--repeat) or raise the estimate honestly.');
+
+                return self::FAILURE;
+            }
+        }
+
         $rows = [];
+        $spent = 0.0;
+        $aborted = false;
         foreach ($cases as $case) {
             foreach ($engines as $engine) {
                 for ($r = 0; $r < $repeat; $r++) {
                     $rows[] = $row = $this->runCase($dispatcher, $case, $engine, $persist, $r);
+                    $spent += (float) ($row['cost_usd'] ?? 0.0);
                     if ($stream) {
                         file_put_contents((string) $stream, json_encode($row, JSON_UNESCAPED_UNICODE)."\n", FILE_APPEND | LOCK_EX);
+                    }
+                    if ($budget !== null && $spent >= $budget) {
+                        $aborted = true;
+                        $this->error(sprintf('BUDGET REACHED: measured $%.2f ≥ cap $%.2f — stopping after %d rows.', $spent, $budget, count($rows)));
+                        break 3;
                     }
                 }
             }
         }
+        $this->aborted = $aborted;
 
         return $this->option('json') ? $this->reportJson($rows, $path, $engines, $repeat) : $this->report($rows, $path, $engines, $repeat);
-    }
-
-    /**
-     * @param  array<string,mixed>  $raw
-     * @return list<array<string,mixed>>
-     */
-    private function normalizeCase(array $raw, int $index): array
-    {
-        $baseId = (string) ($raw['id'] ?? ('case_'.$index));
-
-        $variants = [];
-        if (array_key_exists('canonical_question', $raw) || array_key_exists('colloquial_question', $raw)) {
-            if (isset($raw['canonical_question'])) {
-                $variants[] = ['suffix' => 'canonical', 'question' => (string) $raw['canonical_question']];
-            }
-            if (isset($raw['colloquial_question'])) {
-                $variants[] = ['suffix' => 'colloquial', 'question' => (string) $raw['colloquial_question']];
-            }
-        } elseif (isset($raw['question'])) {
-            $variants[] = ['suffix' => null, 'question' => (string) $raw['question']];
-        }
-
-        $expect = $raw['expect'] ?? [
-            'outcome' => $raw['expected_outcome'] ?? (isset($raw['expected_path']) ? 'answer' : null),
-            'reason' => $raw['expected_reason'] ?? null,
-            'path' => $raw['expected_path'] ?? null,
-            'value_contains' => $raw['value_contains'] ?? null,
-            'must_not_answer' => $raw['must_not_answer'] ?? false,
-            'first_tool' => $raw['expected_tools']['first'] ?? $raw['expected_first_tool'] ?? null,
-            'terminal' => $raw['expected_tools']['terminal'] ?? $raw['expected_terminal'] ?? null,
-        ];
-        if (isset($raw['expected_tools']['first'])) {
-            $expect['first_tool'] = $raw['expected_tools']['first'];
-        }
-
-        $scope = null;
-        if (isset($raw['convenio_id'])) {
-            $scope = [
-                'convenio_id' => (int) $raw['convenio_id'],
-                'group_label' => $raw['group_label'] ?? null,
-                'job_category' => $raw['job_category'] ?? null,
-                'as_of_date' => $raw['as_of_date'] ?? null,
-                'start_date' => $raw['start_date'] ?? null,
-            ];
-        }
-
-        $out = [];
-        foreach ($variants as $v) {
-            $out[] = [
-                'id' => $baseId.($v['suffix'] ? '.'.$v['suffix'] : ''),
-                'email' => $raw['email'] ?? null,
-                'scope' => $scope,
-                'question' => $v['question'],
-                'expect' => $expect,
-                'class' => $raw['class'] ?? null,
-            ];
-        }
-
-        return $out;
-    }
-
-    /**
-     * @param  array<string,mixed>  $case
-     * @return array{employee:?Employee,note:?string}
-     */
-    private function resolveEmployee(array $case): array
-    {
-        if ($case['email']) {
-            $employee = Employee::where('email', $case['email'])->first();
-
-            return $employee
-                ? ['employee' => $employee, 'note' => null]
-                : ['employee' => null, 'note' => "employee {$case['email']} not found"];
-        }
-
-        if ($case['scope']) {
-            $scope = $case['scope'];
-            $convenio = Convenio::find($scope['convenio_id']);
-            if ($convenio === null) {
-                return ['employee' => null, 'note' => "convenio {$scope['convenio_id']} not found in this database — scope not found"];
-            }
-
-            $jobCategoryId = null;
-            if ($scope['job_category']) {
-                $jobCategoryId = ConvenioJobCategory::where('convenio_id', $convenio->id)
-                    ->whereRaw('lower(name) = ?', [Str::lower((string) $scope['job_category'])])
-                    ->value('id');
-            }
-
-            $groupId = null;
-            if ($scope['group_label']) {
-                $groupId = ConvenioGroup::approved()->where('convenio_id', $convenio->id)
-                    ->whereRaw('lower(label) = ?', [Str::lower((string) $scope['group_label'])])
-                    ->value('id');
-            }
-
-            $territoryId = $convenio->territory_id ?? Territory::query()->value('id');
-
-            $email = 'test-answer-gate-'.substr(sha1(json_encode($scope)), 0, 16).'@example.com';
-            $employee = Employee::firstOrCreate(
-                ['email' => $email],
-                [
-                    'full_name' => 'Answer Gate Fixture',
-                    'convenio_id' => $convenio->id,
-                    'territory_id' => $territoryId,
-                    'job_category_id' => $jobCategoryId,
-                    'convenio_group_id' => $groupId,
-                    'employment_type' => 'full_time',
-                    'status' => 'active',
-                    'start_date' => $scope['start_date'],
-                ],
-            );
-
-            $note = 'as_of_date not honoured (no engine supports a caller-supplied date yet — roadmap.md §7)';
-            if ($scope['job_category'] && $jobCategoryId === null) {
-                $note .= "; job_category '{$scope['job_category']}' not found on this convenio";
-            }
-            if ($scope['group_label'] && $groupId === null) {
-                $note .= "; group_label '{$scope['group_label']}' not found (approved) on this convenio";
-            }
-
-            return ['employee' => $employee, 'note' => $note];
-        }
-
-        return ['employee' => null, 'note' => 'case has neither email nor scope'];
     }
 
     /**
@@ -397,6 +306,10 @@ class AnswerGate extends Command
         if (isset($expect['path']) && is_array($expect['path']) && $expect['path'] !== []) {
             $pass = $pass && in_array($path, $expect['path'], true);
         }
+        if (isset($expect['path_not']) && is_array($expect['path_not'])) {
+            // Sprint 13b situational cases: a bare fact quote is the wrong route; any other route is acceptable.
+            $pass = $pass && ! ($outcome === 'answer' && $path !== null && in_array($path, $expect['path_not'], true));
+        }
         if (isset($expect['value_contains']) && is_array($expect['value_contains'])) {
             foreach ($expect['value_contains'] as $needle) {
                 $pass = $pass && str_contains(mb_strtolower($answer), mb_strtolower((string) $needle));
@@ -457,6 +370,7 @@ class AnswerGate extends Command
         $verdicts = 0;
         $corrections = 0;
         $forcedTerminations = 0;
+        $normRejections = 0;
         $askAttempted = false;
         $askDenied = false;
         foreach ($steps as $step) {
@@ -465,7 +379,17 @@ class AnswerGate extends Command
                 $firstTool = (string) (($step['seeded'][0] ?? null) ?: 'round0');
             }
             if ($firstTool === null && $type === 'planner_round') {
-                $firstTool = $step['calls'][0]['tool'] ?? null;
+                // Sprint 13b: `normalize_question` is a control call about the question, not a routing choice — the
+                // first tool is the first call that is NOT it (found at S1: it made first-tool accuracy read 0/20).
+                foreach ($step['calls'] ?? [] as $c) {
+                    if (($c['tool'] ?? null) !== 'normalize_question') {
+                        $firstTool = $c['tool'] ?? null;
+                        break;
+                    }
+                }
+            }
+            if ($firstTool === null && $type === 'round1a') {
+                $firstTool = (string) (($step['seeded'][0] ?? null) ?: 'round1a');
             }
             if ($firstExecuted === null && $type === 'tool_call') {
                 $firstExecuted = $step['tool'] ?? null;
@@ -484,6 +408,13 @@ class AnswerGate extends Command
                 $verdicts++;
                 $v = (string) ($step['verdict'] ?? '');
                 $ruleId = (string) ($step['rule'] ?? '');
+                if ($ruleId === 'normalization_validation') {
+                    // Sprint 13b: a rejected normalization is not a routing miss — counted under `norm`, not corrections.
+                    $normRejections++;
+                    $verdicts--;
+
+                    continue;
+                }
                 // A CORRECTION = a rule rejected/rewrote the planner's proposal, or forced
                 // a terminal action outside a tool's own mandated post-call termination.
                 // `*_post_call` force_* verdicts are the mechanical end of a tool (e.g. the
@@ -535,7 +466,67 @@ class AnswerGate extends Command
             'tokens_prompt' => $tokensPrompt,
             'tokens_completion' => $tokensCompletion,
             'cost_usd' => $costUsd,
+            'bank' => $case['bank'] ?? null,
+            'anchored' => $case['anchored'] ?? null,
+            'phrasing' => $case['phrasing'] ?? null,
+            'situational' => $case['situational'] ?? false,
+            'norm' => $this->normRow($trace),
         ];
+    }
+
+    /**
+     * Sprint 13b — the per-turn normalization facts the gate aggregates (plan.md §7.3), from `trace.agent.normalization`.
+     *
+     * @param  array<string,mixed>  $trace
+     * @return array<string,mixed>|null null when the turn had no normalization block (classic, Round 0, flag off)
+     */
+    private function normRow(array $trace): ?array
+    {
+        $n = $trace['agent']['normalization'] ?? null;
+        if (! is_array($n)) {
+            return null;
+        }
+        $consumers = is_array($n['consumers'] ?? null) ? $n['consumers'] : [];
+
+        return [
+            'verdict' => $n['verdict'] ?? null,
+            'topic_id' => $n['used']['topic_id'] ?? null,
+            'canonical' => $n['used']['canonical_query'] ?? ($n['proposed']['canonical_query'] ?? null),
+            'confidence' => $n['proposed']['confidence'] ?? null,
+            'rejected_by' => array_values(array_unique(array_column($n['rejections'] ?? [], 'rule'))),
+            'topic_dropped' => (bool) ($n['topic_dropped'] ?? false),
+            'round1a_ran' => (bool) ($n['round1a']['ran'] ?? false),
+            'round1a_skipped' => $n['round1a']['skipped'] ?? null,
+            'consumed' => count($consumers),
+            'check_a_rescued' => (bool) count(array_filter($consumers, fn ($c) => $c['check_a_rescued'] ?? false)),
+            'rescued_answer' => (bool) count(array_filter($consumers, fn ($c) => $c['rescued_answer'] ?? false)),
+            'literal_top_score' => $consumers[0]['literal_top_score'] ?? null,
+            'canonical_top_score' => $consumers[0]['canonical_top_score'] ?? null,
+            'planner_prompt_version' => $n['planner_prompt_version'] ?? null,
+            'literal' => $n['literal'] ?? null,
+        ];
+    }
+
+    /**
+     * Sprint 13b — null when the set is not a frozen bank (or is unchanged); an error string when its sha256
+     * differs from the MANIFEST.sha256 sitting next to it.
+     */
+    private function frozenBankCheck(string $path): ?string
+    {
+        $manifest = dirname($path).'/MANIFEST.sha256';
+        if (! is_file($manifest)) {
+            return null;
+        }
+        $base = basename($path);
+        foreach (preg_split('/\R/', (string) file_get_contents($manifest)) ?: [] as $line) {
+            if (preg_match('/^([0-9a-f]{64})\s+\*?(.+)$/', trim($line), $m) === 1 && trim($m[2]) === $base) {
+                $actual = hash_file('sha256', $path);
+
+                return $actual === $m[1] ? null : "FROZEN BANK CHANGED: {$base} sha256 {$actual} != MANIFEST {$m[1]}. Refusing to run (pass --allow-unfrozen only for a non-gate probe).";
+            }
+        }
+
+        return null;
     }
 
     /** Recursively sums every `trace_fragment{prompt_tokens,completion_tokens,model}` and `agent.steps[].tokens` found, priced from {@see PRICE_PER_MTOK}. Informational (plan §E.14's own "cost/latency informational"). @return array{0:int,1:int,2:float} */
@@ -637,6 +628,9 @@ class AnswerGate extends Command
             }
 
             $summary['engines'][$engine] = [
+                'norm' => $this->normSummary($scored),
+                'by_phrasing_anchor' => $this->byPhrasingAnchor($scored),
+                'unanchored_breakdown' => $this->unanchoredBreakdown($scored),
                 'turns' => $n,
                 'pass' => count(array_filter($scored, fn ($r) => $r['pass'])),
                 'hard_violations' => count(array_filter($scored, fn ($r) => $r['must_not_answer_violated'])),
@@ -687,6 +681,124 @@ class AnswerGate extends Command
         return $summary;
     }
 
+    /**
+     * Sprint 13b — verdict counts, Round 1a, rescues LISTED (id + literal + canonical), rejection-rule histogram.
+     *
+     * @param  list<array<string,mixed>>  $scored
+     * @return array<string,mixed>
+     */
+    private function normSummary(array $scored): array
+    {
+        $withNorm = array_values(array_filter($scored, fn ($r) => is_array($r['norm'] ?? null)));
+        $verdicts = array_count_values(array_map(fn ($r) => (string) $r['norm']['verdict'], $withNorm));
+        $rejectedBy = [];
+        foreach ($withNorm as $r) {
+            foreach ($r['norm']['rejected_by'] as $rule) {
+                $rejectedBy[$rule] = ($rejectedBy[$rule] ?? 0) + 1;
+            }
+        }
+        $rescues = [];
+        foreach ($withNorm as $r) {
+            if ($r['norm']['rescued_answer']) {
+                $rescues[] = ['id' => $r['id'], 'literal' => $r['norm']['literal'], 'canonical' => $r['norm']['canonical'], 'topic_id' => $r['norm']['topic_id']];
+            }
+        }
+
+        return [
+            'turns_with_block' => count($withNorm),
+            'verdicts' => $verdicts,
+            'rejected_by' => $rejectedBy,
+            'topic_dropped' => count(array_filter($withNorm, fn ($r) => $r['norm']['topic_dropped'])),
+            'round1a_ran' => count(array_filter($withNorm, fn ($r) => $r['norm']['round1a_ran'])),
+            'check_a_rescues' => count(array_filter($withNorm, fn ($r) => $r['norm']['check_a_rescued'])),
+            'rescued_answers' => count($rescues),
+            'rescued_answers_listed' => $rescues,
+        ];
+    }
+
+    /**
+     * The 2×2 (authored phrasing × lexicon-anchored) plus G1's own cell: unanchored, non-situational lookups.
+     *
+     * @param  list<array<string,mixed>>  $scored
+     * @return array<string,mixed>
+     */
+    private function byPhrasingAnchor(array $scored): array
+    {
+        $cells = [];
+        foreach ($scored as $r) {
+            if ($r['phrasing'] === null) {
+                continue;
+            }
+            // A fixture with no `anchored` label (the Sprint 13 sets) still gets its phrasing cell, as `unlabelled`.
+            $anchor = $r['anchored'] === null ? 'unlabelled' : ($r['anchored'] ? 'anchored' : 'unanchored');
+            $key = $r['phrasing'].'|'.$anchor.($r['situational'] ? '|situational' : '');
+            $cells[$key]['n'] = ($cells[$key]['n'] ?? 0) + 1;
+            $cells[$key]['pass'] = ($cells[$key]['pass'] ?? 0) + ($r['pass'] ? 1 : 0);
+        }
+        ksort($cells);
+
+        return $cells;
+    }
+
+    /** Sprint 13b (S1 decision B): a convenio-wide answered rate below this is a STOP condition, judged at every stage. */
+    public const CONVENIO_WIDE_STOP_RATE = 0.5;
+
+    /**
+     * G1's own population — colloquial, lexicon-UNanchored — split by class, never blended:
+     * `convenio_wide` (a fact that needs no group: answered = pass), `group_unbound` (the honest outcome is the
+     * coverage-gap escalation: pass = reached it), `situational` (informational only; a bare fact quote is wrong).
+     * `unanchored_overall` = convenio_wide + group_unbound (+ any other class), without situational.
+     * `stop_condition` is set when convenio_wide's pass rate < CONVENIO_WIDE_STOP_RATE.
+     *
+     * @param  list<array<string,mixed>>  $scored
+     * @return array<string,mixed> [] when the run has no colloquial-unanchored rows
+     */
+    private function unanchoredBreakdown(array $scored): array
+    {
+        $groups = ['convenio_wide' => [], 'group_unbound' => [], 'other' => [], 'situational' => []];
+        foreach ($scored as $r) {
+            if (($r['phrasing'] ?? null) !== 'colloquial' || ($r['anchored'] ?? null) !== false) {
+                continue;
+            }
+            $g = ($r['situational'] ?? false) ? 'situational'
+                : match ($r['class'] ?? null) {
+                    'fact_convenio_wide' => 'convenio_wide',
+                    'fact_group_labelled_unbound' => 'group_unbound',
+                    default => 'other',
+                };
+            $groups[$g][] = $r;
+        }
+        $cell = static function (array $rows): array {
+            $n = count($rows);
+            $pass = count(array_filter($rows, fn ($r) => $r['pass']));
+
+            return [
+                'n' => $n, 'pass' => $pass, 'rate' => $n > 0 ? round($pass / $n, 3) : null,
+                'answered' => count(array_filter($rows, fn ($r) => $r['outcome'] === 'answer')),
+                'hard' => count(array_filter($rows, fn ($r) => $r['must_not_answer_violated'])),
+            ];
+        };
+        $overallRows = array_merge($groups['convenio_wide'], $groups['group_unbound'], $groups['other']);
+        if ($overallRows === [] && $groups['situational'] === []) {
+            return [];
+        }
+        $out = [
+            'unanchored_overall' => $cell($overallRows),
+            'convenio_wide' => $cell($groups['convenio_wide']),
+            'group_unbound' => $cell($groups['group_unbound']),
+            'situational_informational' => $cell($groups['situational']),
+            'stop_condition' => null,
+        ];
+        if ($out['convenio_wide']['n'] > 0 && $out['convenio_wide']['pass'] / $out['convenio_wide']['n'] < self::CONVENIO_WIDE_STOP_RATE) {
+            $out['stop_condition'] = sprintf('convenio-wide %d/%d = %.0f%% < %.0f%%', $out['convenio_wide']['pass'], $out['convenio_wide']['n'], 100 * $out['convenio_wide']['pass'] / $out['convenio_wide']['n'], 100 * self::CONVENIO_WIDE_STOP_RATE);
+        }
+        if ($groups['other'] !== []) {
+            $out['other'] = $cell($groups['other']);
+        }
+
+        return $out;
+    }
+
     /** @param  list<array<string,mixed>>  $rows */
     private function report(array $rows, string $path, array $engines, int $repeat): int
     {
@@ -728,6 +840,26 @@ class AnswerGate extends Command
             $this->line(sprintf('    latency p50/p95: %s / %s ms', $e['latency_ms']['p50'] ?? '—', $e['latency_ms']['p95'] ?? '—'));
             $this->line(sprintf('    cost (list pricing, informational): $%.4f total, $%.5f/turn, $%s/answer', $e['cost_usd'], $e['cost_per_turn_usd'], $e['cost_per_answer_usd'] ?? '—'));
             $this->line('    by class: '.json_encode($e['by_class'], JSON_UNESCAPED_UNICODE));
+            if ($e['by_phrasing_anchor'] !== []) {
+                $this->line('    by phrasing|anchored: '.json_encode($e['by_phrasing_anchor'], JSON_UNESCAPED_UNICODE));
+            }
+            if ($e['unanchored_breakdown'] !== []) {
+                $u = $e['unanchored_breakdown'];
+                $fmt = fn (array $c) => $c['n'] === 0 ? '—' : sprintf('%d/%d = %.0f%%', $c['pass'], $c['n'], 100 * $c['pass'] / $c['n']);
+                $this->line(sprintf(
+                    '    colloquial-unanchored (G1): overall %s | convenio-wide %s | group-unbound %s | situational (informational) %s',
+                    $fmt($u['unanchored_overall']), $fmt($u['convenio_wide']), $fmt($u['group_unbound']), $fmt($u['situational_informational']),
+                ));
+                if ($u['stop_condition'] !== null) {
+                    $this->line("    <error>STOP CONDITION: {$u['stop_condition']} (S1 decision B) — no further spend until diagnosed</error>");
+                }
+            }
+            if ($e['norm']['turns_with_block'] > 0) {
+                $this->line('    normalization: '.json_encode(array_diff_key($e['norm'], ['rescued_answers_listed' => 1]), JSON_UNESCAPED_UNICODE));
+                foreach ($e['norm']['rescued_answers_listed'] as $rescue) {
+                    $this->line("      rescue: [{$rescue['id']}] «{$rescue['literal']}» → «{$rescue['canonical']}»");
+                }
+            }
             $this->newLine();
         }
 
@@ -741,7 +873,7 @@ class AnswerGate extends Command
     {
         $anyHard = array_filter($rows, fn ($r) => $r['must_not_answer_violated'] ?? false) !== [];
         $this->line(json_encode([
-            'set' => $path, 'engines' => $engines, 'repeat' => $repeat,
+            'set' => $path, 'engines' => $engines, 'repeat' => $repeat, 'aborted_on_budget' => $this->aborted,
             'summary' => $this->summarize($rows, $engines), 'rows' => $rows,
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
 

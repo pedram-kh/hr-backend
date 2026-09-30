@@ -93,4 +93,45 @@ class ReferenceFactRouter
             return null;
         }
     }
+
+    /**
+     * Sprint 13b (plan.md §4.1) — the SAME existence check as {@see self::detectTopic()}, but for a topic
+     * the planner's VALIDATED normalization named (agent engine only), not one the lexicon found in the
+     * question. Same fail-safe: no convenio / topic not approved / no verified in-scope in-validity fact /
+     * any error → null (fall through). `detectTopic()` itself is untouched, so classic and Round 0 are
+     * byte-identical.
+     *
+     * @return array{topic_id:int, topic_name:string, matched_topic_names:list<string>}|null
+     */
+    public function detectFromTopic(Employee $employee, int $topicId, Carbon $asOfDate): ?array
+    {
+        try {
+            $convenioId = $employee->convenio_id;
+            if ($convenioId === null) {
+                return null;
+            }
+
+            $topic = Topic::query()->where('status', 'approved')->where('id', $topicId)->first(['id', 'name']);
+            if ($topic === null) {
+                return null;
+            }
+
+            $asOf = $asOfDate->toDateString();
+            $exists = ReferenceFact::query()
+                ->where('convenio_id', $convenioId)
+                ->where('topic_id', $topic->id)
+                ->where('status', 'verified')
+                ->where(fn ($q) => $q->whereNull('validity_start')->orWhere('validity_start', '<=', $asOf))
+                ->where(fn ($q) => $q->whereNull('validity_end')->orWhere('validity_end', '>=', $asOf))
+                ->exists();
+
+            return $exists
+                ? ['topic_id' => (int) $topic->id, 'topic_name' => (string) $topic->name, 'matched_topic_names' => [mb_strtolower((string) $topic->name)]]
+                : null;
+        } catch (\Throwable $e) {
+            Log::warning('reference-fact normalized-topic check failed (fail-safe fall-through)', ['detail' => $e->getMessage()]);
+
+            return null;
+        }
+    }
 }

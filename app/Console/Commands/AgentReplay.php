@@ -84,6 +84,10 @@ class AgentReplay extends Command
         }
 
         $definitions = [...$tools->definitions(), ...ControlTools::definitions()];
+        // Sprint 13b: round 1 of a turn that offered `normalize_question` is replayed with it offered too.
+        if ($roundWanted === 1 && is_array($trace['agent']['normalization'] ?? null)) {
+            $definitions[] = ControlTools::normalizationDefinition();
+        }
 
         $this->info("Replaying message {$message->id}, planner_round {$roundWanted} (read-only).");
         $this->line('Recorded calls: '.json_encode($recorded['calls'] ?? [], JSON_UNESCAPED_UNICODE));

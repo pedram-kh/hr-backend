@@ -46,6 +46,41 @@ final class TurnState
     public array $cache = [];
 
     /**
+     * Sprint 13b (plan.md §3/§6) — this turn's normalization record (`null` until the planner's first
+     * round offered `normalize_question`). Written by `NormalizationValidationRule` /
+     * `AgentChatService`; read by the tools that consume an ACCEPTED one and by `agentBlock()`.
+     * Shape: {requested, literal, proposed, verdict: accepted|declined|rejected|absent, rejections[],
+     * used:{topic_id,topic_name,canonical_query}|null, topic_dropped, consumers[], round1a, ...}.
+     *
+     * @var array<string,mixed>|null
+     */
+    public ?array $normalization = null;
+
+    /** The accepted topic id, or null (rejected / declined / absent / topic dropped). */
+    public function normalizedTopicId(): ?int
+    {
+        $u = $this->normalization['used'] ?? null;
+
+        return ($this->normalization['verdict'] ?? null) === 'accepted' && is_array($u) && isset($u['topic_id']) ? (int) $u['topic_id'] : null;
+    }
+
+    /** The accepted canonical query, or null. */
+    public function normalizedCanonical(): ?string
+    {
+        $u = $this->normalization['used'] ?? null;
+
+        return ($this->normalization['verdict'] ?? null) === 'accepted' && is_array($u) && is_string($u['canonical_query'] ?? null) && $u['canonical_query'] !== '' ? $u['canonical_query'] : null;
+    }
+
+    /** @param  array<string,mixed>  $consumer  appended to `normalization.consumers` (no-op when there is no accepted normalization) */
+    public function recordNormalizationConsumer(array $consumer): void
+    {
+        if ($this->normalization !== null) {
+            $this->normalization['consumers'][] = $consumer;
+        }
+    }
+
+    /**
      * Sprint 13, build step 6 (plan.md §B.4.4's last bullet) — the current
      * session's window message ids, IF `AgentChatService::loop()` actually
      * built one this turn (`[]` otherwise — a turn round 0 short-circuited

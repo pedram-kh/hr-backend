@@ -83,4 +83,46 @@ class Sprint13AgentReplayTest extends TestCase
         $this->assertSame($messagesBefore, ChatMessage::count());
         $this->assertSame($tracesBefore, MessageTrace::count());
     }
+
+    /** Sprint 13b: round 1 of a turn that offered `normalize_question` is replayed with it offered; a pre-13b turn is not. */
+    public function test_replay_offers_normalize_question_only_on_round_one_of_a_turn_that_had_it(): void
+    {
+        $territory = Territory::create(['code' => '31', 'name' => 'Navarra', 'level' => 'provincial', 'aliases' => []]);
+        $sector = Sector::create(['name' => 'Hostelería', 'aliases' => []]);
+        $convenio = Convenio::create(['numero' => '13RP-2', 'name' => 'Convenio replay 2', 'territory_id' => $territory->id, 'sector_id' => $sector->id]);
+        $employee = Employee::create(['email' => 'replay2@example.com', 'full_name' => 'Replay 2', 'convenio_id' => $convenio->id, 'territory_id' => $territory->id, 'employment_type' => 'full_time', 'status' => 'active']);
+
+        $mk = function (bool $withNormalization) use ($employee) {
+            $session = ChatSession::create(['employee_id' => $employee->id, 'started_at' => now(), 'last_activity_at' => now()]);
+            ChatMessage::create(['session_id' => $session->id, 'role' => 'user', 'content' => 'me quiero ir de vacas']);
+            $assistant = ChatMessage::create(['session_id' => $session->id, 'role' => 'assistant', 'content' => 'derivado']);
+            $agent = ['window' => ['message_ids' => []], 'steps' => [
+                ['i' => 0, 'type' => 'planner_round', 'round' => 1, 'calls' => [['id' => 't1', 'tool' => 'reference_fact', 'input' => []]], 'prompt_version' => 'sha256:old'],
+            ]];
+            if ($withNormalization) {
+                $agent['normalization'] = ['requested' => true, 'verdict' => 'absent'];
+            }
+            MessageTrace::create(['message_id' => $assistant->id, 'trace' => ['engine' => 'agent', 'agent' => $agent]]);
+
+            return $assistant->id;
+        };
+
+        $offered = (object) ['list' => []];
+        $this->app->bind(PlannerClient::class, fn () => new class($offered) implements PlannerClient
+        {
+            public function __construct(private object $offered) {}
+
+            public function plan(string $question, array $scopeSummary, array $window, array $toolDefinitions, array $priorSteps): array
+            {
+                $this->offered->list[] = in_array('normalize_question', array_column($toolDefinitions, 'name'), true);
+
+                return ['stop_reason' => 'tool_use', 'calls' => [], 'model' => 'm', 'request_id' => 'r', 'prompt_version' => 'sha256:new', 'tokens' => [], 'ms' => 1];
+            }
+        });
+
+        $this->artisan('agent:replay', ['message_id' => $mk(true)])->assertSuccessful();
+        $this->artisan('agent:replay', ['message_id' => $mk(false)])->assertSuccessful();
+
+        $this->assertSame([true, false], $offered->list);
+    }
 }

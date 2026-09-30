@@ -11,6 +11,7 @@ use App\Services\Agent\Rules\GeneralLaneAvailabilityRule;
 use App\Services\Agent\Rules\GeneralLaneFinishRule;
 use App\Services\Agent\Rules\GeneralLanePostCheck;
 use App\Services\Agent\Rules\NationalLawPrecedenceRule;
+use App\Services\Agent\Rules\NormalizationValidationRule;
 use App\Services\Agent\Rules\PeriodSupportGuard;
 use App\Services\Agent\Rules\ProseCheckAPostCallRule;
 use App\Services\Agent\Rules\ReferenceFactPostCallRule;
@@ -70,6 +71,8 @@ class AgentServiceProvider extends ServiceProvider
             $engine->register('turn_start', $app->make(PeriodSupportGuard::class));
             $engine->register('pre_call', $app->make(ClarificationBudgetRule::class));
             $engine->register('post_call:salary_lookup', $app->make(SalaryLookupPostCallRule::class));
+            // Sprint 13b: the planner's `normalize_question` is validated here, never trusted.
+            $engine->register('pre_call:normalize_question', $app->make(NormalizationValidationRule::class));
             $engine->register('pre_call:reference_fact', $app->make(ReferenceFactSalaryPrecedenceRule::class));
             $engine->register('post_call:reference_fact', $app->make(ReferenceFactPostCallRule::class));
             // CP-2 (wt-03): pay-intent questions never go to prose; registered FIRST so it wins

@@ -282,4 +282,24 @@ return [
         ],
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Sprint 13b — planner-driven question normalization (AGENT ENGINE ONLY)
+    |--------------------------------------------------------------------------
+    | On the planner's first round the model may declare, via the `normalize_question`
+    | control tool (same /plan call, no extra model call), which approved topic and which
+    | canonical (corpus-vocabulary) phrasing the employee's colloquial question means.
+    | `NormalizationValidationRule` never trusts it: the canonical is only ever used for
+    | retrieval (unioned WITH the literal, never replacing it) and to pick a verified fact's
+    | topic, and only if it says nothing the employee did not say. Classic never reads this.
+    |
+    | enabled              — off = the agent behaves exactly as at the end of Sprint 13.
+    | min_topic_confidence — a valid normalization whose confidence is below this keeps its
+    |                        canonical for retrieval but DROPS its topic (no fact routing).
+    */
+    'normalization' => [
+        'enabled' => (bool) env('HR_NORMALIZATION_ENABLED', true),
+        'min_topic_confidence' => (float) env('HR_NORMALIZATION_MIN_TOPIC_CONFIDENCE', 0.6),
+    ],
+
 ];

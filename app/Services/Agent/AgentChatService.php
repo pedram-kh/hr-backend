@@ -184,6 +184,9 @@ class AgentChatService
             'steps' => $state->steps,
             'termination' => $termination,
             'planner_escalation' => null,
+            // Sprint 13b (plan.md §6.1): present ONLY on a turn that reached the planner with normalization
+            // on — a Round-0-settled or 13b-disabled turn's `trace.agent` is unchanged.
+            ...($state->normalization !== null ? ['normalization' => $state->normalization] : []),
         ], $existing);
     }
 
@@ -267,6 +270,7 @@ class AgentChatService
         $window = $this->windowBuilder->build($state->session);
         $state->windowMessageIds = $window['message_ids'];
         $toolDefinitions = [...$this->tools->definitions(), ...ControlTools::definitions()];
+        $normalizationOn = (bool) config('hr.normalization.enabled', true);
 
         while (! $state->terminated) {
             if ($state->rounds >= 4) {
@@ -284,8 +288,13 @@ class AgentChatService
                 break;
             }
 
+            // Sprint 13b (plan.md §2.2): `normalize_question` is offered on the FIRST planner round only, on
+            // the SAME call — no extra model call, no envelope change.
+            $offerNormalization = $normalizationOn && $state->rounds === 0 && $state->normalization === null;
+            $roundDefinitions = $offerNormalization ? [...$toolDefinitions, ControlTools::normalizationDefinition()] : $toolDefinitions;
+
             $state->rounds++;
-            $plan = $this->planner->plan($state->question, $scopeSummary, $window, $toolDefinitions, $state->steps);
+            $plan = $this->planner->plan($state->question, $scopeSummary, $window, $roundDefinitions, $state->steps);
 
             $state->trace['agent']['planner'] = [
                 'model' => $plan['model'] ?? null,
@@ -306,7 +315,24 @@ class AgentChatService
             ]);
 
             $calls = $plan['calls'] ?? [];
+            $hadCalls = $calls !== [];
+
+            // Sprint 13b: pull the `normalize_question` control call out FIRST — validate it, record it,
+            // and (Round 1a) run the binding fact route before anything the planner itself asked for.
+            $calls = $this->takeNormalization($calls, $state, $offerNormalization);
+            if ($offerNormalization) {
+                $this->runRoundOneA($state);
+                if ($state->terminated) {
+                    break;
+                }
+            }
+
             if ($calls === []) {
+                // A round whose only call was a (validated or rejected) normalization is not malformed —
+                // the planner simply has not chosen a tool yet; the next round will.
+                if ($hadCalls && $offerNormalization) {
+                    continue;
+                }
                 if (! $this->registerMalformed($state)) {
                     break;
                 }
@@ -318,6 +344,94 @@ class AgentChatService
         }
 
         return $state->finalOutcome ?? $this->budgetOutcome($state, 'malformed');
+    }
+
+    /**
+     * Sprint 13b (plan.md §2.2/§3) — separates the `normalize_question` control call(s) from the round's real
+     * calls and runs the FIRST through `pre_call:normalize_question` ({@see Rules\NormalizationValidationRule}),
+     * which records the verdict on `TurnState::$normalization` (allow = usable by the tools this turn; deny =
+     * literal path, nothing else changes). A round that offered it and got none records `absent`. A stray call
+     * on a round that did not offer it is dropped (hr-ai/HrAiPlannerClient already filter by `enabled_tools`;
+     * this is the belt to that braces). Never terminates and never spends a round.
+     *
+     * @param  list<array{id:string,tool:string,input:array<string,mixed>}>  $calls
+     * @return list<array{id:string,tool:string,input:array<string,mixed>}> the round's calls WITHOUT any normalize_question
+     */
+    private function takeNormalization(array $calls, TurnState $state, bool $offered): array
+    {
+        $norm = [];
+        $rest = [];
+        foreach ($calls as $call) {
+            if (($call['tool'] ?? null) === 'normalize_question') {
+                $norm[] = $call;
+            } else {
+                $rest[] = $call;
+            }
+        }
+        if (! $offered) {
+            return $rest;
+        }
+
+        if ($norm === []) {
+            $state->normalization = [
+                'requested' => true,
+                'literal' => $state->question,
+                'proposed' => null,
+                'verdict' => 'absent',
+                'rejections' => [],
+                'used' => null,
+                'topic_dropped' => false,
+                'consumers' => [],
+                'round1a' => null,
+                'validator_version' => Rules\NormalizationValidationRule::VALIDATOR_VERSION,
+                'planner_prompt_version' => $state->trace['agent']['planner']['prompt_version'] ?? null,
+            ];
+            $state->recordStep(['type' => 'normalization', 'verdict' => 'absent', 'topic' => null, 'confidence' => null, 'rejected_by' => null]);
+
+            return $rest;
+        }
+
+        $this->ruleEngine->run('pre_call:normalize_question', $state, $norm[0]);
+
+        return $rest;
+    }
+
+    /**
+     * Sprint 13b, Round 1a (plan.md §4.1) — after a VALIDATED normalization named a topic that has a verified
+     * in-scope fact, the shell runs the `reference_fact` route itself, exactly as Round 0 does for the lexicon
+     * (a binding route, not a suggestion — ADR-0035 §1), before the planner's own calls. Same conditions as
+     * Round 0's settle rule: a single question on the session's first turn; a compound or follow-up question
+     * keeps the topic for the planner's own `reference_fact` call but is not answered from the shell. Goes
+     * through the normal `runToolCall()` (every rule, the budgets, the post-call terminal); a `no_fact` falls
+     * through to the planner's calls.
+     */
+    private function runRoundOneA(TurnState $state): void
+    {
+        $topicId = $state->normalizedTopicId();
+        if ($topicId === null) {
+            return;
+        }
+
+        $skip = null;
+        if (! $this->tools->has('reference_fact')) {
+            $skip = 'tool_unavailable';
+        } elseif (count($this->router->deterministicSplit($state->question)) >= 2) {
+            $skip = 'compound_question';
+        } elseif (ChatMessage::where('session_id', $state->session->id)->exists()) {
+            $skip = 'follow_up';
+        } elseif ($this->referenceFactRouter->detectFromTopic($state->employee, $topicId, $state->asOfDate) === null) {
+            $skip = 'no_verified_fact';
+        }
+        if ($skip !== null) {
+            $state->normalization['round1a'] = ['ran' => false, 'skipped' => $skip];
+
+            return;
+        }
+
+        $state->normalization['round1a'] = ['ran' => true, 'active' => true, 'topic_id' => $topicId];
+        $state->recordStep(['type' => 'round1a', 'seeded' => ['reference_fact'], 'topic_id' => $topicId]);
+        $this->runToolCall('reference_fact', ['id' => 'round1a', 'tool' => 'reference_fact', 'input' => []], $state);
+        $state->normalization['round1a']['active'] = false;
     }
 
     /**

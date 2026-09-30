@@ -46,8 +46,10 @@ class ProsePath
      * @param  array<string,mixed>  $trace
      * @param  list<string>  $decomposedQueries  Sprint 10b (ADR-0033) — situational/
      *                                           colloquial retrieval rephrasings, [] on every turn until hr-ai returns one.
+     * @param  bool  $protectMain  Sprint 13b — AGENT only, after a validated planner normalization: keep the literal
+     *                             question's own top-10 through the synthesis cap ({@see RetrievalUnion::retrieveUnion()}).
      */
-    public function handle(Employee $employee, string $question, array $subqueries, Carbon $asOfDate, ?string $decryptedKey, array $trace, array $decomposedQueries = []): TurnOutcome
+    public function handle(Employee $employee, string $question, array $subqueries, Carbon $asOfDate, ?string $decryptedKey, array $trace, array $decomposedQueries = [], bool $protectMain = false): TurnOutcome
     {
         // Effective floors = stricter_of(hardcoded baseline, admin override),
         // computed inside GuardrailPolicy (Sprint 6, ADR-0019). The caller never
@@ -127,7 +129,7 @@ class ProsePath
         // plus a national-law-only pass (the silent-topic recall — the Art. 14 ET
         // miss). Union, dedupe by chunk_id keeping the max score. /retrieve is
         // unchanged.
-        $union = $this->retrievalUnion->retrieveUnion($question, $subqueries, $employee->convenio_id, $asOfDate->toDateString(), $fallback, $decomposedQueries);
+        $union = $this->retrievalUnion->retrieveUnion($question, $subqueries, $employee->convenio_id, $asOfDate->toDateString(), $fallback, $decomposedQueries, $protectMain);
         $chunks = $union['chunks'];
         $eligibleTotal = $union['eligible_total'];
         $topScore = empty($chunks) ? 0.0 : (float) collect($chunks)->max('score');

@@ -161,6 +161,41 @@ final class GeneralLanePostCheck implements Rule
         return null;
     }
 
+    /**
+     * Sprint 13b (plan.md §3) — every pattern, every match, WITH byte offsets into the returned
+     * normalized+citation-stripped text. Used by `NormalizationDiff` to decide whether a hit's
+     * matched SPAN contains a token the employee did not say. Additive: `scan()` / `audit()` are
+     * untouched, so the lane's own behaviour cannot change.
+     *
+     * @return array{normalized:string,hits:list<array{pattern_id:string,matched_span:string,start:int,end:int}>}
+     */
+    public static function scanAll(string $text): array
+    {
+        $normalized = self::normalizedForScan($text);
+        $hits = [];
+        foreach (self::PATTERNS as $id => $pattern) {
+            if (preg_match_all($pattern, $normalized, $m, PREG_OFFSET_CAPTURE) === false) {
+                continue;
+            }
+            foreach ($m[0] as [$span, $offset]) {
+                $hits[] = ['pattern_id' => $id, 'matched_span' => trim($span), 'start' => (int) $offset, 'end' => (int) $offset + strlen($span)];
+            }
+        }
+
+        return ['normalized' => $normalized, 'hits' => $hits];
+    }
+
+    /** The exact text `scan()` runs its patterns over: normalized, then legal-citation tokens blanked (same length not preserved — offsets refer to THIS string). */
+    public static function normalizedForScan(string $text): string
+    {
+        $normalized = self::normalize($text);
+        foreach (self::CITATION_PATTERNS as $citation) {
+            $normalized = preg_replace($citation, ' ', $normalized) ?? $normalized;
+        }
+
+        return $normalized;
+    }
+
     private static function normalize(string $text): string
     {
         $text = mb_strtolower($text, 'UTF-8');
