@@ -72,12 +72,18 @@ class RetrievalUnion
      *
      * @param  list<string>  $subqueries
      * @param  list<string>  $decomposedQueries
+     * @param  bool  $protectMain  Sprint 13b (plan.md §4.2) — AGENT engine only, after a validated planner
+     *                             normalization. `false` (classic, Round 0, every pre-13b caller) leaves the
+     *                             cap exactly as it was. `true` guarantees the LITERAL question's own top-10
+     *                             (by its own pass score) survives the synthesis cap: an extra canonical pass
+     *                             can add chunks, never push a literal hit out. Recorded on the rerank trace.
      * @return array{chunks:list<array<string,mixed>>, eligible_total:int, passes:list<array<string,mixed>>, rerank:array<string,mixed>}
      */
-    public function retrieveUnion(string $question, array $subqueries, ?int $convenioId, string $asOf, bool $fallback = false, array $decomposedQueries = []): array
+    public function retrieveUnion(string $question, array $subqueries, ?int $convenioId, string $asOf, bool $fallback = false, array $decomposedQueries = [], bool $protectMain = false): array
     {
         $byChunkId = [];
         $passes = [];
+        $mainTopIds = [];
         $maxEligible = 0;
         $poolK = (int) config('hr.retrieval_pool_k', 25);
         $nlK = (int) config('hr.retrieval_national_law_k', 8);
@@ -107,6 +113,11 @@ class RetrievalUnion
                 'k' => $poolK,
             ]);
             $this->mergeChunks($byChunkId, $resp['chunks'] ?? []);
+            if ($protectMain && $i === 0) {
+                $mainPass = array_values($resp['chunks'] ?? []);
+                usort($mainPass, fn ($a, $b) => ($b['score'] ?? 0.0) <=> ($a['score'] ?? 0.0));
+                $mainTopIds = array_values(array_filter(array_map(fn ($c) => (int) ($c['id'] ?? 0), array_slice($mainPass, 0, self::SYNTHESIS_CHUNK_CAP))));
+            }
             $eligible = (int) ($resp['eligible_total'] ?? 0);
             $maxEligible = max($maxEligible, $eligible);
             $kind = 'main';
@@ -170,10 +181,50 @@ class RetrievalUnion
         // never costs recall relative to today (count 0 → identical cap →
         // byte-for-byte with pre-10b behavior on every question it doesn't touch).
         $cap = self::SYNTHESIS_CHUNK_CAP + self::COMPOUND_CAP_PER_SUBQUERY * (count($subqueries) + count($decomposedQueries));
+        $full = $merged;
         $merged = array_slice($merged, 0, $cap);
         $rerank['synthesis_cap'] = $cap;
+        if ($protectMain) {
+            [$merged, $restored] = $this->protectMainHits($full, $merged, $mainTopIds);
+            $rerank['protect_main'] = ['top_n' => self::SYNTHESIS_CHUNK_CAP, 'main_top_ids' => $mainTopIds, 'restored' => $restored];
+        }
 
         return ['chunks' => $merged, 'eligible_total' => $maxEligible, 'passes' => $passes, 'rerank' => $rerank];
+    }
+
+    /**
+     * Sprint 13b — put back any of the literal pass's top hits the cap dropped, evicting the lowest-ranked
+     * chunks that are NOT literal top hits. Deterministic; order in the result follows the pre-cap ranking.
+     *
+     * @param  list<array<string,mixed>>  $full  the ranked union before the cap
+     * @param  list<array<string,mixed>>  $kept  `$full` cut to the cap
+     * @param  list<int>  $mainTopIds  the literal pass's top chunk ids, best first
+     * @return array{0:list<array<string,mixed>>,1:list<int>} [final chunks, restored ids]
+     */
+    private function protectMainHits(array $full, array $kept, array $mainTopIds): array
+    {
+        $idOf = fn (array $c): int => (int) ($c['id'] ?? 0);
+        $keptIds = array_map($idOf, $kept);
+        $missing = array_values(array_filter($mainTopIds, fn ($id) => ! in_array($id, $keptIds, true)));
+        if ($missing === []) {
+            return [$kept, []];
+        }
+
+        $protected = array_flip($mainTopIds);
+        $restored = [];
+        foreach ($missing as $id) {
+            for ($k = count($kept) - 1; $k >= 0; $k--) {
+                if (! isset($protected[$idOf($kept[$k])])) {
+                    array_splice($kept, $k, 1);
+                    $restored[] = $id;
+
+                    break;
+                }
+            }
+        }
+        $keep = array_flip(array_merge(array_map($idOf, $kept), $restored));
+
+        return [array_values(array_filter($full, fn (array $c) => isset($keep[$idOf($c)]))), $restored];
     }
 
     /**

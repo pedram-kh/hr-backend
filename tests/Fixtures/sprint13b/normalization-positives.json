@@ -1,0 +1,101 @@
+{
+ "_description": "Sprint 13b plan.md Appendix A — legitimate canonicals (noun phrases in convenio vocabulary, nothing the employee did not say). `accepted:true` must be accepted by NormalizationDiff. The two `accepted:false` cases are KNOWN FALSE REJECTS, pinned as rejected so a loosening is a deliberate diff (plan §8.5 Q8, safe direction): np-14 (E3 `plazo de`) and np-13 (`pay_intent_added`: «complemento de nocturnidad» is pay vocabulary the literal «me pagan más…» does not trip in the salary lexicon — found while building; the plan's prototype had no pay-intent check). np-15 is the non-pay replacement.",
+ "cases": [
+  {
+   "id": "np-01",
+   "literal": "¿cuántos días me dan si me caso?",
+   "canonical": "permiso retribuido por matrimonio o pareja de hecho: duración",
+   "accepted": true
+  },
+  {
+   "id": "np-02",
+   "literal": "¿cuántos días me dan si me caso?",
+   "canonical": "duración del permiso retribuido por matrimonio",
+   "accepted": true
+  },
+  {
+   "id": "np-03",
+   "literal": "acabo de empezar, ¿cuánto me pueden tener a prueba?",
+   "canonical": "duración del período de prueba",
+   "accepted": true
+  },
+  {
+   "id": "np-04",
+   "literal": "¿hasta cuánto tiempo máximo me pueden tener a prueba?",
+   "canonical": "duración máxima del periodo de prueba",
+   "accepted": true
+  },
+  {
+   "id": "np-05",
+   "literal": "¿cuántas horas al año me toca trabajar?",
+   "canonical": "jornada máxima anual en cómputo anual",
+   "accepted": true
+  },
+  {
+   "id": "np-06",
+   "literal": "¿cuántas horas al año me toca trabajar?",
+   "canonical": "jornada anual de trabajo efectivo",
+   "accepted": true
+  },
+  {
+   "id": "np-07",
+   "literal": "¿qué días libres me dan por asuntos familiares?",
+   "canonical": "permisos retribuidos por fallecimiento, enfermedad grave u hospitalización de familiares",
+   "accepted": true
+  },
+  {
+   "id": "np-08",
+   "literal": "¿cuántas vacaciones tengo?",
+   "canonical": "duración de las vacaciones anuales",
+   "accepted": true
+  },
+  {
+   "id": "np-09",
+   "literal": "¿cuánto me dan por tener un hijo?",
+   "canonical": "permiso por nacimiento y cuidado del menor",
+   "accepted": true
+  },
+  {
+   "id": "np-10",
+   "literal": "¿cuántos festivos tengo al año?",
+   "canonical": "festivos al año",
+   "accepted": true
+  },
+  {
+   "id": "np-11",
+   "literal": "¿qué días son fiesta en mi convenio?",
+   "canonical": "calendario de días festivos",
+   "accepted": true
+  },
+  {
+   "id": "np-12",
+   "literal": "¿puedo trabajar desde casa?",
+   "canonical": "trabajo a distancia y teletrabajo: condiciones",
+   "accepted": true
+  },
+  {
+   "id": "np-13",
+   "literal": "¿me pagan más si trabajo de noche?",
+   "canonical": "complemento de nocturnidad",
+   "accepted": false,
+   "expect_rules": [
+    "pay_intent_added"
+   ]
+  },
+  {
+   "id": "np-14",
+   "literal": "¿cuánto tiempo me dan para avisar si me voy?",
+   "canonical": "plazo de preaviso en caso de baja voluntaria",
+   "accepted": false,
+   "expect_rules": [
+    "scan:E3"
+   ]
+  },
+  {
+   "id": "np-15",
+   "literal": "¿hay algo especial si trabajo de noche?",
+   "canonical": "trabajo nocturno: condiciones",
+   "accepted": true
+  }
+ ]
+}

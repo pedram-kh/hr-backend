@@ -53,8 +53,12 @@ class ReferenceFactPath
      *
      * @param  array{topic_id:int, topic_name:string, matched_topic_names:list<string>}  $detection
      * @param  array<string,mixed>  $trace
+     * @param  array{topic_name:string,canonical_query:?string,confidence:float}|null  $normalization  Sprint 13b
+     *                                                                                                 (plan.md §4.1) — non-null ONLY when the AGENT reached this path through a validated planner
+     *                                                                                                 normalization (Round 1a / `reference_fact` after one). `null` (Round 0, classic, every pre-13b
+     *                                                                                                 call) is byte-identical to before: same router_decision, same retrieval call, same composition.
      */
-    public function handle(Employee $employee, string $question, array $detection, Carbon $asOfDate, array $trace): TurnOutcome
+    public function handle(Employee $employee, string $question, array $detection, Carbon $asOfDate, array $trace, ?array $normalization = null): TurnOutcome
     {
         // The deterministic pre-check short-circuits the LLM router (parallels the
         // deterministic_salary source); record it for the audit trail.
@@ -68,6 +72,14 @@ class ReferenceFactPath
             'cross_path' => false,
             'trace_fragment' => ['matched_topic_names' => $detection['matched_topic_names']],
         ];
+        if ($normalization !== null) {
+            // Sprint 13b: the topic came from the planner's VALIDATED normalization, not the lexicon —
+            // said so on the trace (the fact and every downstream gate are exactly the same).
+            $trace['router_decision']['source'] = 'planner_normalized_reference_fact';
+            $trace['router_decision']['confidence'] = $normalization['confidence'];
+            $trace['router_decision']['note'] = 'reference-fact route via validated planner normalization (topic: '.$detection['topic_name'].')';
+            $trace['router_decision']['trace_fragment']['normalized_canonical'] = $normalization['canonical_query'];
+        }
 
         $result = $this->referenceFactAnswer->answer($employee, $detection['topic_id'], $asOfDate);
         $trace['reference_fact'] = $result['reference_fact'];
@@ -82,7 +94,7 @@ class ReferenceFactPath
             // — or the answer model isn't configured — this returns null and we
             // fall back to the Phase 1 quoted value (skip /ground). Phase 2 is thus
             // purely additive on top of Phase 1.
-            $composed = $this->composeFactWithProse($employee, $question, $result, $asOfDate, $trace);
+            $composed = $this->composeFactWithProse($employee, $question, $result, $asOfDate, $trace, $normalization);
             if ($composed !== null) {
                 return $composed;
             }
@@ -130,8 +142,9 @@ class ReferenceFactPath
      *
      * @param  array{outcome:string, answer:string, citations:list<array<string,mixed>>, escalation_reason:?string, reference_fact:array<string,mixed>}  $factResult
      * @param  array<string,mixed>  $trace
+     * @param  array{topic_name:string,canonical_query:?string,confidence:float}|null  $normalization  Sprint 13b — see {@see self::handle()}
      */
-    private function composeFactWithProse(Employee $employee, string $question, array $factResult, Carbon $asOfDate, array $trace): ?TurnOutcome
+    private function composeFactWithProse(Employee $employee, string $question, array $factResult, Carbon $asOfDate, array $trace, ?array $normalization = null): ?TurnOutcome
     {
         $settings = AnswerModelSetting::current();
         $decryptedKey = $settings->isConfigured() ? $settings->decryptKey() : null;
@@ -151,11 +164,26 @@ class ReferenceFactPath
         // and is deliberately not wired here — the reference-fact path never
         // calls the router (short-circuits before it, above), so there is no
         // decomposition to thread through (plan.md §B.2 scope note).
-        $union = $this->retrievalUnion->retrieveUnion($question, [], $employee->convenio_id, $asOfDate->toDateString());
+        // Sprint 13b: after a validated normalization the canonical joins the union as one MORE pass and the
+        // literal question's own top-10 is protected from the cap (union, never replace — plan.md §4.2). The
+        // null branch is the pre-13b call, argument for argument.
+        $canonical = $normalization['canonical_query'] ?? null;
+        $union = $normalization === null
+            ? $this->retrievalUnion->retrieveUnion($question, [], $employee->convenio_id, $asOfDate->toDateString())
+            : $this->retrievalUnion->retrieveUnion($question, [], $employee->convenio_id, $asOfDate->toDateString(), false, $canonical !== null ? [$canonical] : [], true);
         $chunks = $union['chunks'];
 
         // Governing convenio/ruling prose ON THE TOPIC (Q5: composition rides Check A).
         $questionTopics = $this->chunkTopics($question);
+        if ($normalization !== null) {
+            // A colloquial question has no lexicon anchor, so filtering governing prose by ITS topics would
+            // always be empty and silently degrade a normalized route to a bare Phase-1 quote. The topic the
+            // employee's question was validated to mean (plus whatever the validated canonical anchors to)
+            // is what "on the topic" means here — the same chunk test, the same Check A floor, the same
+            // conflict / synthesis / grounding gates, all on the LITERAL question.
+            $key = TopicLexicon::keyForTopicName($normalization['topic_name']);
+            $questionTopics = ($key !== null ? [$key => true] : []) + ($canonical !== null ? $this->chunkTopics($canonical) : []) + $questionTopics;
+        }
         $governingOnTopic = array_values(array_filter($chunks, function ($c) use ($questionTopics) {
             if (! in_array($c['authority_level'] ?? null, ['official_convenio', 'internal_hr_ruling'], true)) {
                 return false;

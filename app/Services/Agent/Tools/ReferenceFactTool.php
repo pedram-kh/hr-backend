@@ -54,13 +54,49 @@ final class ReferenceFactTool implements Tool
 
     public function run(array $input, TurnState $state): ToolResult
     {
-        $detection = $this->referenceFactRouter->detectTopic($state->employee, $state->question, $state->asOfDate);
+        // Sprint 13b (plan.md §4.1): a topic from a VALIDATED planner normalization wins over the lexicon
+        // (`null` topic → today's lexicon call, untouched). The planner never supplies the id through this
+        // tool's own input — it arrives via `TurnState`, only after `NormalizationValidationRule` allowed it.
+        $normalizedTopic = $state->normalizedTopicId();
+        $detection = null;
+        $lexicon = null;
+        $viaNormalization = false;
+        if ($normalizedTopic !== null) {
+            $detection = $this->referenceFactRouter->detectFromTopic($state->employee, $normalizedTopic, $state->asOfDate);
+            $viaNormalization = $detection !== null;
+            $lexicon = $this->referenceFactRouter->detectTopic($state->employee, $state->question, $state->asOfDate);
+        }
+        if ($detection === null) {
+            $detection = $this->referenceFactRouter->detectTopic($state->employee, $state->question, $state->asOfDate);
+        }
 
         if ($detection === null) {
             return new ToolResult(ToolResult::NO_MATERIAL, plannerSummary: ['status' => 'no_fact']);
         }
 
-        $outcome = $this->referenceFactPath->handle($state->employee, $state->question, $detection, $state->asOfDate, $state->trace);
+        $normalization = null;
+        if ($viaNormalization) {
+            $normalization = [
+                'topic_name' => $detection['topic_name'],
+                'canonical_query' => $state->normalizedCanonical(),
+                'confidence' => (float) ($state->normalization['proposed']['confidence'] ?? 0.0),
+            ];
+        }
+
+        $outcome = $this->referenceFactPath->handle($state->employee, $state->question, $detection, $state->asOfDate, $state->trace, $normalization);
+
+        if ($viaNormalization) {
+            $state->recordNormalizationConsumer([
+                'tool' => 'reference_fact',
+                'via' => ($state->normalization['round1a']['active'] ?? false) ? 'round_1a' : 'planner_call',
+                'topic_id' => $detection['topic_id'],
+                'lexicon_topic_id' => $lexicon['topic_id'] ?? null,
+                'disagreement' => $lexicon !== null && $lexicon['topic_id'] !== $detection['topic_id'],
+                'outcome' => $outcome->outcome,
+                // an ANSWER reached only because the planner's validated topic found a fact the literal lexicon could not
+                'rescued_answer' => $lexicon === null && $outcome->outcome === 'answer',
+            ]);
+        }
 
         // planner_summary (§C.10): status + topic name only — never the value.
         return new ToolResult(

@@ -3,6 +3,7 @@
 namespace App\Services\Agent\Tools;
 
 use App\Models\AnswerModelSetting;
+use App\Services\Agent\Normalization\ConsumerTrace;
 use App\Services\Agent\Rules\CorpusMiss;
 use App\Services\Agent\Rules\NationalLawPrecedenceRule;
 use App\Services\Agent\Tool;
@@ -67,7 +68,14 @@ final class NationalLawTool implements Tool
         $settings = AnswerModelSetting::current();
         $decryptedKey = $settings->isConfigured() ? $settings->decryptKey() : null;
 
-        $outcome = $this->prosePath->handle($state->employee, $state->question, [], $state->asOfDate, $decryptedKey, $state->trace, []);
+        // Sprint 13b (plan.md §4.2): a validated canonical is unioned into retrieval; the literal question
+        // stays the question (synthesis, grounding, the national-law pass) and its own top hits are protected.
+        $canonical = $state->normalizedCanonical();
+        $outcome = $this->prosePath->handle($state->employee, $state->question, [], $state->asOfDate, $decryptedKey, $state->trace, $canonical !== null ? [$canonical] : [], $canonical !== null);
+
+        if ($canonical !== null) {
+            $state->recordNormalizationConsumer(ConsumerTrace::retrieval('national_law', $outcome, $canonical, $this->guardrails->retrievalFloor()));
+        }
 
         if ($outcome->outcome === 'answer') {
             return new ToolResult(ToolResult::TERMINAL, terminalOutcome: $outcome, plannerSummary: ['status' => 'answer']);

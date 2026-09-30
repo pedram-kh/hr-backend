@@ -41,12 +41,30 @@ final class ScopeSummaryBuilder
             'has_salary_table' => $convenioId !== null && SalaryTable::where('convenio_id', $convenioId)->exists(),
             'prose_gap' => $convenioId !== null ? $this->coverage->classifyProseGap($convenioId) : CorpusCoverageService::PROSE_NEVER_INGESTED,
             'verified_topics' => $convenioId !== null ? $this->verifiedTopicNames($convenioId, $asOfDate) : [],
+            // Sprint 13b (plan.md §2.2): the CLOSED vocabulary `normalize_question` must choose its
+            // `topic_id` from — ids + names + whether a verified in-scope fact exists. Sent only when
+            // normalization is on, so a 13b-disabled agent's scope summary (and prompt) is unchanged.
+            ...(config('hr.normalization.enabled', true) ? ['approved_topics' => $this->approvedTopics($convenioId, $asOfDate)] : []),
             // Step 9 (§B.6) ships the lane and its real config/guardrail toggle;
             // until then there is nothing to enable, so this is always false —
             // not a stub omission, an honest "does not exist yet" reading of
             // an env key/guardrail that literally is not wired anywhere.
             'general_lane_enabled' => (bool) config('hr.general_lane.enabled', false),
         ];
+    }
+
+    /** @return list<array{id:int,name:string,has_verified_fact:bool}> every approved topic, name-sorted (deterministic for the prompt hash) */
+    private function approvedTopics(?int $convenioId, Carbon $asOfDate): array
+    {
+        $verified = $convenioId !== null ? array_flip($this->verifiedTopicNames($convenioId, $asOfDate)) : [];
+
+        return Topic::query()
+            ->where('status', 'approved')
+            ->orderBy('name')
+            ->get(['id', 'name'])
+            ->map(fn (Topic $t) => ['id' => (int) $t->id, 'name' => (string) $t->name, 'has_verified_fact' => isset($verified[$t->name])])
+            ->values()
+            ->all();
     }
 
     /** @return list<string> approved topic names with a verified, in-scope, in-validity fact (mirrors `ReferenceFactRouter`'s own existence check, generalized to ALL topics rather than one candidate set). */

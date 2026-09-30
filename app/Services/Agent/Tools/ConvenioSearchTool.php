@@ -3,6 +3,7 @@
 namespace App\Services\Agent\Tools;
 
 use App\Models\AnswerModelSetting;
+use App\Services\Agent\Normalization\ConsumerTrace;
 use App\Services\Agent\Rules\CorpusMiss;
 use App\Services\Agent\Rules\ProseCheckAPostCallRule;
 use App\Services\Agent\Tool;
@@ -83,9 +84,14 @@ final class ConvenioSearchTool implements Tool
 
     public function run(array $input, TurnState $state): ToolResult
     {
-        $question = is_string($input['query'] ?? null) && $input['query'] !== ''
-            ? $input['query']
-            : $state->question;
+        // Sprint 13b (plan.md §4.2, finding 7): the employee's LITERAL question is what synthesis and grounding
+        // see — always. A planner `query` used to REPLACE it (and `/synthesise` + `/ground` then answered a
+        // sentence the employee never wrote); it is now one more retrieval-only rephrasing, like
+        // `decomposed_queries`. Agent-only (classic never reaches this tool).
+        $question = $state->question;
+        $plannerQuery = is_string($input['query'] ?? null) && trim($input['query']) !== '' && trim($input['query']) !== $state->question
+            ? trim($input['query'])
+            : null;
 
         $subqueries = $this->cappedStrings($input['subqueries'] ?? null, 4);
         if ($subqueries === []) {
@@ -94,12 +100,22 @@ final class ConvenioSearchTool implements Tool
             // the same shape as the router never having split the question.
             $subqueries = $this->router->deterministicSplit($question);
         }
-        $decomposedQueries = $this->cappedStrings($input['decomposed_queries'] ?? null, 3);
+        $plannerExtras = $this->cappedStrings($input['decomposed_queries'] ?? null, 3);
+        if ($plannerQuery !== null) {
+            array_unshift($plannerExtras, $plannerQuery);
+        }
+        // Sprint 13b: a validated canonical is ADDED to retrieval (union) — never in place of the literal.
+        $canonical = $state->normalizedCanonical();
+        $decomposedQueries = self::withCanonical($canonical, $plannerExtras);
 
         $settings = AnswerModelSetting::current();
         $decryptedKey = $settings->isConfigured() ? $settings->decryptKey() : null;
 
-        $outcome = $this->prosePath->handle($state->employee, $question, $subqueries, $state->asOfDate, $decryptedKey, $state->trace, $decomposedQueries);
+        $outcome = $this->prosePath->handle($state->employee, $question, $subqueries, $state->asOfDate, $decryptedKey, $state->trace, $decomposedQueries, $canonical !== null);
+
+        if ($canonical !== null) {
+            $state->recordNormalizationConsumer(ConsumerTrace::retrieval('convenio_search', $outcome, $canonical, $this->guardrails->retrievalFloor()));
+        }
 
         if ($outcome->outcome === 'answer') {
             return new ToolResult(ToolResult::TERMINAL, terminalOutcome: $outcome, plannerSummary: [
@@ -140,6 +156,32 @@ final class ConvenioSearchTool implements Tool
             'status' => 'escalate',
             'escalation_reason' => $outcome->escalationReason,
         ]);
+    }
+
+    /**
+     * Canonical first, then the planner's own extras (deduped case-insensitively, at most 3 of them — the
+     * cap that always applied to `decomposed_queries`).
+     *
+     * @param  list<string>  $extras
+     * @return list<string>
+     */
+    private static function withCanonical(?string $canonical, array $extras): array
+    {
+        $seen = $canonical !== null ? [mb_strtolower($canonical) => true] : [];
+        $out = [];
+        foreach ($extras as $e) {
+            $k = mb_strtolower(trim($e));
+            if ($k === '' || isset($seen[$k])) {
+                continue;
+            }
+            $seen[$k] = true;
+            $out[] = $e;
+            if (count($out) >= 3) {
+                break;
+            }
+        }
+
+        return $canonical !== null ? [$canonical, ...$out] : $out;
     }
 
     /** @return list<string> */
