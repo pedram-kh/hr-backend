@@ -316,6 +316,43 @@ class QuestionClusteringService
     }
 
     /**
+     * Slice 13e (R2's weekly view) — the questions the assistant DECLINED in [from, to), most frequent first, then most recent.
+     * Read at request time straight from the traces, so it needs no nightly run and no migration. A declined turn has no
+     * escalation card, so it correctly never shows in `unansweredRanking()` (that ranking is card-based). Grouping is by the
+     * exact question text (case/space-insensitive); the nightly clusters are not consulted — a question declined an hour ago
+     * must be visible now, which is the whole point of HR watching this list.
+     *
+     * @return list<array{cluster_id:?int,medoid_text:string,declined_count:int,last_declined_at:?string}>
+     */
+    public function declinedRanking(Carbon $from, Carbon $to, int $limit = 20): array
+    {
+        $rows = DB::select("
+            select (array_agg(um.content order by am.created_at desc))[1] as question,
+                   count(*) as declined_count,
+                   max(am.created_at) as last_declined_at
+            from message_traces mt
+            join chat_messages am on am.id = mt.message_id and am.role = 'assistant'
+            join lateral (
+                select u.content from chat_messages u
+                where u.session_id = am.session_id and u.role = 'user' and u.id < am.id
+                order by u.id desc limit 1
+            ) um on true
+            where mt.trace->'floor_decision'->>'outcome' = 'decline'
+              and am.created_at >= ? and am.created_at < ?
+            group by lower(btrim(um.content))
+            order by declined_count desc, last_declined_at desc
+            limit ?
+        ", [$from->toDateTimeString(), $to->toDateTimeString(), $limit]);
+
+        return array_map(fn ($r) => [
+            'cluster_id' => null,
+            'medoid_text' => (string) $r->question,
+            'declined_count' => (int) $r->declined_count,
+            'last_declined_at' => $r->last_declined_at !== null ? Carbon::parse($r->last_declined_at)->toIso8601String() : null,
+        ], $rows);
+    }
+
+    /**
      * Sprint 10c, D7 — nightly per-TOPIC demand score, written alongside
      * `question_clusters` (same command, same `run_date`). Reuses the exact
      * "unanswered" formula `unansweredRanking()` already computes per

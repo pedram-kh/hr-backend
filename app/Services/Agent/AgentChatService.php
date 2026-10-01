@@ -12,6 +12,7 @@ use App\Services\Answer\SessionResolver;
 use App\Services\Answer\TurnOutcome;
 use App\Services\Answer\TurnPersister;
 use App\Services\ChatService;
+use App\Services\Decline\DeclineFactsCollector;
 use App\Services\ReferenceFactRouter;
 use App\Services\RouterService;
 use Illuminate\Support\Carbon;
@@ -52,6 +53,7 @@ class AgentChatService
         private readonly ChatService $classic,
         private readonly ScopeSummaryBuilder $scopeSummaryBuilder,
         private readonly WindowBuilder $windowBuilder,
+        private readonly DeclineFactsCollector $declineFacts,
     ) {}
 
     /** @return array<string,mixed> the response payload — same shape as `ChatService::handleMessage()`. */
@@ -82,7 +84,7 @@ class AgentChatService
         // --- Case 1: sensitive/legal-medical/other-employee/admin-block/
         // explicit_request — deterministic, no hr-ai call, fires BEFORE the
         // planner even exists for this turn. `/plan` is never called. -------
-        $guarded = $this->preModelGuards->check($question, $trace);
+        $guarded = $this->preModelGuards->check($question, $trace, $session);
         if ($guarded !== null) {
             return $this->persister->persist($session, $employee, $question, $guarded);
         }
@@ -158,7 +160,7 @@ class AgentChatService
         $trace['engine'] = 'agent';
         $trace['agent'] = $this->agentBlock($state, $termination, $trace['agent'] ?? []);
 
-        return new TurnOutcome($outcome->outcome, $outcome->answer, $outcome->citations, $trace, $outcome->escalationReason, $outcome->categories);
+        return $outcome->withTrace($trace);
     }
 
     /**
@@ -485,6 +487,26 @@ class AgentChatService
             $call = $escalateCalls[0];
             $category = $call['input']['category'] ?? 'other';
             $reason = $call['input']['reason'] ?? '';
+
+            // Slice 13e (ADR-0039): an `off_domain` verdict goes through the decline gate first. The planner's own words
+            // decide nothing — the router must independently agree, nothing workplace-like may be in the question, and so on
+            // (D1–D9). The one extra router call is spent only when everything else already passed.
+            if ($category === 'off_domain' && DeclineFactsCollector::enabled()) {
+                $state->trace['agent']['planner_escalation'] = ['category' => $category, 'reason' => $reason];
+                $state->declineFacts = $this->declineFacts->forPlanner($state, (string) $category, (string) $reason);
+                $verdict = $this->ruleEngine->run('pre_call:escalate', $state, $call);
+                if ($verdict->isTerminal()) {
+                    $state->applyForced($verdict);
+                    $state->recordStep(['type' => 'planner_escalate', 'category' => $category]);
+
+                    return;
+                }
+                // Denied: fall through to today's escalation, with the gate's evidence on the trace (granted:false, denied_by).
+                if ($state->declineDecision !== null) {
+                    $state->trace['decline'] = $state->declineDecision->toTrace();
+                }
+            }
+
             $state->trace['floor_decision'] = [
                 'path' => 'agent_planner',
                 'outcome' => 'escalate',

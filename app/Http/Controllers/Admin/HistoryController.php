@@ -52,7 +52,9 @@ class HistoryController extends Controller
             // data (a session can have both an ask turn and, separately, an
             // escalation) — the filter just asks "does this session contain
             // one", same posture as 'reason' above.
-            'outcome' => ['nullable', 'in:answered,escalated,asked'],
+            // Slice 13e: 'declined' is a FOURTH independent bucket — a session containing at least one declined (off-domain,
+            // no-card) turn (`floor_decision.outcome = 'decline'`), the same shape as 'asked'.
+            'outcome' => ['nullable', 'in:answered,escalated,asked,declined'],
         ]);
 
         $query = ChatSession::query()
@@ -64,6 +66,18 @@ class HistoryController extends Controller
             ->selectRaw(
                 'exists(select 1 from message_traces mt join chat_messages am on am.id = mt.message_id '
                 ."and am.session_id = chat_sessions.id where mt.trace->'floor_decision'->>'outcome' = 'ask') as is_asked"
+            )
+            ->selectRaw(
+                'exists(select 1 from message_traces mt join chat_messages am on am.id = mt.message_id '
+                ."and am.session_id = chat_sessions.id where mt.trace->'floor_decision'->>'outcome' = 'decline') as is_declined"
+            )
+            // Slice 13e: true when EVERY assistant turn in the session was a decline — such a session was never "answered".
+            ->selectRaw(
+                'exists(select 1 from message_traces mt join chat_messages am on am.id = mt.message_id '
+                ."and am.session_id = chat_sessions.id where mt.trace->'floor_decision'->>'outcome' = 'decline') "
+                .'and not exists(select 1 from chat_messages am2 left join message_traces mt2 on mt2.message_id = am2.id '
+                ."where am2.session_id = chat_sessions.id and am2.role = 'assistant' "
+                ."and coalesce(mt2.trace->'floor_decision'->>'outcome', '') <> 'decline') as is_declined_only"
             );
 
         if (! empty($data['employee_uuid'])) {
@@ -97,6 +111,11 @@ class HistoryController extends Controller
                 ->join('chat_messages as am', 'am.id', '=', 'mt.message_id')
                 ->whereColumn('am.session_id', 'chat_sessions.id')
                 ->whereRaw("mt.trace->'floor_decision'->>'outcome' = 'ask'"));
+        } elseif (($data['outcome'] ?? null) === 'declined') {
+            $query->whereExists(fn ($q) => $q->selectRaw('1')->from('message_traces as mt')
+                ->join('chat_messages as am', 'am.id', '=', 'mt.message_id')
+                ->whereColumn('am.session_id', 'chat_sessions.id')
+                ->whereRaw("mt.trace->'floor_decision'->>'outcome' = 'decline'"));
         }
 
         $sessions = $query->orderByDesc('last_activity_at')->orderByDesc('id')->paginate(50);
@@ -222,6 +241,9 @@ class HistoryController extends Controller
             // Sprint 13, build step 8 — independent of `escalated` above (see
             // the `outcome=asked` validation comment for why).
             'asked' => (bool) $s->is_asked,
+            // Slice 13e — independent of the above: the session contains a declined turn; `declined_only` = it contains nothing else.
+            'declined' => (bool) $s->is_declined,
+            'declined_only' => (bool) $s->is_declined_only,
         ];
     }
 

@@ -58,6 +58,8 @@ class AnalyticsController extends Controller
             'summary' => $summary,
             'hr_agent_replies' => $hrAgentReplies,
             'satisfaction' => $satisfaction,
+            // Slice 13e — declines per day (live or rollup, same switch as the summary).
+            'declined_by_day' => $analytics->declinedByDay($from, $to, $filters, ! empty($data['live'])),
         ]);
     }
 
@@ -106,6 +108,8 @@ class AnalyticsController extends Controller
             'clusters' => $clusters,
             'topic_breakdown' => $service->topicBreakdown($from, $to),
             'unanswered_ranking' => $service->unansweredRanking($runDate),
+            // Slice 13e (R2's weekly view) — the questions declined in the last 7 days, read at request time, no column.
+            'declined_ranking' => $service->declinedRanking(now()->subDays(7), now()->addMinute()),
         ]);
     }
 }

@@ -42,6 +42,20 @@ return [
     // routes to SQL. Only the uncertain middle defaults to the safe prose path.
     'router_confidence_floor' => (float) env('HR_ROUTER_CONFIDENCE_FLOOR', 0.50),
 
+    // --- Decline outcome (Slice 13e, ADR-0039) ----------------------------------
+    // A confirmed off-domain question is DECLINED (no escalation card) instead of escalated. `DeclineGate` is the only
+    // place that decides it; it can grant for the reason `off_domain` and nothing else.
+    //   enabled              OFF by default (like the general lane): a fresh environment escalates every off-domain path
+    //                        exactly as before Slice 13e. Staging turns it on in the compose file (HR_DECLINE_ENABLED);
+    //                        phpunit.xml turns it on for the suite. false is also the kill switch.
+    //   router_confirm_floor the independent router vote a PLANNER `off_domain` verdict needs (label off_domain, >= this).
+    //                        Deliberately above `router_confidence_floor`: that floor decides "trust the router", this one
+    //                        decides "stop telling an employee we will pass it to a person".
+    'decline' => [
+        'enabled' => (bool) env('HR_DECLINE_ENABLED', false),
+        'router_confirm_floor' => (float) env('HR_DECLINE_ROUTER_CONFIRM_FLOOR', 0.90),
+    ],
+
     // --- Answer engine switch (Sprint 13, plan.md §E.15 step 2, §F.14) --------
     // `classic` (default) is `ChatService::handleMessage()`, unchanged. `agent`
     // is the deterministic-shell + planner loop (App\Services\Agent). This is

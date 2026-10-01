@@ -52,6 +52,7 @@ class StatsDeflection extends Command
         $this->line('  answered:        '.$summary['answered']);
         $this->line('  escalated:       '.$summary['escalated']);
         $this->line('  needs_category:  '.$summary['needs_category'].' (excluded from the ratio, per plan.md §2.1)');
+        $this->line('  declined:        '.$summary['declined'].' (off-domain, no card; excluded from the ratio — Slice 13e)');
         $this->line('  deflection_rate: '.($summary['deflection_rate'] !== null ? number_format($summary['deflection_rate'] * 100, 2).'%' : 'n/a (no answered+escalated turns)'));
         $this->line('  path split:      '.json_encode($summary['path_split']));
         $this->line('  authority split: '.json_encode($summary['authority_split']));

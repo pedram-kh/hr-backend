@@ -98,6 +98,32 @@ class GuardrailPolicy
         return null;
     }
 
+    /**
+     * Slice 13e — EVERY enabled admin row that matches, not just the first (`blockedTopicMatch()` above, untouched, stops at
+     * the first). A `blocked_topic` row listed after an `off_domain` row would otherwise be shadowed, and the decline gate
+     * (D2) must see it: a sensitive-topic hit is never declined.
+     *
+     * @return list<array{fired:bool, reason:string, rule:string, pattern:string}>
+     */
+    public function blockedTopicMatches(string $question): array
+    {
+        $hay = $this->normalize($question);
+        $out = [];
+
+        foreach ($this->snapshot()['blocked'] as $row) {
+            $needle = $this->normalize($row['pattern']);
+            if ($needle === '') {
+                continue;
+            }
+            if (preg_match('/\b'.preg_quote($needle, '/').'\b/u', $hay) === 1) {
+                $reason = $row['kind'] === GuardrailBlockedTopic::KIND_OFF_DOMAIN ? 'off_domain' : 'sensitive_topic';
+                $out[] = ['fired' => true, 'reason' => $reason, 'rule' => 'admin_'.$row['kind'], 'pattern' => $row['pattern']];
+            }
+        }
+
+        return $out;
+    }
+
     /** The admin off-domain refusal copy, or null to use the default message. */
     public function offDomainMessage(): ?string
     {

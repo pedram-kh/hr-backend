@@ -13,6 +13,7 @@ use App\Services\Agent\Rules\GeneralLanePostCheck;
 use App\Services\Agent\Rules\ModelKnowledgeShapePostCallRule;
 use App\Services\Agent\Rules\NationalLawPrecedenceRule;
 use App\Services\Agent\Rules\NormalizationValidationRule;
+use App\Services\Agent\Rules\OffDomainDeclineRule;
 use App\Services\Agent\Rules\PeriodSupportGuard;
 use App\Services\Agent\Rules\ProseCheckAPostCallRule;
 use App\Services\Agent\Rules\ReferenceFactPostCallRule;
@@ -96,6 +97,8 @@ class AgentServiceProvider extends ServiceProvider
             // the finish rule — a draft reaches it only after the post-check passed it, and the finish rule only sees survivors.
             $engine->register('post_call:general_knowledge', $app->make(ModelKnowledgeShapePostCallRule::class));
             $engine->register('post_call:general_knowledge', $app->make(GeneralLaneFinishRule::class));
+            // Slice 13e (ADR-0039): the ONE rule that can turn a planner `off_domain` escalation into a decline.
+            $engine->register('pre_call:escalate', $app->make(OffDomainDeclineRule::class));
             $engine->register('pre_call:ask_employee', $app->make(AskEmployeeWhitelist::class));
             $engine->register('post_call:ask_employee', $app->make(AskEmployeePostCallRule::class));
 

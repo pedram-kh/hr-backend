@@ -160,9 +160,11 @@ class ChatController extends Controller
 
         $trace = MessageTrace::where('message_id', $message->id)->first();
         $outcome = $trace?->trace['floor_decision']['outcome'] ?? null;
-        if ($outcome !== 'answer') {
+        // Slice 13e: a DECLINED (out-of-scope) turn can be sent for review too — it is the employee's way back to a person
+        // when they think the assistant was wrong to decline. `escalate`/`ask`/`needs_category` still 422.
+        if (! in_array($outcome, ['answer', 'decline'], true)) {
             return response()->json([
-                'message' => 'Only an answered message can be sent for review.',
+                'message' => 'Only an answered or declined message can be sent for review.',
             ], 422);
         }
 
