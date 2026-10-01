@@ -10,8 +10,11 @@ use App\Models\EscalationCard;
 use App\Models\MessageCitation;
 use App\Models\MessageTrace;
 use App\Services\ChatService;
+use App\Services\Decline\DeclineGate;
+use App\Services\GuardrailPolicy;
 use App\Support\EscalationExplainer;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Sprint 13, build step 1 (plan.md §B.1) — `App\Services\Answer\TurnPersister`,
@@ -68,6 +71,76 @@ class TurnPersister
     }
 
     /**
+     * Slice 13e, L2 — why a decline is NOT valid (empty list = valid). Reads only the trace the turn will be stored with, so
+     * a code path that builds a decline some other way is caught here, not trusted.
+     *
+     * @param  array<string,mixed>  $trace
+     * @return list<string>
+     */
+    public static function declineViolations(TurnOutcome $outcome): array
+    {
+        $trace = $outcome->trace;
+        $d = $trace['decline'] ?? null;
+        $v = [];
+        if ($outcome->declineGrant === null) {
+            $v[] = 'no_grant';
+        }
+        if (! is_array($d)) {
+            return [...$v, 'no_decline_block'];
+        }
+        if (($d['reason'] ?? null) !== DeclineGate::ONLY_REASON) {
+            $v[] = 'reason:'.(is_scalar($d['reason'] ?? null) ? (string) $d['reason'] : '?');
+        }
+        if (($d['granted'] ?? null) !== true) {
+            $v[] = 'not_granted';
+        }
+        if (! in_array($d['source'] ?? null, ['planner', 'guard_admin'], true)) {
+            $v[] = 'unknown_source';
+        }
+        $checks = $d['checks'] ?? [];
+        if (! is_array($checks) || $checks === []) {
+            $v[] = 'no_checks';
+        } else {
+            foreach ($checks as $c) {
+                if (($c['pass'] ?? null) !== true) {
+                    $v[] = 'check_failed:'.(is_scalar($c['id'] ?? null) ? (string) $c['id'] : '?');
+                }
+            }
+        }
+        $fd = $trace['floor_decision'] ?? [];
+        if (($fd['outcome'] ?? null) !== 'decline' || ($fd['decline_reason'] ?? null) !== DeclineGate::ONLY_REASON) {
+            $v[] = 'floor_decision_mismatch';
+        }
+        if (! empty($fd['escalation_reason'])) {
+            $v[] = 'carries_escalation_reason';
+        }
+
+        return $v;
+    }
+
+    /** An invalid decline is demoted to a `low_confidence` escalation ("more escalation, never less"); anything else passes through. */
+    private function guardDecline(TurnOutcome $outcome, ChatSession $session): TurnOutcome
+    {
+        if ($outcome->outcome !== 'decline') {
+            return $outcome;
+        }
+        $violations = self::declineViolations($outcome);
+        if ($violations === []) {
+            return $outcome;
+        }
+
+        Log::warning('decline_demoted', ['session_id' => $session->id, 'violations' => $violations]);
+        $trace = $outcome->trace;
+        unset($trace['floor_decision']['decline_reason']);
+        $trace['floor_decision']['outcome'] = 'escalate';
+        $trace['floor_decision']['escalation_reason'] = 'low_confidence';
+        $trace['floor_decision']['note'] = 'decline demoted to escalation by the persister: '.implode(',', $violations);
+        $trace['decline_demoted'] = $violations;
+
+        return new TurnOutcome('escalate', ChatService::ESCALATION_MESSAGE, [], $trace, 'low_confidence');
+    }
+
+    /**
      * Persist the full turn in ONE transaction (hr-backend owns ALL writes):
      * user message, assistant message, citations (answer turns), trace (always),
      * escalation_card (escalate turns ONLY — never on a category pick). Returns
@@ -77,6 +150,10 @@ class TurnPersister
      */
     public function persist(ChatSession $session, Employee $employee, string $question, TurnOutcome $outcome): array
     {
+        // Slice 13e (plan.md §4.2, L2) — fail-closed: a decline is re-validated from the trace AS WRITTEN. Anything that is
+        // not a granted off_domain decision with every check passed becomes an ordinary escalation.
+        $outcome = $this->guardDecline($outcome, $session);
+
         $answer = $outcome->answer;
         $citations = $outcome->citations;
         $trace = $outcome->trace;
@@ -93,7 +170,13 @@ class TurnPersister
         // regardless of $escalationReason. This is what the guard/scan test
         // relies on: there is exactly one place in the codebase an employee-
         // visible escalation string can originate from.
-        $employeeAnswer = $escalate ? ChatService::EMPLOYEE_ESCALATION_MESSAGE : self::decorate($answer, $trace);
+        // Slice 13e: a decline has its own single source of copy, decided here for the same reason (ADR-0039): the admin's
+        // off-domain text, else the constant. It is never an escalation string and never carries a reason.
+        $employeeAnswer = $escalate
+            ? ChatService::EMPLOYEE_ESCALATION_MESSAGE
+            : ($outcomeLabel === 'decline'
+                ? (app(GuardrailPolicy::class)->offDomainMessage() ?? ChatService::DECLINE_MESSAGE)
+                : self::decorate($answer, $trace));
 
         return DB::transaction(function () use ($session, $employee, $question, $employeeAnswer, $citations, $trace, $outcomeLabel, $escalate, $escalationReason, $categories) {
             $session->forceFill(['last_activity_at' => now()])->save();

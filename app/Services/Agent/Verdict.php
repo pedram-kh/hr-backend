@@ -3,6 +3,7 @@
 namespace App\Services\Agent;
 
 use App\Services\Answer\TurnOutcome;
+use App\Services\Decline\DeclineGate;
 
 /**
  * Sprint 13, build step 3 (plan.md §B.2, §D.11) — the rule engine's answer at
@@ -31,6 +32,9 @@ final class Verdict
     public const FORCE_ASK = 'ask';
 
     public const FORCE_FINISH = 'finish';
+
+    /** Slice 13e — a confirmed off-domain question ({@see DeclineGate}); the payload is a `decline` outcome. */
+    public const FORCE_DECLINE = 'decline';
 
     private function __construct(
         public readonly string $status,
@@ -88,6 +92,16 @@ final class Verdict
     public static function forceFinish(TurnOutcome $outcome, string $rule): self
     {
         return new self(self::FORCE, $rule, forceType: self::FORCE_FINISH, forcePayload: $outcome);
+    }
+
+    /** Slice 13e — `$outcome->outcome` must be `'decline'`, which only the decline factory on TurnOutcome can produce. */
+    public static function forceDecline(TurnOutcome $outcome, string $rule): self
+    {
+        if ($outcome->outcome !== 'decline') {
+            throw new \InvalidArgumentException('forceDecline needs a decline outcome.');
+        }
+
+        return new self(self::FORCE, $rule, forceType: self::FORCE_DECLINE, forcePayload: $outcome);
     }
 
     public function isAllow(): bool

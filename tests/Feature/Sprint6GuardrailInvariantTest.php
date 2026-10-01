@@ -278,6 +278,9 @@ class Sprint6GuardrailInvariantTest extends TestCase
 
     public function test_admin_off_domain_trigger_escalates_with_admin_message(): void
     {
+        // Slice 13e (ADR-0039): this test pins the PRE-13e behaviour, so it now runs under the kill switch. The live behaviour
+        // (a decline, with the admin's text shown) is `test_admin_off_domain_trigger_declines_with_the_admin_message` below.
+        config(['hr.decline.enabled' => false]);
         $super = $this->adminWithRole('super_admin');
         $this->postGuardrails($super, ['off_domain_message' => 'Solo puedo ayudarte con temas de RR. HH.'])->assertStatus(200);
         $this->postJson('/admin/guardrails/blocked-topics', ['pattern' => 'cocina', 'kind' => 'off_domain'], $this->auth($super));
@@ -293,6 +296,22 @@ class Sprint6GuardrailInvariantTest extends TestCase
         // stored/returned to HR elsewhere (guardrails settings), just never
         // shown to the employee in chat any more.
         $this->assertSame(ChatService::EMPLOYEE_ESCALATION_MESSAGE, $res['answer']);
+    }
+
+    /** Slice 13e: the admin's own off-domain pattern is declined (no card) and the admin's text is the employee's text. */
+    public function test_admin_off_domain_trigger_declines_with_the_admin_message(): void
+    {
+        $super = $this->adminWithRole('super_admin');
+        $this->postGuardrails($super, ['off_domain_message' => 'Solo puedo ayudarte con temas de RR. HH.'])->assertStatus(200);
+        $this->postJson('/admin/guardrails/blocked-topics', ['pattern' => 'cocina', 'kind' => 'off_domain'], $this->auth($super));
+
+        $res = $this->ask('dame una receta de cocina para el almuerzo');
+        $this->assertSame('decline', $res['outcome']);
+        $this->assertFalse($res['escalated']);
+        $this->assertNull($res['escalation_reason']);
+        $this->assertNull($res['escalation_uuid']);
+        $this->assertSame('Solo puedo ayudarte con temas de RR. HH.', $res['answer']);
+        $this->assertSame(0, EscalationCard::count());
     }
 
     // ---- 5. Tone: synthesis-local only; /ground gets the RAW question --------

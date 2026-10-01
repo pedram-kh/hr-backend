@@ -114,6 +114,8 @@ final class EscalationExplainer
         'profile_incomplete.contract_type',
         'profile_incomplete.asserted_differs',
         'employee_requested_review.answer_reviewed',
+        // Slice 13e (ADR-0039): the employee tapped "review" under a DECLINED (out-of-scope) turn.
+        'employee_requested_review.declined_reviewed',
         'planner_escalated.off_domain',
         'planner_escalated.unsafe',
         'planner_escalated.unanswerable',
@@ -205,7 +207,8 @@ final class EscalationExplainer
             // as every other reason above). -----------------------------------
             'general_lane_blocked' => $trace['agent']['general_lane_blocked']['sub'] ?? 'question_prescreen',
             'profile_incomplete' => $trace['agent']['profile_incomplete']['field'] ?? 'professional_group',
-            'employee_requested_review' => 'answer_reviewed',
+            // Slice 13e: the reviewed turn was a decline (no card was ever written for it), so HR is told which source declined it.
+            'employee_requested_review' => (($trace['floor_decision']['outcome'] ?? null) === 'decline') ? 'declined_reviewed' : 'answer_reviewed',
             'planner_escalated' => $trace['agent']['planner_escalation']['category'] ?? 'other',
             'tool_budget_exhausted' => $trace['agent']['budget_exhausted']['sub'] ?? 'rounds',
             default => 'unspecified',
@@ -923,6 +926,22 @@ final class EscalationExplainer
                     'fix_surface' => 'Escalations (tarjeta)',
                     'fix_link' => null,
                 ],
+                // Slice 13e (ADR-0039) — a declined turn writes no card; this card exists only because the employee asked for one.
+                'declined_reviewed' => function (array $t) {
+                    $d = $t['decline'] ?? [];
+                    $source = ($d['source'] ?? null) === 'guard_admin'
+                        ? 'la lista de Guardarraíles (patrón «'.($d['matched_pattern'] ?? '?').'»)'
+                        : 'el planificador'.(isset($d['confirm']['label']) ? ', confirmado por el router ('.$d['confirm']['label'].' '.($d['confirm']['confidence'] ?? '?').')' : '');
+
+                    return [
+                        'asked' => 'La persona empleada recibió una respuesta de «fuera de alcance» y pidió expresamente que RR. HH. revise su pregunta.',
+                        'found' => 'Declinada por '.$source.'. No se creó ninguna tarjeta en su momento.',
+                        'stopped_reason' => 'El asistente consideró la pregunta ajena al trabajo y al convenio; la persona empleada no está de acuerdo.',
+                        'fix_action' => 'Leer la pregunta (incluida en esta tarjeta). Si SÍ era laboral, responder a la persona y revisar la lista de Guardarraíles o el enrutado; si no, cerrar la tarjeta.',
+                        'fix_surface' => 'Escalations (tarjeta)',
+                        'fix_link' => null,
+                    ];
+                },
             ],
             'planner_escalated' => [
                 'off_domain' => fn (array $t) => [

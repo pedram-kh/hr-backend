@@ -5,6 +5,8 @@ namespace App\Services\Agent;
 use App\Models\ChatSession;
 use App\Models\Employee;
 use App\Services\Answer\TurnOutcome;
+use App\Services\Decline\DeclineDecision;
+use App\Services\Decline\DeclineFacts;
 use Illuminate\Support\Carbon;
 
 /**
@@ -29,6 +31,12 @@ final class TurnState
     public int $asksThisTurn = 0;
 
     public bool $terminated = false;
+
+    /** Slice 13e — set by `AgentChatService` just before the `pre_call:escalate` rules run; null on every other turn. */
+    public ?DeclineFacts $declineFacts = null;
+
+    /** Slice 13e — the gate's verdict, written by `OffDomainDeclineRule` (granted or denied), read by the trace stamp. */
+    public ?DeclineDecision $declineDecision = null;
 
     public ?string $terminationReason = null;
 
@@ -167,6 +175,7 @@ final class TurnState
             Verdict::FORCE_ESCALATE => 'forced_escalation',
             Verdict::FORCE_ASK => $verdict->forcePayload->outcome, // 'ask' | 'needs_category'
             Verdict::FORCE_FINISH => 'forced_finish',
+            Verdict::FORCE_DECLINE => 'declined',
             default => null,
         };
 

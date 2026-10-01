@@ -98,6 +98,8 @@ class EscalationExplainerTest extends TestCase
             'profile_incomplete.contract_type' => ['profile_incomplete', ['profile' => ['employee_uuid' => 'emp-uuid-13'], 'agent' => ['profile_incomplete' => ['field' => 'contract_type']]], 'contract_type'],
             'profile_incomplete.asserted_differs' => ['profile_incomplete', ['profile' => ['employee_uuid' => 'emp-uuid-13'], 'agent' => ['profile_incomplete' => ['field' => 'asserted_differs']]], 'asserted_differs'],
             'employee_requested_review.answer_reviewed' => ['employee_requested_review', [], 'answer_reviewed'],
+            // Slice 13e — a declined turn the employee sent for review.
+            'employee_requested_review.declined_reviewed' => ['employee_requested_review', ['floor_decision' => ['outcome' => 'decline', 'decline_reason' => 'off_domain'], 'decline' => ['granted' => true, 'source' => 'planner']], 'declined_reviewed'],
             'planner_escalated.off_domain' => ['planner_escalated', ['agent' => ['planner_escalation' => ['category' => 'off_domain', 'reason' => 'not HR-related']]], 'off_domain'],
             'planner_escalated.unsafe' => ['planner_escalated', ['agent' => ['planner_escalation' => ['category' => 'unsafe', 'reason' => 'risk of harm']]], 'unsafe'],
             'planner_escalated.unanswerable' => ['planner_escalated', ['agent' => ['planner_escalation' => ['category' => 'unanswerable', 'reason' => 'no tool could resolve it']]], 'unanswerable'],

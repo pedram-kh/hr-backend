@@ -130,9 +130,30 @@ class Sprint13GoldenTraceTest extends TestCase
 
         $result = app(ChatService::class)->handleMessage($employee, '¿La empresa paga el gimnasio?');
 
+        // Slice 13e (ADR-0039) — the ONE disclosed re-record in the golden set: the admin's own off-domain pattern is now a
+        // DECLINE (no card, no escalation reason). Every other fixture is byte-identical. The pre-13e content lives on in
+        // `04_admin_blocked_topic_flag_off` below, which is what the kill switch must still produce.
+        $this->assertSame('decline', $result['outcome']);
+        $this->assertNull($result['escalation_reason']);
+        $this->assertFalse($result['escalated']);
+        $this->assertNull($result['escalation_uuid']);
+        $this->assertGoldenTrace('04_admin_blocked_topic', $result);
+    }
+
+    /** Slice 13e kill switch: `HR_DECLINE_ENABLED=false` restores the pre-13e turn byte for byte. */
+    public function test_04_admin_blocked_topic_flag_off(): void
+    {
+        config(['hr.decline.enabled' => false]);
+        $employee = $this->employee($this->convenio('13-04'));
+        GuardrailBlockedTopic::create(['pattern' => 'gimnasio', 'kind' => GuardrailBlockedTopic::KIND_OFF_DOMAIN, 'enabled' => true]);
+        GuardrailPolicy::flush();
+        $this->bindAi([]);
+
+        $result = app(ChatService::class)->handleMessage($employee, '¿La empresa paga el gimnasio?');
+
         $this->assertSame('escalate', $result['outcome']);
         $this->assertSame('off_domain', $result['escalation_reason']);
-        $this->assertGoldenTrace('04_admin_blocked_topic', $result);
+        $this->assertGoldenTrace('04_admin_blocked_topic_flag_off', $result);
     }
 
     // =========================================================================

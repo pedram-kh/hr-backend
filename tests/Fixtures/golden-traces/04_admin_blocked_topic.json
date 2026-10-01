@@ -1,8 +1,8 @@
 {
-    "outcome": "escalate",
-    "escalated": true,
-    "escalation_reason": "off_domain",
-    "answer": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+    "outcome": "decline",
+    "escalated": false,
+    "escalation_reason": null,
+    "answer": "Soy el asistente de RR. HH. y solo puedo ayudarte con dudas sobre tu trabajo y tu convenio. Esta consulta queda fuera de lo que puedo responder.",
     "citations": [],
     "categories": [],
     "authority_used": [],
@@ -31,28 +31,74 @@
             "matched_pattern": "gimnasio"
         },
         "floor_decision": {
+            "path": "pre_model_guard",
             "retrieval_score_floor": 0.4,
             "answer_confidence_floor": 0.65,
-            "outcome": "escalate",
-            "escalation_reason": "off_domain",
-            "note": "admin guardrail layer (admin_off_domain) — additive, raise-only"
+            "outcome": "decline",
+            "decline_reason": "off_domain",
+            "note": "admin guardrail layer (admin_off_domain) — declined, no escalation card"
+        },
+        "decline": {
+            "granted": true,
+            "source": "guard_admin",
+            "reason": "off_domain",
+            "checks": [
+                {
+                    "id": "D0",
+                    "pass": true,
+                    "detail": null
+                },
+                {
+                    "id": "D1",
+                    "pass": true,
+                    "detail": null
+                },
+                {
+                    "id": "D2",
+                    "pass": true,
+                    "detail": null
+                },
+                {
+                    "id": "D3",
+                    "pass": true,
+                    "detail": null
+                },
+                {
+                    "id": "D4",
+                    "pass": true,
+                    "detail": null
+                },
+                {
+                    "id": "D5",
+                    "pass": true,
+                    "detail": null
+                },
+                {
+                    "id": "D6",
+                    "pass": true,
+                    "detail": null
+                },
+                {
+                    "id": "D7",
+                    "pass": true,
+                    "detail": "n/a"
+                },
+                {
+                    "id": "D8",
+                    "pass": true,
+                    "detail": "n/a"
+                },
+                {
+                    "id": "D9",
+                    "pass": true,
+                    "detail": "admin_off_domain"
+                }
+            ],
+            "denied_by": null,
+            "confirm": null,
+            "gate_version": "dg-1",
+            "matched_pattern": "gimnasio"
         }
     },
-    "escalation_card_facts": {
-        "reason": "off_domain",
-        "explanation_facts": {
-            "asked": "El empleado hizo una pregunta que coincide con un tema que un administrador ha marcado como fuera de alcance.",
-            "found": "No se buscó ningún dato — la pregunta contiene un texto marcado por un administrador como fuera de alcance.",
-            "reason": "off_domain",
-            "fix_link": "#view=guardrails",
-            "fix_action": "Revisar en Guardarraíles esta regla bloqueada; ajustarla si está bloqueando preguntas legítimas.",
-            "fix_surface": "Guardarraíles (admin)",
-            "sub_outcome": "admin_off_domain",
-            "employee_told": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
-            "stopped_reason": "Los administradores pueden marcar temas adicionales como fuera de alcance; esta pregunta coincidió con uno de ellos."
-        },
-        "fix_action": "Revisar en Guardarraíles esta regla bloqueada; ajustarla si está bloqueando preguntas legítimas.",
-        "fix_surface": "Guardarraíles (admin)",
-        "fix_link": "#view=guardrails"
-    }
+    "escalation_card_facts": null
 }

@@ -69,6 +69,15 @@ class ChatService
     public const EMPLOYEE_ESCALATION_MESSAGE = 'Un/a compañero/a de Recursos Humanos revisará tu '
         .'consulta y te responderá.';
 
+    /**
+     * Slice 13e (ADR-0039) — the employee-visible text of a DECLINED turn (a confirmed off-domain question; no card). The
+     * persister is the only place that picks it: `GuardrailPolicy::offDomainMessage()` (the admin's own Guardarraíles copy,
+     * live again for the first time since ADR-0029) or this constant. It names no reason, rule, pattern or person; the
+     * "if you think it is a work question, ask HR to review it" line is frontend-only, so an admin edit can never remove it.
+     */
+    public const DECLINE_MESSAGE = 'Soy el asistente de RR. HH. y solo puedo ayudarte con dudas sobre tu trabajo y tu convenio. '
+        .'Esta consulta queda fuera de lo que puedo responder.';
+
     /** `floor_decision.fallback` value — the only one there is (Sprint 10a). */
     public const FALLBACK_ESTATUTO_GAP = 'estatuto_gap';
 
@@ -206,7 +215,7 @@ class ChatService
 
         // --- Steps 2/2b/2c: guardrail baseline, admin block, explicit_request --
         // Deterministic, no hr-ai call, in that exact order — see PreModelGuards.
-        $guarded = $this->preModelGuards->check($question, $trace);
+        $guarded = $this->preModelGuards->check($question, $trace, $session);
         if ($guarded !== null) {
             return $this->persister->persist($session, $employee, $question, $guarded);
         }

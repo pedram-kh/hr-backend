@@ -204,4 +204,48 @@ class Sprint13ReviewRequestTest extends TestCase
         $this->assertSame($expected['fix_surface'], $card->fix_surface);
         $this->assertNull($card->fix_link);
     }
+    // --- Slice 13e (ADR-0039, plan.md §2.4): a DECLINED turn can be sent for review -------------------------------------
+
+    private function declinedTurn(): ChatMessage
+    {
+        $session = ChatSession::where('employee_id', $this->employee->id)->first();
+        $message = ChatMessage::create(['session_id' => $session->id, 'role' => 'assistant', 'content' => 'declined']);
+        MessageTrace::create(['message_id' => $message->id, 'trace' => [
+            'floor_decision' => ['outcome' => 'decline', 'decline_reason' => 'off_domain'],
+            'decline' => [
+                'granted' => true, 'source' => 'planner', 'reason' => 'off_domain',
+                'checks' => [['id' => 'D1', 'pass' => true, 'detail' => null]],
+                'confirm' => ['label' => 'off_domain', 'confidence' => 0.95, 'floor' => 0.9, 'source' => 'llm'],
+                'denied_by' => null, 'gate_version' => 'dg-1',
+            ],
+        ]]);
+
+        return $message;
+    }
+
+    public function test_a_declined_message_can_be_sent_for_review_and_the_card_carries_the_decline(): void
+    {
+        $declined = $this->declinedTurn();
+        $headers = $this->employeeHeaders($this->employee);
+
+        $first = $this->postJson("/chat/message/{$declined->id}/review", [], $headers);
+        $second = $this->postJson("/chat/message/{$declined->id}/review", [], $headers);
+
+        $first->assertOk();
+        $this->assertSame($first->json('escalation_uuid'), $second->json('escalation_uuid'), 'a second tap returns the same card');
+        $this->assertDatabaseCount('escalation_cards', 1);
+
+        $card = EscalationCard::where('reviewed_message_id', $declined->id)->first();
+        $this->assertSame('employee_requested_review', $card->reason);
+        $this->assertSame('declined_reviewed', $card->explanation_facts['sub_outcome']);
+        $this->assertStringContainsString('planificador', $card->explanation_facts['found']);
+        $this->assertStringContainsString('off_domain 0.95', $card->explanation_facts['found']);
+    }
+
+    public function test_an_answered_review_still_gets_the_answer_reviewed_sub_outcome(): void
+    {
+        $this->postJson("/chat/message/{$this->answeredMessage->id}/review", [], $this->employeeHeaders($this->employee))->assertOk();
+
+        $this->assertSame('answer_reviewed', EscalationCard::where('reviewed_message_id', $this->answeredMessage->id)->first()->explanation_facts['sub_outcome']);
+    }
 }

@@ -70,6 +70,7 @@ class AnswerGate extends Command
         {--stream= : append every scored row as a JSON line to this file as it finishes (a long run survives a crash)}
         {--budget-usd= : Sprint 13b — hard spend cap for THIS run (list price). Refuses to start when the projection exceeds it, and stops mid-run when the measured spend reaches it}
         {--est-turn-usd=0.04 : projected cost per turn for the --budget-usd start-up check}
+        {--stop-on= : Slice 13e abort-and-ask rule — stop the run at the first row that breaks it: `answer_or_card` (an answer, or an escalation card, on a case that must decline: S1) or `decline` (any decline on a case that must never decline: S3)}
         {--allow-unfrozen : skip the MANIFEST.sha256 check on a frozen bank (never for a gate stage)}
         {--json : machine-readable output}';
 
@@ -78,6 +79,8 @@ class AnswerGate extends Command
     private const ENGINES = ['classic', 'agent'];
 
     private bool $aborted = false;
+
+    private ?string $stopReason = null;
 
     /** claude-sonnet-5 $3/$15 per MTok (sprint-10-M review §1, re-confirmed sprint-13 review step 6) — reporting only, never production logic. */
     private const PRICE_PER_MTOK = [
@@ -161,6 +164,13 @@ class AnswerGate extends Command
                     if ($stream) {
                         file_put_contents((string) $stream, json_encode($row, JSON_UNESCAPED_UNICODE)."\n", FILE_APPEND | LOCK_EX);
                     }
+                    $stop = $this->stopOnBreach((string) $this->option('stop-on'), $row);
+                    if ($stop !== null) {
+                        $aborted = true;
+                        $this->stopReason = $stop;
+                        $this->error("STOP-LOSS ({$this->option('stop-on')}): {$stop} — stopping after ".count($rows).' rows. Abort-and-ask.');
+                        break 3;
+                    }
                     if ($budget !== null && $spent >= $budget) {
                         $aborted = true;
                         $this->error(sprintf('BUDGET REACHED: measured $%.2f ≥ cap $%.2f — stopping after %d rows.', $spent, $budget, count($rows)));
@@ -172,6 +182,26 @@ class AnswerGate extends Command
         $this->aborted = $aborted;
 
         return $this->option('json') ? $this->reportJson($rows, $path, $engines, $repeat) : $this->report($rows, $path, $engines, $repeat);
+    }
+
+    /**
+     * Slice 13e stop-loss (plan.md §8.2): null = carry on; otherwise the row that broke the stage's invariant.
+     *
+     * @param  array<string,mixed>  $row
+     */
+    private function stopOnBreach(string $rule, array $row): ?string
+    {
+        if ($rule === '' || ($row['skipped'] ?? false)) {
+            return null;
+        }
+        if ($rule === 'answer_or_card' && (($row['outcome'] ?? null) === 'answer' || ($row['has_card'] ?? false))) {
+            return "[{$row['id']}] outcome={$row['outcome']} has_card=".(($row['has_card'] ?? false) ? 'yes' : 'no');
+        }
+        if ($rule === 'decline' && ($row['declined'] ?? false)) {
+            return "[{$row['id']}] was DECLINED (planner_category=".($row['planner_category'] ?? '—').')';
+        }
+
+        return null;
     }
 
     /**
@@ -322,7 +352,15 @@ class AnswerGate extends Command
             }
         }
 
+        // Slice 13e: a decline never writes an escalation card — and a case that says `no_card` fails if one exists.
+        $hasCard = ! empty($result['escalation_uuid']) || ($result['escalated'] ?? false) === true;
+        $declined = $outcome === 'decline';
+        $decl = $trace['decline'] ?? null;
+
         $pass = true;
+        if (($expect['no_card'] ?? false) === true) {
+            $pass = $pass && ! $hasCard;
+        }
         if (isset($expect['outcome']) && $expect['outcome'] !== null) {
             $pass = $pass && $outcome === $expect['outcome'];
         }
@@ -477,6 +515,12 @@ class AnswerGate extends Command
                 $verdicts++;
                 $v = (string) ($step['verdict'] ?? '');
                 $ruleId = (string) ($step['rule'] ?? '');
+                if ($ruleId === 'off_domain_decline') {
+                    // Slice 13e: the decline rule's own force is the turn's mechanical end, not a routing miss.
+                    $verdicts--;
+
+                    continue;
+                }
                 if ($ruleId === 'normalization_validation') {
                     // Sprint 13b: a rejected normalization is not a routing miss — counted under `norm`, not corrections.
                     $normRejections++;
@@ -547,6 +591,15 @@ class AnswerGate extends Command
             'norm' => $this->normRow($trace),
             'fact_trace' => $factTrace,
             'fact_set_ok' => $factSetOk,
+            // Slice 13e
+            'declined' => $declined,
+            'has_card' => $hasCard,
+            'planner_category' => $trace['agent']['planner_escalation']['category'] ?? null,
+            'decline_granted' => is_array($decl) ? ($decl['granted'] ?? null) : null,
+            'decline_denied_by' => is_array($decl) ? ($decl['denied_by'] ?? null) : null,
+            'decline_source' => is_array($decl) ? ($decl['source'] ?? null) : null,
+            'decline_confirm' => is_array($decl) ? ($decl['confirm'] ?? null) : null,
+            'decline_veto' => is_array($decl) ? collect($decl['checks'] ?? [])->firstWhere('id', 'D7')['detail'] ?? null : null,
         ];
     }
 
@@ -757,6 +810,8 @@ class AnswerGate extends Command
                 'hard_violations' => count(array_filter($scored, fn ($r) => $r['must_not_answer_violated'])),
                 'hard_kinds' => array_count_values(array_filter(array_column($scored, 'hard_kind'))),
                 'answers' => $answers,
+                'declines' => count(array_filter($scored, fn ($r) => $r['declined'] ?? false)),
+                'cards' => count(array_filter($scored, fn ($r) => $r['has_card'] ?? false)),
                 'outcomes' => $outcomeDist,
                 'paths' => $pathDist,
                 'authority' => $authorityDist,
@@ -955,6 +1010,7 @@ class AnswerGate extends Command
             $this->line(sprintf('    false answers on must-escalate cases (hard, must be 0): %d', $e['hard_kinds']['false_answer'] ?? 0));
             $this->line(sprintf('    all HARD violations (must be 0): %d %s', $e['hard_violations'], json_encode($e['hard_kinds'])));
             $this->line('    outcomes: '.json_encode($e['outcomes'], JSON_UNESCAPED_UNICODE));
+            $this->line(sprintf('    declines: %d — escalation cards: %d', $e['declines'], $e['cards']));
             $this->line('    path distribution: '.json_encode($e['paths'], JSON_UNESCAPED_UNICODE));
             $this->line('    authority distribution: '.json_encode($e['authority'], JSON_UNESCAPED_UNICODE));
             $this->line(sprintf('    lane answers: %d — forbidden asks reached: %d — asks attempted/denied: %d/%d', $e['lane_answers'], $e['forbidden_asks_reached'], $e['asks_attempted'], $e['asks_denied']));
@@ -999,7 +1055,7 @@ class AnswerGate extends Command
     {
         $anyHard = array_filter($rows, fn ($r) => $r['must_not_answer_violated'] ?? false) !== [];
         $this->line(json_encode([
-            'set' => $path, 'engines' => $engines, 'repeat' => $repeat, 'aborted_on_budget' => $this->aborted,
+            'set' => $path, 'engines' => $engines, 'repeat' => $repeat, 'aborted_on_budget' => $this->aborted, 'stop_reason' => $this->stopReason,
             'summary' => $this->summarize($rows, $engines), 'rows' => $rows,
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
 

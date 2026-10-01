@@ -32,6 +32,10 @@ use Illuminate\Support\Facades\DB;
  * - `needs_category` is excluded from the deflection-rate DENOMINATOR
  *   (plan.md §2.1, resolved open question #2) but always counted/returned as
  *   its own figure.
+ * - Slice 13e: `decline` (a confirmed off-domain question, no card) is the same:
+ *   its own `declined` figure, excluded from the denominator. Disclosed
+ *   discontinuity: off-domain turns used to be escalations and counted against
+ *   the rate; once they decline, the rate rises with no change in answer quality.
  */
 class DeflectionAnalytics
 {
@@ -115,7 +119,7 @@ class DeflectionAnalytics
      * Aggregate a set of turn rows (from `liveTurns()`) into the summary the
      * `stats:deflection` command / Analítica screen shows (plan.md §2.1).
      *
-     * @return array{answered:int,escalated:int,needs_category:int,ask:int,deflection_rate:?float,path_split:array<string,int>,authority_split:array<string,int>}
+     * @return array{answered:int,escalated:int,needs_category:int,ask:int,declined:int,deflection_rate:?float,path_split:array<string,int>,authority_split:array<string,int>}
      */
     public function summarize(Collection $turns): array
     {
@@ -127,17 +131,63 @@ class DeflectionAnalytics
         // just above: its own figure, excluded from the deflection-rate
         // denominator (it is neither an answer nor an escalation).
         $ask = $turns->where('outcome', 'ask')->count();
-        $denominator = $answered + $escalated; // needs_category/ask excluded (§2.1, resolved q2).
+        $declined = $turns->where('outcome', 'decline')->count(); // Slice 13e — excluded from the denominator too.
+        $denominator = $answered + $escalated; // needs_category/ask/decline excluded (§2.1, resolved q2).
 
         return [
             'answered' => $answered,
             'escalated' => $escalated,
             'needs_category' => $needsCategory,
             'ask' => $ask,
+            'declined' => $declined,
             'deflection_rate' => $denominator > 0 ? round($answered / $denominator, 4) : null,
             'path_split' => $turns->groupBy(fn ($t) => $t['path'] ?? 'unknown')->map->count()->all(),
             'authority_split' => $turns->groupBy(fn ($t) => $t['authority_used_key'] ?? 'none')->map->count()->all(),
         ];
+    }
+
+    /**
+     * Slice 13e — declined turns per calendar day over [start, end), every day present (0 when none), ascending. `$live`
+     * reads `message_traces` (like `summarize()`); otherwise the rollup (like `fromRollup()`, same scope rules) — the two
+     * agree for any fully rolled-up day, which the rollup-vs-live test pins.
+     *
+     * @param  array{territory_id?:int,sector_id?:int,convenio_id?:int}  $filters
+     * @return list<array{date:string,declined:int}>
+     */
+    public function declinedByDay(Carbon $periodStart, Carbon $periodEnd, array $filters = [], bool $live = false): array
+    {
+        $counts = [];
+        if ($live) {
+            foreach ($this->liveTurns($periodStart, $periodEnd, $filters)->where('outcome', 'decline') as $t) {
+                $day = substr((string) $t['turn_at'], 0, 10);
+                $counts[$day] = ($counts[$day] ?? 0) + 1;
+            }
+        } else {
+            $query = DB::table('analytics_daily_rollups')
+                ->where('outcome', 'decline')
+                ->where('date', '>=', $periodStart->toDateString())
+                ->where('date', '<', $periodEnd->toDateString());
+            if (isset($filters['territory_id'])) {
+                $query->where('territory_id', $filters['territory_id'])->whereNull('sector_id')->whereNull('convenio_id');
+            } elseif (isset($filters['sector_id'])) {
+                $query->where('sector_id', $filters['sector_id'])->whereNull('territory_id')->whereNull('convenio_id');
+            } elseif (isset($filters['convenio_id'])) {
+                $query->where('convenio_id', $filters['convenio_id'])->whereNull('territory_id')->whereNull('sector_id');
+            } else {
+                $query->whereNull('territory_id')->whereNull('sector_id')->whereNull('convenio_id');
+            }
+            foreach ($query->select('date', 'turn_count')->get() as $r) {
+                $day = substr((string) $r->date, 0, 10);
+                $counts[$day] = ($counts[$day] ?? 0) + (int) $r->turn_count;
+            }
+        }
+
+        $out = [];
+        for ($d = $periodStart->copy()->startOfDay(); $d->lt($periodEnd); $d->addDay()) {
+            $out[] = ['date' => $d->toDateString(), 'declined' => $counts[$d->toDateString()] ?? 0];
+        }
+
+        return $out;
     }
 
     /** hr_agent replies (plan.md §2.2) — a separate, always-live query; no message_traces row exists to roll up. */
@@ -286,6 +336,7 @@ class DeflectionAnalytics
         $escalated = (int) $rows->where('outcome', 'escalate')->sum('turn_count');
         $needsCategory = (int) $rows->where('outcome', 'needs_category')->sum('turn_count');
         $ask = (int) $rows->where('outcome', 'ask')->sum('turn_count');
+        $declined = (int) $rows->where('outcome', 'decline')->sum('turn_count');
         $denominator = $answered + $escalated;
 
         return [
@@ -293,6 +344,7 @@ class DeflectionAnalytics
             'escalated' => $escalated,
             'needs_category' => $needsCategory,
             'ask' => $ask,
+            'declined' => $declined,
             'deflection_rate' => $denominator > 0 ? round($answered / $denominator, 4) : null,
             'path_split' => $rows->groupBy(fn ($r) => $r->path ?? 'unknown')->map(fn ($g) => (int) $g->sum('turn_count'))->all(),
             'authority_split' => $rows->groupBy(fn ($r) => $r->authority_used_key ?? 'none')->map(fn ($g) => (int) $g->sum('turn_count'))->all(),
