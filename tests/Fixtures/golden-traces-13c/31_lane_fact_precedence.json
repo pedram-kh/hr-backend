@@ -35,7 +35,7 @@
             "retrieval_status": [
                 "active"
             ],
-            "as_of_date": "2026-09-30"
+            "as_of_date": "#as_of_date:today"
         },
         "router_decision": {
             "label": "reference_fact",
@@ -61,7 +61,7 @@
             "topic_id": "#topic_id",
             "job_category_id": null,
             "group_label": null,
-            "as_of_date": "2026-09-30",
+            "as_of_date": "#as_of_date:today",
             "fact_id": "#fact_id",
             "validity_selection": "single",
             "value": "periodo de prueba 90/75/60 días según contrato",

@@ -24,6 +24,7 @@ use App\Services\Answer\TurnOutcome;
 use App\Services\ChatService;
 use App\Services\ExtractionClient;
 use App\Services\GuardrailPolicy;
+use Carbon\Carbon;
 use Database\Seeders\DocumentTypeSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -412,6 +413,13 @@ class Sprint13cLaneGoldenTraceTest extends TestCase
             }
             if (is_string($k) && preg_match('/(^|_)(convenio|document|fact|topic|table|territory|job_category)_ids?$/', $k) && is_int($x)) {
                 $out[$k] = '#'.$k;
+
+                continue;
+            }
+            if ($k === 'as_of_date' && is_string($x) && $x === Carbon::today()->toDateString()) {
+                // `ChatService` stamps today on every turn; a literal date fails the day after it was recorded
+                // (found at the 13c close: the goldens recorded on 2026-09-30 failed on the 2026-10-01 deploy).
+                $out[$k] = '#as_of_date:today';
 
                 continue;
             }
