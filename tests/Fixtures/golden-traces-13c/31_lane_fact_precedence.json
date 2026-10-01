@@ -1,0 +1,109 @@
+{
+    "outcome": "answer",
+    "escalated": false,
+    "escalation_reason": null,
+    "answer": "Según el dato de referencia verificado de tu convenio: periodo de prueba 90/75/60 días según contrato. (Dato estructurado exacto, citado a su fuente; si tu categoría o grupo no es el indicado, dímelo.)",
+    "citations": [
+        {
+            "chunk_id": null,
+            "document_id": "#document_id",
+            "document_uuid": "fb318f23-14c0-0405-ac56-ea8ff7ba6aa9",
+            "document_title": "Periodos de prueba (referencia)",
+            "authority_level": "structured_reference",
+            "page_from": null,
+            "page_to": null,
+            "page_number": null,
+            "snippet": "Dato de referencia — Convenio 13c 31 (p.1 §1)",
+            "is_reference_fact": true
+        }
+    ],
+    "categories": [],
+    "authority_used": [
+        "structured_reference"
+    ],
+    "trace": {
+        "profile": {
+            "employee_uuid": "7c534a32-7ee9-dac7-1816-44d18d224035",
+            "convenio_id": "#convenio_id",
+            "convenio_numero": "31TEST-13c-31",
+            "territory_id": "#territory_id",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "2026-09-30"
+        },
+        "router_decision": {
+            "label": "reference_fact",
+            "confidence": 1,
+            "source": "deterministic_reference_fact",
+            "subqueries": [],
+            "model": null,
+            "note": "matched deterministic reference-fact pre-check (topic: periodo de prueba)",
+            "cross_path": false,
+            "trace_fragment": {
+                "matched_topic_names": [
+                    "periodo de prueba"
+                ]
+            }
+        },
+        "guardrail_check": {
+            "fired": false,
+            "reason": null,
+            "rule": null
+        },
+        "reference_fact": {
+            "convenio_id": "#convenio_id",
+            "topic_id": "#topic_id",
+            "job_category_id": null,
+            "group_label": null,
+            "as_of_date": "2026-09-30",
+            "fact_id": "#fact_id",
+            "validity_selection": "single",
+            "value": "periodo de prueba 90/75/60 días según contrato",
+            "authority_used": "structured_reference",
+            "employee_group_state": "unresolved",
+            "match_kind": "convenio_wide",
+            "validity_start": null,
+            "validity_end": null,
+            "outcome": "answer"
+        },
+        "floor_decision": {
+            "path": "reference_fact",
+            "outcome": "answer",
+            "escalation_reason": null,
+            "authority_used": [
+                "structured_reference"
+            ],
+            "note": "exact verified reference fact (fact_id #n) — quoted value, /ground skipped"
+        },
+        "engine": "agent",
+        "agent": {
+            "planner": null,
+            "budget": {
+                "max_rounds": 4,
+                "max_tool_calls": 6,
+                "asks_used_before_turn": 0
+            },
+            "window": {
+                "message_ids": []
+            },
+            "steps": [
+                {
+                    "i": 0,
+                    "type": "round0",
+                    "seeded": [
+                        "reference_fact"
+                    ]
+                }
+            ],
+            "termination": "finalize",
+            "planner_escalation": null
+        }
+    },
+    "escalation_card_facts": null
+}

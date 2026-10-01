@@ -58,7 +58,10 @@ class TurnPersister
         // synthesis, after grounding, after `GeneralLanePostCheck` — never a
         // model claim, never checked by `/ground`).
         if (($trace['floor_decision']['path'] ?? null) === ChatService::GENERAL_LANE_PATH) {
-            return $answer.ChatService::GENERAL_LANE_CAVEAT;
+            // Slice 13c: the model-knowledge basis carries its own caveat (no page was consulted); web keeps today's.
+            return $answer.(($trace['general_lane']['basis'] ?? null) === 'model_knowledge'
+                ? ChatService::GENERAL_LANE_MODEL_CAVEAT
+                : ChatService::GENERAL_LANE_CAVEAT);
         }
 
         return $answer;

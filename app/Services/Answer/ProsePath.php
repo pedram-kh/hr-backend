@@ -208,7 +208,10 @@ class ProsePath
         // answer). The admin tone string is sanitized at write time too.
         $synthesisQuestion = $this->applyToneToSynthesisQuestion($question);
 
-        $synth = $this->ai->synthesise($synthesisQuestion, $synthesisChunks, $decryptedKey, $providerConfig);
+        // Slice 13c: with the model-knowledge sub-flag on, ask /synthesise to declare whether the sources answer the question
+        // (the structured abstention flag). Flag off = the call is exactly what it was.
+        $reportAbstention = $this->policy->generalLaneModelKnowledgeEnabled();
+        $synth = $this->ai->synthesise($synthesisQuestion, $synthesisChunks, $decryptedKey, $providerConfig + ($reportAbstention ? ['report_abstention' => true] : []));
 
         if (isset($synth['error'])) {
             Log::warning('chat: synthesis provider failure', ['error' => $synth['error']]); // never logs the key
@@ -243,6 +246,9 @@ class ProsePath
         }
         $checkB = count($validCitations) >= 1 && $answer !== '';
         $confidenceBelowFloor = $confidence < $confidenceFloor;
+        // Slice 13c: an abstention the model declared (or, with no flag from the model, the opening-sentence phrase) is an
+        // abstention even when it cites a related source — it must never persist as the answer.
+        $abstained = $reportAbstention && ($synth['abstained'] ?? false) === true;
 
         // Figure-grounding guard (Correction-01): a cheap deterministic PRE-CHECK
         // feeding the entailment gate (NOT the gate itself any more — §5). Fires
@@ -261,11 +267,16 @@ class ProsePath
             'authority_used' => $authorityUsed,
             'trace_fragment' => $synth['trace_fragment'] ?? [],
         ];
+        if ($reportAbstention) {
+            $trace['synthesis']['abstention'] = ['abstained' => $abstained, 'by' => $synth['abstained_by'] ?? null];
+        }
 
         // Gate order: A (already passed) ∧ B ∧ figure-guard pre-check ∧ entailment.
         // Each failure escalates (low_confidence) in the safe direction.
         $groundingResult = null;
-        if (! $checkB) {
+        if ($abstained) {
+            $note = 'synthesis abstained (flag)';
+        } elseif (! $checkB) {
             $note = 'no valid citations (Check B failed)';
         } elseif (! $figureGuard['grounded']) {
             $note = 'answer figure not grounded in cited chunk (figure-guard pre-check)';
@@ -287,7 +298,7 @@ class ProsePath
         }
         unset($decryptedKey); // drop the plaintext as soon as all provider calls are done
 
-        $decisionPass = $checkB && $figureGuard['grounded'] && ($groundingResult !== null && $groundingResult['grounded']);
+        $decisionPass = ! $abstained && $checkB && $figureGuard['grounded'] && ($groundingResult !== null && $groundingResult['grounded']);
 
         $floor = [
             'retrieval_score_floor' => $retrievalFloor,
@@ -312,6 +323,10 @@ class ProsePath
             'escalation_reason' => $decisionPass ? null : 'low_confidence',
             'note' => $decisionPass ? null : $note,
         ];
+        if ($abstained) {
+            // Only present when it fired: a turn with no abstention keeps every trace byte it had.
+            $floor['synthesis_abstained'] = ['flag' => true, 'by' => $synth['abstained_by'] ?? null];
+        }
         $trace['floor_decision'] = self::stampFallback($floor, $fallback);
 
         if (! $decisionPass) {

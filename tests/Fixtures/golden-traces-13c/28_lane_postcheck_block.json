@@ -1,0 +1,193 @@
+{
+    "outcome": "escalate",
+    "escalated": true,
+    "escalation_reason": "general_lane_blocked",
+    "answer": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+    "citations": [],
+    "categories": [],
+    "authority_used": [],
+    "trace": {
+        "profile": {
+            "employee_uuid": "a93d06a3-a950-f2f8-3760-a606dd8179eb",
+            "convenio_id": "#convenio_id",
+            "convenio_numero": "31TEST-13c-28",
+            "territory_id": "#territory_id",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "2026-09-30"
+        },
+        "router_decision": null,
+        "guardrail_check": {
+            "fired": false,
+            "reason": null,
+            "rule": null
+        },
+        "agent": {
+            "planner": {
+                "model": null,
+                "prompt_version": null,
+                "tool_choice": "any",
+                "thinking": false
+            },
+            "budget": {
+                "max_rounds": 4,
+                "max_tool_calls": 6,
+                "asks_used_before_turn": 0
+            },
+            "window": {
+                "message_ids": []
+            },
+            "steps": [
+                {
+                    "i": 0,
+                    "type": "planner_round",
+                    "round": 1,
+                    "calls": [
+                        {
+                            "id": "t-convenio_search",
+                            "tool": "convenio_search",
+                            "input": []
+                        }
+                    ],
+                    "stop_reason": "tool_use",
+                    "tokens": [],
+                    "request_id": null,
+                    "model": null,
+                    "prompt_version": null
+                },
+                {
+                    "i": 1,
+                    "type": "normalization",
+                    "verdict": "absent",
+                    "topic": null,
+                    "confidence": null,
+                    "rejected_by": null
+                },
+                {
+                    "i": 2,
+                    "type": "tool_call",
+                    "call_id": "t-convenio_search",
+                    "tool": "convenio_search",
+                    "status": "no_material",
+                    "planner_summary": {
+                        "status": "abstained"
+                    }
+                },
+                {
+                    "i": 3,
+                    "type": "planner_round",
+                    "round": 2,
+                    "calls": [
+                        {
+                            "id": "t-general_knowledge",
+                            "tool": "general_knowledge",
+                            "input": []
+                        }
+                    ],
+                    "stop_reason": "tool_use",
+                    "tokens": [],
+                    "request_id": null,
+                    "model": null,
+                    "prompt_version": null
+                },
+                {
+                    "i": 4,
+                    "type": "rule_verdict",
+                    "rule": "general_lane_post_check",
+                    "verdict": "force_escalate"
+                }
+            ],
+            "termination": "forced_escalation",
+            "planner_escalation": null,
+            "normalization": {
+                "requested": true,
+                "literal": "¿Qué es una excedencia?",
+                "proposed": null,
+                "verdict": "absent",
+                "rejections": [],
+                "used": null,
+                "topic_dropped": false,
+                "consumers": [],
+                "round1a": null,
+                "validator_version": "nd-1",
+                "planner_prompt_version": null
+            },
+            "general_lane_blocked": {
+                "sub": "figure"
+            }
+        },
+        "floor_decision": {
+            "path": "general_knowledge",
+            "outcome": "escalate",
+            "escalation_reason": "general_lane_blocked",
+            "authority_used": [],
+            "note": "general lane answer discarded — post-check hit F1"
+        },
+        "general_lane": {
+            "basis": "model_knowledge",
+            "question_scrubbed": "¿Qué es una excedencia?",
+            "scrub": {
+                "kinds": [],
+                "count": 0
+            },
+            "sources": [
+                {
+                    "kind": "model_knowledge",
+                    "title": "conocimiento general del modelo"
+                }
+            ],
+            "fetches": [],
+            "web_attempted": false,
+            "fetch_errors": [],
+            "prompt_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "word_count": 21,
+            "draft": {
+                "model": "claude-sonnet-5",
+                "general_knowledge_ms": 900,
+                "prompt_tokens": 400,
+                "completion_tokens": 150,
+                "cost_usd": 0.0034
+            },
+            "grounding": {
+                "checked": false,
+                "reason": "model_knowledge_no_source"
+            },
+            "postcheck": {
+                "passed": false,
+                "hits": [
+                    {
+                        "pattern_id": "F1",
+                        "matched_span": "5"
+                    }
+                ]
+            },
+            "shape": {
+                "verdict": "pass",
+                "rule_ids": []
+            }
+        },
+        "engine": "agent"
+    },
+    "escalation_card_facts": {
+        "reason": "general_lane_blocked",
+        "explanation_facts": {
+            "asked": "Una pregunta de conocimiento general (definición de un concepto laboral).",
+            "found": "El sistema de conocimiento general generó una respuesta que contenía una cifra o cantidad concreta.",
+            "reason": "general_lane_blocked",
+            "fix_link": null,
+            "fix_action": "Revisar el detalle de la traza para ver la cifra concreta que se generó y ajustar la instrucción del conocimiento general si se repite.",
+            "fix_surface": "Escalations (tarjeta)",
+            "sub_outcome": "figure",
+            "employee_told": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+            "stopped_reason": "El conocimiento general nunca debe mostrar cifras concretas — solo explicaciones. Se descarta la respuesta y se deriva."
+        },
+        "fix_action": "Revisar el detalle de la traza para ver la cifra concreta que se generó y ajustar la instrucción del conocimiento general si se repite.",
+        "fix_surface": "Escalations (tarjeta)"
+    }
+}

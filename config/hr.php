@@ -235,6 +235,11 @@ return [
     'general_lane' => [
         'enabled' => (bool) env('HR_GENERAL_LANE_ENABLED', false),
 
+        // Slice 13c (plan.md §2.6): model knowledge as a lane source (an answer with NO fetched page), under the
+        // lane flag above. Default off: lane on + this off = Sprint-13 behaviour (web-sourced only). Restrict-only
+        // admin toggle in Guardarraíles (`GuardrailPolicy::generalLaneModelKnowledgeEnabled()`).
+        'model_knowledge' => (bool) env('HR_GENERAL_LANE_MODEL_KNOWLEDGE', false),
+
         'domains' => [
             'boe.es',
             'mites.gob.es',

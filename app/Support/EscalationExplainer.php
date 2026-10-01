@@ -106,6 +106,7 @@ final class EscalationExplainer
         'general_lane_blocked.question_prescreen',
         'general_lane_blocked.figure',
         'general_lane_blocked.entitlement_language',
+        'general_lane_blocked.shape',
         'general_lane_blocked.ungrounded',
         'profile_incomplete.professional_group',
         'profile_incomplete.job_category',
@@ -848,6 +849,20 @@ final class EscalationExplainer
                     'fix_surface' => 'Escalations (tarjeta)',
                     'fix_link' => null,
                 ],
+                'shape' => function (array $t) {
+                    $names = ['S1' => 'cita una ley, un artículo, una sentencia o un enlace que no puede verificarse', 'S2' => 'supera la longitud máxima', 'S3' => 'no remite al convenio o a Recursos Humanos al final'];
+                    $ids = $t['general_lane']['shape']['rule_ids'] ?? [];
+                    $why = implode('; ', array_map(fn ($id) => $names[$id] ?? $id, is_array($ids) ? $ids : []));
+
+                    return [
+                        'asked' => 'Una pregunta de conocimiento general (definición de un concepto laboral).',
+                        'found' => 'El borrador sin fuente no cumplía la forma exigida'.($why !== '' ? ": {$why}" : '').'.',
+                        'stopped_reason' => 'Un borrador de conocimiento general que no cumple la forma exigida (sin citas no verificables, breve y con la remisión final) no se muestra — se deriva en su lugar.',
+                        'fix_action' => 'Revisar el detalle de la traza (regla de forma y borrador); si se repite, ajustar la instrucción del conocimiento general.',
+                        'fix_surface' => 'Escalations (tarjeta)',
+                        'fix_link' => null,
+                    ];
+                },
                 'ungrounded' => fn (array $t) => [
                     'asked' => 'Una pregunta de conocimiento general (definición de un concepto laboral).',
                     'found' => 'La respuesta generada no pudo verificarse contra ninguna fuente consultada.',

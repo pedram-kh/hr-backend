@@ -92,12 +92,14 @@ final class NationalLawTool implements Tool
         }
 
         // CP-1 amendment (F.8, plan §B.6.1 cond. 2) — same rule as ConvenioSearchTool.
-        if (CorpusMiss::laneMayTakeOver($outcome, $state->question, $this->guardrails)) {
+        // Slice 13c: with the model-knowledge sub-flag on, a synthesis ABSTENTION (status `abstained`) is handed over the same way.
+        $handOver = CorpusMiss::handOverKind($outcome, $state->question, $this->guardrails);
+        if ($handOver !== null) {
             return new ToolResult(
                 ToolResult::NO_MATERIAL,
                 terminalOutcome: $outcome,
                 traceBlocks: ['floor_decision' => $outcome->trace['floor_decision'], 'retrieval' => $outcome->trace['retrieval'] ?? []] + CorpusMiss::precondition($outcome),
-                plannerSummary: ['status' => 'entailment_failed'],
+                plannerSummary: ['status' => $handOver === CorpusMiss::SYNTHESIS_ABSTENTION ? 'abstained' : 'entailment_failed'],
             );
         }
 

@@ -85,7 +85,11 @@ final class GeneralLanePostCheck implements Rule
         // `corresponderá(n)` / `correspondería(n)`, not only `le corresponde` — "los derechos que corresponden a su
         // puesto" states an entitlement without naming a person. `correspondiente(s)` ("el convenio correspondiente")
         // is a different word and still passes.
-        'E2' => '/\bderecho\s+a\b|\bcorrespond(?:e|en|era|eran|eria|erian)\b|\b(la\s+empresa|el\s+empresario|el\s+empleador)\s+(debe|esta\s+obligad\w*|tiene\s+que)\b|\bes\s+obligatori\w*\b|\bgarantiza\w*\b/u',
+        // 13c (S2): the third-person GENERAL entitlement shape — "es un derecho", "tiene(n) derecho", "está(n) obligado(s) a" — says
+        // a right or duty exists without naming the reader. Bare `obligatorio` stays AUDIT-only (too common in neutral definitions).
+        // 13c (S2 ×1 survivor NEG-16): "un derecho <adjetivo>" and "derecho preferente (de reingreso)" — a right named as a noun phrase,
+        // with no verb. "derecho laboral" / "derecho del trabajo" (the field, no article "un") still pass.
+        'E2' => '/\bderecho\s+a\b|\bcorrespond(?:e|en|era|eran|eria|erian)\b|\b(la\s+empresa|el\s+empresario|el\s+empleador)\s+(debe|esta\s+obligad\w*|tiene\s+que)\b|\bes\s+obligatori\w*\b|\bgarantiza\w*\b|\bes\s+(?:un\s+)?derecho\b|\btienen?\s+derecho\b|\bestan?\s+obligad[oa]s?\s+a\b|\bun\s+derecho\b|\bderechos?\s+preferentes?\b/u',
         // E3: bounds / quantity framing.
         'E3' => '/\b(como\s+)?(minimo|maximo)\b|\bal\s+menos\b|\bno\s+(podra|puede)\s+(ser\s+)?(inferior|superior)\b|\bhasta\s+un\s+(maximo|limite)\b|\bplazo\s+de\b/u',
         // X1: English leakage.
@@ -129,11 +133,24 @@ final class GeneralLanePostCheck implements Rule
             'authority_used' => [],
             'note' => "general lane answer discarded — post-check hit {$hit['pattern_id']}",
         ];
-        $trace['general_lane']['postcheck'] = ['passed' => false, 'hits' => [$hit]];
+        // 13c: keep what the tool already recorded (basis, sources, fetches, …) next to the verdict (it used to be replaced by it).
+        $trace['general_lane'] = array_merge($result->terminalOutcome->trace['general_lane'] ?? [], ['postcheck' => ['passed' => false, 'hits' => [$hit]]]);
+
+        // 13c: name the real block for the escalation card (the explainer reads `trace.agent.general_lane_blocked.sub`).
+        $trace['agent']['general_lane_blocked'] = ['sub' => self::subFor($hit['pattern_id'])];
 
         $outcome = new TurnOutcome('escalate', ChatService::EMPLOYEE_ESCALATION_MESSAGE, [], $trace, 'general_lane_blocked');
 
         return Verdict::forceEscalate($outcome, $this->id());
+    }
+
+    /**
+     * The `general_lane_blocked` sub-outcome for a post-check pattern id: the entitlement/obligation family (E1, E2) is
+     * `entitlement_language`; every other pattern is a quantity or figure (F1–F3, D1, A1, E3 bounds, X1).
+     */
+    public static function subFor(string $patternId): string
+    {
+        return in_array($patternId, ['E1', 'E2'], true) ? 'entitlement_language' : 'figure';
     }
 
     /**
@@ -230,8 +247,8 @@ final class GeneralLanePostCheck implements Rule
      *  - `digit`: any digit anywhere;
      *  - `spelled_number`: any spelled number other than un/uno/una, anywhere; or uno/una followed by a
      *    quantity noun within THREE tokens (F2 allows two);
-     *  - `entitlement_word`: derecho / corresponde(n) / obligatori* / minimo / maximo / deberá / tienes que /
-     *    puedes exigir.
+     *  - `entitlement_word`: derecho / corresponde(n) / minimo / maximo / deberá / tienes que / puedes exigir, plus
+     *    `obligatori*` ONLY in an entitlement shape (es obligatorio, obligatorio que, obligado/a(s) a) — never as a bare adjective.
      *
      * @return list<string> the audit hit ids, empty when clean
      */
@@ -246,7 +263,10 @@ final class GeneralLanePostCheck implements Rule
             || preg_match('/\b(?:uno|una)\b(?:\s+\w+){0,2}\s+'.self::F2_QUANTITY_NOUNS.'\b/u', $t) === 1) {
             $hits[] = 'spelled_number';
         }
-        if (preg_match('/\b(derecho|corresponde|corresponden|obligatori\w+|minimo|maximo|debera|tienes que|puedes exigir)\b/u', $t) === 1) {
+        // 13c (S2, user decision): `obligatori*` is NOT an entitlement word as a bare adjective ("carácter voluntario u obligatorio",
+        // "sin una fórmula obligatoria") — it counts only in an entitlement shape: "es obligatorio (que)", "obligatorio que",
+        // "está(n) obligado(s) a".
+        if (preg_match('/\b(derecho|corresponde|corresponden|minimo|maximo|debera|tienes que|puedes exigir)\b|\bes\s+obligatori\w+\b|\bobligatori\w+\s+que\b|\bobligad[oa]s?\s+a\b/u', $t) === 1) {
             $hits[] = 'entitlement_word';
         }
 
@@ -282,5 +302,65 @@ final class GeneralLanePostCheck implements Rule
         }
 
         return false;
+    }
+
+    // ---- Slice 13c (plan.md §4.2, §3.3) — pre-screen v2: a FAIL-CLOSED shape allow-list --------------------------------
+    //
+    // v1 (above, untouched) is a deny-list of 8 regexes led by `cuánto`; measured on the frozen 13c fixtures it catches
+    // 22/34 entitlement questions and 1/18 colloquial ones. v2 admits a question to the lane only if ALL hold, in this
+    // order (the first failing rule is the recorded refusal reason). It can only REFUSE more than v1 — never admit a
+    // question v1 denies — and nothing on the lane-off path calls it.
+
+    /** Rule `figure_concept` — concepts whose honest explanation is a figure (plan.md §3.3): escalate, no draft. A cost belt, never the safety (A1 still blocks the figure itself). Post-normalization. */
+    public const FIGURE_CONCEPT_PATTERN = '/\b(?:smi|iprem|salario\s+minimo|bases?\s+reguladoras?|bases?\s+de\s+cotizacion|tipos?\s+de\s+cotizacion|topes?\s+de\s+cotizacion|jornada\s+maxima|periodo\s+de\s+carencia|coeficientes?|porcentajes?)\b/u';
+
+    /** Rule `first_person` — the lane is general knowledge; anything about the asker's own situation belongs to the corpus or HR. Post-normalization. */
+    public const FIRST_PERSON_PATTERN = '/\b(?:me|mi|mis|mio|mia|mios|mias|yo|conmigo|tengo|llevo|soy|estoy|puedo|debo|necesito|quiero|nos|nuestr\w+)\b/u';
+
+    /** Rule `obligation` — entitlement/obligation constructs, including the explanatory-shaped wrappers ("qué es lo que te toca…"). Post-normalization. */
+    public const OBLIGATION_PATTERN = '/\b(?:que\s+es\s+lo\s+que|toca|tocan|toque\w*|debe|deben|deber\w*|obligad\w*|obligatori\w*|corresponde\w*|(?:tener|tiene|tienes|tienen)\s+derecho)\b/u';
+
+    /** Rule `shape` — the ONLY question forms the lane answers (definition / how-it-works / difference / purpose / reason). Anchored at the start. Post-normalization. */
+    public const SHAPE_PATTERN = '/^\W*(?:que\s+(?:es|son|significa|significan|quiere\s+decir|quieren\s+decir)|como\s+funciona(?:n)?|para\s+que\s+sirve(?:n)?|en\s+que\s+consiste(?:n)?|que\s+diferencias?\s+hay|cual\s+es\s+la\s+diferencia|por\s+que)\b/u';
+
+    /**
+     * The id of the first v2 rule that refuses this question, or null when the lane may take it. Ids: `prescreen_v1`,
+     * `figure_concept`, `first_person`, `obligation`, `shape`.
+     */
+    public static function questionRefusal(string $question): ?string
+    {
+        if (self::questionPrescreenHit($question)) {
+            return 'prescreen_v1';
+        }
+        $n = self::normalize($question);
+        if (preg_match(self::FIGURE_CONCEPT_PATTERN, $n) === 1) {
+            return 'figure_concept';
+        }
+        if (preg_match(self::FIRST_PERSON_PATTERN, $n) === 1) {
+            return 'first_person';
+        }
+        if (preg_match(self::OBLIGATION_PATTERN, $n) === 1) {
+            return 'obligation';
+        }
+        if (preg_match(self::SHAPE_PATTERN, $n) !== 1) {
+            return 'shape';
+        }
+
+        return null;
+    }
+
+    /**
+     * Slice 13c — the question gate the lane uses: pre-screen v1 (`questionPrescreenHit`, unchanged Sprint-13 behaviour) when
+     * `$v2` is false, the fail-closed allow-list ({@see self::questionAdmitsLane()}) when true (model-knowledge sub-flag on).
+     * v2 refuses everything v1 refuses, so switching to it can only refuse more.
+     */
+    public static function questionBlocked(string $question, bool $v2): bool
+    {
+        return $v2 ? ! self::questionAdmitsLane($question) : self::questionPrescreenHit($question);
+    }
+
+    public static function questionAdmitsLane(string $question): bool
+    {
+        return self::questionRefusal($question) === null;
     }
 }

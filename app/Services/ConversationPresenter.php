@@ -91,7 +91,7 @@ class ConversationPresenter
             } else {
                 $row['citations'] = [];
                 $row['source_labels'] = self::sourceLabels($resolvedCitations);
-                $row['general_lane'] = ['sources' => self::generalLaneSources($trace ?? [])];
+                $row['general_lane'] = self::generalLanePayload($trace ?? []);
             }
 
             return $row;
@@ -123,6 +123,25 @@ class ConversationPresenter
     }
 
     /**
+     * The employee-facing `general_lane` block: `sources` always (as before), plus `basis` (`web` | `model_knowledge`) ONLY on a
+     * lane ANSWER (Slice 13c, plan.md §2.5) — so the frontend picks the right chip and strips the right caveat. Every other row
+     * keeps exactly `{sources: []}`.
+     *
+     * @param  array<string,mixed>  $trace
+     * @return array{sources:list<array{label:string,url:?string}>,basis?:string}
+     */
+    public static function generalLanePayload(array $trace): array
+    {
+        $payload = ['sources' => self::generalLaneSources($trace)];
+        $floor = $trace['floor_decision'] ?? [];
+        if (($floor['path'] ?? null) === ChatService::GENERAL_LANE_PATH && ($floor['outcome'] ?? null) === 'answer') {
+            $payload['basis'] = ($trace['general_lane']['basis'] ?? null) === 'model_knowledge' ? 'model_knowledge' : 'web';
+        }
+
+        return $payload;
+    }
+
+    /**
      * Sprint 13, build step 9 (plan.md §B.6.6) — the employee's OWN
      * `general_knowledge`-lane sources, resolved to a display label + the
      * catalogue's OWN url (never a page id, never a raw fetched excerpt —
@@ -142,7 +161,7 @@ class ConversationPresenter
             return [];
         }
 
-        $catalogue = collect(config('hr.general_lane.sources', []))->keyBy('id');
+        $catalogue = collect(GeneralLaneCatalogue::pages())->merge(config('hr.general_lane.sources', []))->keyBy('id');
 
         $result = [];
         foreach ($sources as $s) {
