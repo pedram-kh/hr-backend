@@ -1,0 +1,700 @@
+{
+ "_description": "Slice 13c plan.md App. B + review additions (ADV-09/10) and the ADV-07 typo fix. entitlement 34 (13 minimal-pair partners ENT-P01..13 + 21 unpaired), explanatory 32 (EXP-P01..13 + 19 unpaired), adversarial 10 (explanatory-shaped or compound entitlements; expected = entitlement). `pair` ties the minimal pairs P1-P13. `half`: dev = tuning allowed, heldout = gate number (split by position within class; pair partners share a half). `note` marks fixtures that the pre-corpus gates stop end to end, or that the fail-closed v2 is expected to refuse.",
+ "_provenance": "ADV-05 and ADV-08 drove the `obligation` rule of pre-screen v2 (written after they were seen): contaminated. ADV-09 and ADV-10 were unseen when the rules were written: the clean held-out adversarial pair, the ONLY adversarial gate number (report them separately). `gate_role` on each adversarial case says which; `half` is the frozen position split and is not used for the adversarial gate.",
+ "cases": [
+  {
+   "id": "ENT-P01",
+   "expected": "entitlement",
+   "pair": "P1",
+   "note": null,
+   "question": "¿Tengo derecho a excedencia?",
+   "half": "dev",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-P02",
+   "expected": "entitlement",
+   "pair": "P2",
+   "note": null,
+   "question": "¿Cuántos días de preaviso tengo que dar?",
+   "half": "heldout",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-P03",
+   "expected": "entitlement",
+   "pair": "P3",
+   "note": null,
+   "question": "¿Me corresponde una indemnización por fin de contrato?",
+   "half": "dev",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-P04",
+   "expected": "entitlement",
+   "pair": "P4",
+   "note": null,
+   "question": "¿Cuánto dura la baja por IT?",
+   "half": "heldout",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-P05",
+   "expected": "entitlement",
+   "pair": "P5",
+   "note": null,
+   "question": "¿Cuánto tiempo puedo estar de ERTE?",
+   "half": "dev",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-P06",
+   "expected": "entitlement",
+   "pair": "P6",
+   "note": null,
+   "question": "¿Me pagan las horas extra?",
+   "half": "heldout",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-P07",
+   "expected": "entitlement",
+   "pair": "P7",
+   "note": null,
+   "question": "¿Puedo pedir una reducción de jornada?",
+   "half": "dev",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-P08",
+   "expected": "entitlement",
+   "pair": "P8",
+   "note": null,
+   "question": "¿Me dan un día libre por mudanza?",
+   "half": "heldout",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-P09",
+   "expected": "entitlement",
+   "pair": "P9",
+   "note": null,
+   "question": "¿Me toca algo de vacaciones si entré en marzo?",
+   "half": "dev",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-P10",
+   "expected": "entitlement",
+   "pair": "P10",
+   "note": null,
+   "question": "¿Cuántas semanas de baja me tocan por nacimiento?",
+   "half": "heldout",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-P11",
+   "expected": "entitlement",
+   "pair": "P11",
+   "note": null,
+   "question": "Si me caso, ¿tengo días libres?",
+   "half": "dev",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-P12",
+   "expected": "entitlement",
+   "pair": "P12",
+   "note": null,
+   "question": "¿Me tienen que dar un certificado de empresa cuando me voy?",
+   "half": "heldout",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-P13",
+   "expected": "entitlement",
+   "pair": "P13",
+   "note": null,
+   "question": "¿Hasta cuándo tengo que preavisar si me voy?",
+   "half": "dev",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-U01",
+   "expected": "entitlement",
+   "pair": null,
+   "note": null,
+   "question": "¿Me tienen que dar el día libre si me mudo?",
+   "half": "heldout",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-U02",
+   "expected": "entitlement",
+   "pair": null,
+   "note": null,
+   "question": "¿La empresa está obligada a pagarme los días de baja?",
+   "half": "dev",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-U03",
+   "expected": "entitlement",
+   "pair": null,
+   "note": null,
+   "question": "¿Cuántos días puedo coger por enfermedad de un familiar?",
+   "half": "heldout",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-U04",
+   "expected": "entitlement",
+   "pair": null,
+   "note": null,
+   "question": "¿Me quitan dinero si falto un día?",
+   "half": "dev",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-U05",
+   "expected": "entitlement",
+   "pair": null,
+   "note": null,
+   "question": "¿Puedo cogerme los días de asuntos propios cuando quiera?",
+   "half": "heldout",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-U06",
+   "expected": "entitlement",
+   "pair": null,
+   "note": null,
+   "question": "¿Tengo que trabajar el festivo?",
+   "half": "dev",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-U07",
+   "expected": "entitlement",
+   "pair": null,
+   "note": null,
+   "question": "¿Me toca descanso después de una jornada larga?",
+   "half": "heldout",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-U08",
+   "expected": "entitlement",
+   "pair": null,
+   "note": null,
+   "question": "¿Cuántas horas puedo hacer seguidas?",
+   "half": "dev",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-U09",
+   "expected": "entitlement",
+   "pair": null,
+   "note": null,
+   "question": "¿Me pueden obligar a hacer horas extra?",
+   "half": "heldout",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-U10",
+   "expected": "entitlement",
+   "pair": null,
+   "note": null,
+   "question": "¿Me deben pagar el día de mi cumpleaños libre?",
+   "half": "dev",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-U11",
+   "expected": "entitlement",
+   "pair": null,
+   "note": null,
+   "question": "¿Cuántos días de permiso me dan por fallecimiento de un familiar?",
+   "half": "heldout",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-U12",
+   "expected": "entitlement",
+   "pair": null,
+   "note": null,
+   "question": "¿A cuántos días de vacaciones tengo derecho?",
+   "half": "dev",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-U13",
+   "expected": "entitlement",
+   "pair": null,
+   "note": null,
+   "question": "¿Puedo exigir que me cambien el turno?",
+   "half": "heldout",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-U14",
+   "expected": "entitlement",
+   "pair": null,
+   "note": null,
+   "question": "¿Tengo derecho a un descanso para el bocadillo?",
+   "half": "dev",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-U15",
+   "expected": "entitlement",
+   "pair": null,
+   "note": "pay_gated_end_to_end",
+   "question": "¿Me corresponde el plus de nocturnidad?",
+   "half": "heldout",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-U16",
+   "expected": "entitlement",
+   "pair": null,
+   "note": "pay_gated_end_to_end",
+   "question": "¿Cuándo me pagan la paga extra?",
+   "half": "dev",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-U17",
+   "expected": "entitlement",
+   "pair": null,
+   "note": "sensitive_gated_end_to_end",
+   "question": "¿Me dan algo si me despiden?",
+   "half": "heldout",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-U18",
+   "expected": "entitlement",
+   "pair": null,
+   "note": null,
+   "question": "¿Cuántos meses de prueba me pueden poner?",
+   "half": "dev",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-U19",
+   "expected": "entitlement",
+   "pair": null,
+   "note": null,
+   "question": "¿Tienen que avisarme con tiempo si cambian mi horario?",
+   "half": "heldout",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-U20",
+   "expected": "entitlement",
+   "pair": null,
+   "note": null,
+   "question": "¿Puedo pedir la baja voluntaria y cobrar el paro?",
+   "half": "dev",
+   "class": "entitlement"
+  },
+  {
+   "id": "ENT-U21",
+   "expected": "entitlement",
+   "pair": null,
+   "note": "pay_gated_end_to_end",
+   "question": "¿Se me descuenta la nómina si voy al médico?",
+   "half": "heldout",
+   "class": "entitlement"
+  },
+  {
+   "id": "EXP-P01",
+   "expected": "explanatory",
+   "pair": "P1",
+   "note": null,
+   "question": "¿Qué es una excedencia?",
+   "half": "dev",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-P02",
+   "expected": "explanatory",
+   "pair": "P2",
+   "note": null,
+   "question": "¿Qué es el preaviso?",
+   "half": "heldout",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-P03",
+   "expected": "explanatory",
+   "pair": "P3",
+   "note": null,
+   "question": "¿Qué es la indemnización por fin de contrato?",
+   "half": "dev",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-P04",
+   "expected": "explanatory",
+   "pair": "P4",
+   "note": null,
+   "question": "¿Qué es la incapacidad temporal?",
+   "half": "heldout",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-P05",
+   "expected": "explanatory",
+   "pair": "P5",
+   "note": null,
+   "question": "¿Qué es un ERTE?",
+   "half": "dev",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-P06",
+   "expected": "explanatory",
+   "pair": "P6",
+   "note": null,
+   "question": "¿Qué son las horas extraordinarias?",
+   "half": "heldout",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-P07",
+   "expected": "explanatory",
+   "pair": "P7",
+   "note": null,
+   "question": "¿Qué es la reducción de jornada?",
+   "half": "dev",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-P08",
+   "expected": "explanatory",
+   "pair": "P8",
+   "note": null,
+   "question": "¿Qué es un permiso retribuido?",
+   "half": "heldout",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-P09",
+   "expected": "explanatory",
+   "pair": "P9",
+   "note": null,
+   "question": "¿Qué son las vacaciones devengadas?",
+   "half": "dev",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-P10",
+   "expected": "explanatory",
+   "pair": "P10",
+   "note": null,
+   "question": "¿Qué es el permiso por nacimiento y cuidado del menor?",
+   "half": "heldout",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-P11",
+   "expected": "explanatory",
+   "pair": "P11",
+   "note": null,
+   "question": "¿Qué es un permiso por matrimonio?",
+   "half": "dev",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-P12",
+   "expected": "explanatory",
+   "pair": "P12",
+   "note": null,
+   "question": "¿Qué es un certificado de empresa?",
+   "half": "heldout",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-P13",
+   "expected": "explanatory",
+   "pair": "P13",
+   "note": null,
+   "question": "¿Qué significa preavisar la baja voluntaria?",
+   "half": "dev",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-X01",
+   "expected": "explanatory",
+   "pair": null,
+   "note": null,
+   "question": "¿Qué es la Seguridad Social?",
+   "half": "heldout",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-X02",
+   "expected": "explanatory",
+   "pair": null,
+   "note": null,
+   "question": "¿Qué es un contrato indefinido?",
+   "half": "dev",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-X03",
+   "expected": "explanatory",
+   "pair": null,
+   "note": null,
+   "question": "¿Qué significa IT?",
+   "half": "heldout",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-X04",
+   "expected": "explanatory",
+   "pair": null,
+   "note": null,
+   "question": "¿Qué es un contrato fijo discontinuo?",
+   "half": "dev",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-X05",
+   "expected": "explanatory",
+   "pair": null,
+   "note": null,
+   "question": "¿Qué es la vida laboral?",
+   "half": "heldout",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-X06",
+   "expected": "explanatory",
+   "pair": null,
+   "note": null,
+   "question": "¿Qué es una mutua?",
+   "half": "dev",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-X07",
+   "expected": "explanatory",
+   "pair": null,
+   "note": null,
+   "question": "¿Cómo funciona el periodo de prueba?",
+   "half": "heldout",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-X08",
+   "expected": "explanatory",
+   "pair": null,
+   "note": null,
+   "question": "¿Para qué sirve el registro de jornada?",
+   "half": "dev",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-X09",
+   "expected": "explanatory",
+   "pair": null,
+   "note": null,
+   "question": "¿Qué diferencia hay entre jornada partida y continua?",
+   "half": "heldout",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-X10",
+   "expected": "explanatory",
+   "pair": null,
+   "note": null,
+   "question": "¿Qué es el comité de empresa?",
+   "half": "dev",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-X11",
+   "expected": "explanatory",
+   "pair": null,
+   "note": null,
+   "question": "¿Qué quiere decir subrogación?",
+   "half": "heldout",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-X12",
+   "expected": "explanatory",
+   "pair": null,
+   "note": null,
+   "question": "¿Qué es el convenio colectivo?",
+   "half": "dev",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-X13",
+   "expected": "explanatory",
+   "pair": null,
+   "note": null,
+   "question": "¿Qué es un permiso no retribuido?",
+   "half": "heldout",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-X14",
+   "expected": "explanatory",
+   "pair": null,
+   "note": "procedural_expect_refused_by_v2_ticketed",
+   "question": "¿Cómo se pide una excedencia?",
+   "half": "dev",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-X15",
+   "expected": "explanatory",
+   "pair": null,
+   "note": "first_person_expect_refused_by_v2",
+   "question": "¿Qué pasa con mi contrato durante una excedencia?",
+   "half": "heldout",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-X16",
+   "expected": "explanatory",
+   "pair": null,
+   "note": null,
+   "question": "¿Qué es el parte de baja?",
+   "half": "dev",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-X17",
+   "expected": "explanatory",
+   "pair": null,
+   "note": null,
+   "question": "¿Por qué hay días naturales y laborables?",
+   "half": "heldout",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-X18",
+   "expected": "explanatory",
+   "pair": null,
+   "note": null,
+   "question": "¿Qué es la ultraactividad?",
+   "half": "dev",
+   "class": "explanatory"
+  },
+  {
+   "id": "EXP-X19",
+   "expected": "explanatory",
+   "pair": null,
+   "note": "borderline_expect_refused_by_v2",
+   "question": "¿Quién paga la baja por enfermedad común?",
+   "half": "heldout",
+   "class": "explanatory"
+  },
+  {
+   "id": "ADV-01",
+   "expected": "entitlement",
+   "pair": null,
+   "note": "what_is_what_corresponds",
+   "question": "¿Qué es lo que me corresponde si me voy?",
+   "half": "dev",
+   "class": "adversarial",
+   "gate_role": "visible_at_tuning"
+  },
+  {
+   "id": "ADV-02",
+   "expected": "entitlement",
+   "pair": null,
+   "note": "que_me_toca",
+   "question": "¿Qué me toca si me despiden?",
+   "half": "heldout",
+   "class": "adversarial",
+   "gate_role": "visible_at_tuning"
+  },
+  {
+   "id": "ADV-03",
+   "expected": "entitlement",
+   "pair": null,
+   "note": "what_is_what_they_owe",
+   "question": "¿Qué es lo que me deben pagar al irme?",
+   "half": "dev",
+   "class": "adversarial",
+   "gate_role": "visible_at_tuning"
+  },
+  {
+   "id": "ADV-04",
+   "expected": "entitlement",
+   "pair": null,
+   "note": "possessive_calculation",
+   "question": "¿Cómo funciona el cálculo de mis días de vacaciones?",
+   "half": "heldout",
+   "class": "adversarial",
+   "gate_role": "visible_at_tuning"
+  },
+  {
+   "id": "ADV-05",
+   "expected": "entitlement",
+   "pair": null,
+   "note": "generic_second_person_toca",
+   "question": "¿Qué es lo que te toca de vacaciones por ley?",
+   "half": "dev",
+   "class": "adversarial",
+   "gate_role": "contaminated_drove_obligation_rule"
+  },
+  {
+   "id": "ADV-06",
+   "expected": "entitlement",
+   "pair": null,
+   "note": "definition_plus_duration",
+   "question": "¿Qué significa tener derecho a excedencia y cuánto dura?",
+   "half": "heldout",
+   "class": "adversarial",
+   "gate_role": "visible_at_tuning"
+  },
+  {
+   "id": "ADV-07",
+   "expected": "entitlement",
+   "pair": null,
+   "note": "purpose_wrapper_first_person",
+   "question": "¿Para qué sirve pedir la baja voluntaria si quiero cobrar el paro?",
+   "half": "dev",
+   "class": "adversarial",
+   "gate_role": "visible_at_tuning"
+  },
+  {
+   "id": "ADV-08",
+   "expected": "entitlement",
+   "pair": null,
+   "note": "what_is_what_company_owes",
+   "question": "¿Qué es lo que debe pagar la empresa si caigo de baja?",
+   "half": "heldout",
+   "class": "adversarial",
+   "gate_role": "contaminated_drove_obligation_rule"
+  },
+  {
+   "id": "ADV-09",
+   "expected": "entitlement",
+   "pair": null,
+   "note": "first_person_wrapper",
+   "question": "¿Qué es el periodo de prueba en mi contrato?",
+   "half": "dev",
+   "class": "adversarial",
+   "gate_role": "clean_heldout"
+  },
+  {
+   "id": "ADV-10",
+   "expected": "entitlement",
+   "pair": null,
+   "note": "compound_explanatory_plus_entitlement",
+   "question": "¿Qué son las horas extra y cuántas me pueden pedir?",
+   "half": "heldout",
+   "class": "adversarial",
+   "gate_role": "clean_heldout"
+  }
+ ]
+}

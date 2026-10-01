@@ -34,6 +34,8 @@ class GuardrailConfig extends Model
         // threshold columns above: an admin can only turn the lane OFF, never
         // force it on when the env baseline itself is off).
         'general_lane_enabled',
+        // Slice 13c (plan.md §2.6): RESTRICT-only toggle for model knowledge as a lane source (same null-means-baseline contract).
+        'general_lane_model_knowledge_enabled',
         'updated_by',
     ];
 
@@ -43,6 +45,7 @@ class GuardrailConfig extends Model
         'router_confidence_floor' => 'float',
         'convert_allowed_reasons' => 'array',
         'general_lane_enabled' => 'boolean',
+        'general_lane_model_knowledge_enabled' => 'boolean',
     ];
 
     /**

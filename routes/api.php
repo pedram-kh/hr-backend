@@ -276,6 +276,10 @@ Route::middleware(['auth:sanctum', 'admin', 'active'])->prefix('admin')->group(f
         Route::post('/guardrails', [GuardrailsController::class, 'store']);
         Route::post('/guardrails/blocked-topics', [GuardrailsController::class, 'addBlockedTopic']);
         Route::delete('/guardrails/blocked-topics/{id}', [GuardrailsController::class, 'disableBlockedTopic']);
+        // Slice 13c (plan.md §6) — the lane's official-page catalogue (host allowlist enforced server-side; soft-disable only).
+        Route::post('/guardrails/catalogue', [GuardrailsController::class, 'addCataloguePage']);
+        Route::patch('/guardrails/catalogue/{id}', [GuardrailsController::class, 'updateCataloguePage']);
+        Route::delete('/guardrails/catalogue/{id}', [GuardrailsController::class, 'disableCataloguePage']);
     });
 
     /*

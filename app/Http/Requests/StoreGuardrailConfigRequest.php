@@ -46,6 +46,8 @@ class StoreGuardrailConfigRequest extends FormRequest
             // baseline"; the AND-combination (restrict-only) lives in
             // `GuardrailPolicy::generalLaneEnabled()`, not here.
             'general_lane_enabled' => ['sometimes', 'nullable', 'boolean'],
+            // Slice 13c (plan.md §2.6) — same restrict-only contract.
+            'general_lane_model_knowledge_enabled' => ['sometimes', 'nullable', 'boolean'],
         ];
     }
 }

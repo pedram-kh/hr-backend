@@ -1,0 +1,172 @@
+{
+    "outcome": "answer",
+    "escalated": false,
+    "escalation_reason": null,
+    "answer": "La vida laboral es un documento de la Seguridad Social que recoge los periodos en los que una persona ha estado dada de alta. Puedes pedirla por internet. Para saber qué refleja en tu caso, consulta tu convenio o pregunta a Recursos Humanos.\n\nInformación general — no procede de tu convenio ni de la normativa cargada.",
+    "citations": [],
+    "categories": [],
+    "authority_used": [
+        "general_knowledge"
+    ],
+    "trace": {
+        "profile": {
+            "employee_uuid": "810d6ef9-4b48-443b-8755-576465ccf4e1",
+            "convenio_id": "#convenio_id",
+            "convenio_numero": "31TEST-13c-27",
+            "territory_id": "#territory_id",
+            "job_category_id": null
+        },
+        "scope_filters": {
+            "convenio_id": "#convenio_id",
+            "include_national_law": true,
+            "retrieval_status": [
+                "active"
+            ],
+            "as_of_date": "2026-09-30"
+        },
+        "router_decision": null,
+        "guardrail_check": {
+            "fired": false,
+            "reason": null,
+            "rule": null
+        },
+        "agent": {
+            "planner": {
+                "model": null,
+                "prompt_version": null,
+                "tool_choice": "any",
+                "thinking": false
+            },
+            "budget": {
+                "max_rounds": 4,
+                "max_tool_calls": 6,
+                "asks_used_before_turn": 0
+            },
+            "window": {
+                "message_ids": []
+            },
+            "steps": [
+                {
+                    "i": 0,
+                    "type": "planner_round",
+                    "round": 1,
+                    "calls": [
+                        {
+                            "id": "t-convenio_search",
+                            "tool": "convenio_search",
+                            "input": []
+                        }
+                    ],
+                    "stop_reason": "tool_use",
+                    "tokens": [],
+                    "request_id": null,
+                    "model": null,
+                    "prompt_version": null
+                },
+                {
+                    "i": 1,
+                    "type": "normalization",
+                    "verdict": "absent",
+                    "topic": null,
+                    "confidence": null,
+                    "rejected_by": null
+                },
+                {
+                    "i": 2,
+                    "type": "tool_call",
+                    "call_id": "t-convenio_search",
+                    "tool": "convenio_search",
+                    "status": "no_material",
+                    "planner_summary": {
+                        "status": "check_a_failed"
+                    }
+                },
+                {
+                    "i": 3,
+                    "type": "planner_round",
+                    "round": 2,
+                    "calls": [
+                        {
+                            "id": "t-general_knowledge",
+                            "tool": "general_knowledge",
+                            "input": []
+                        }
+                    ],
+                    "stop_reason": "tool_use",
+                    "tokens": [],
+                    "request_id": null,
+                    "model": null,
+                    "prompt_version": null
+                },
+                {
+                    "i": 4,
+                    "type": "rule_verdict",
+                    "rule": "general_lane_finish",
+                    "verdict": "force_finish"
+                }
+            ],
+            "termination": "forced_finish",
+            "planner_escalation": null,
+            "normalization": {
+                "requested": true,
+                "literal": "¿Qué es la vida laboral?",
+                "proposed": null,
+                "verdict": "absent",
+                "rejections": [],
+                "used": null,
+                "topic_dropped": false,
+                "consumers": [],
+                "round1a": null,
+                "validator_version": "nd-1",
+                "planner_prompt_version": null
+            }
+        },
+        "floor_decision": {
+            "path": "general_knowledge",
+            "outcome": "answer",
+            "authority_used": [
+                "general_knowledge"
+            ]
+        },
+        "general_lane": {
+            "basis": "web",
+            "question_scrubbed": "¿Qué es la vida laboral?",
+            "scrub": {
+                "kinds": [],
+                "count": 0
+            },
+            "sources": [
+                {
+                    "kind": "web",
+                    "id": "seg-social-vida-laboral",
+                    "title": "Seguridad Social — Vida laboral",
+                    "url": "https://www.seg-social.es/wps/portal/vida-laboral"
+                }
+            ],
+            "fetches": [
+                {
+                    "url": "https://www.seg-social.es/wps/portal/vida-laboral",
+                    "status": 200,
+                    "error": null
+                }
+            ],
+            "web_attempted": true,
+            "fetch_errors": [],
+            "prompt_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "word_count": 43,
+            "draft": {
+                "model": "claude-sonnet-5",
+                "general_knowledge_ms": 900,
+                "prompt_tokens": 400,
+                "completion_tokens": 150,
+                "cost_usd": 0.0034
+            },
+            "grounding": {
+                "checked": true,
+                "grounded": true
+            }
+        },
+        "engine": "agent"
+    },
+    "escalation_card_facts": null
+}

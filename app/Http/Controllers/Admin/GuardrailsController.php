@@ -6,9 +6,11 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreGuardrailConfigRequest;
 use App\Models\Admin;
 use App\Models\GuardrailBlockedTopic;
+use App\Models\GuardrailCataloguePage;
 use App\Models\GuardrailConfig;
 use App\Models\GuardrailConfigEvent;
 use App\Services\ChatService;
+use App\Services\GeneralLaneCatalogue;
 use App\Services\GuardrailConfigService;
 use App\Services\GuardrailPolicy;
 use Illuminate\Http\JsonResponse;
@@ -72,6 +74,17 @@ class GuardrailsController extends Controller
                 'admin' => $config->general_lane_enabled,
                 'env_baseline' => (bool) config('hr.general_lane.enabled', false),
                 'effective' => $this->policy->generalLaneEnabled(),
+            ],
+            // Slice 13c (plan.md §2.6) — same restrict-only shape for "model knowledge as a lane source".
+            'general_lane_model_knowledge' => [
+                'admin' => $config->general_lane_model_knowledge_enabled,
+                'env_baseline' => (bool) config('hr.general_lane.model_knowledge', false),
+                'effective' => $this->policy->generalLaneModelKnowledgeEnabled(),
+            ],
+            // Slice 13c (plan.md §6) — the lane's official-page catalogue (data) + the fixed host allowlist (config).
+            'general_lane_catalogue' => [
+                'allowed_domains' => GeneralLaneCatalogue::domains(),
+                'pages' => GuardrailCataloguePage::query()->orderBy('id')->get()->map(fn (GuardrailCataloguePage $p) => $this->cataloguePageView($p))->all(),
             ],
             'blocked_topics' => GuardrailBlockedTopic::query()
                 ->orderByDesc('id')
@@ -170,6 +183,75 @@ class GuardrailsController extends Controller
         $this->service->disableBlockedTopic($row, $actor);
 
         return $this->index($request);
+    }
+
+    /** Add an official page to the lane catalogue. The host must be on the fixed allowlist (422 otherwise). */
+    public function addCataloguePage(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'title' => ['required', 'string', 'min:3', 'max:160'],
+            'url' => ['required', 'string', 'max:500'],
+            'topics' => ['required', 'array', 'min:1', 'max:20'],
+            'topics.*' => ['string', 'min:2', 'max:80'],
+        ]);
+        if (($why = GeneralLaneCatalogue::urlViolation($data['url'])) !== null) {
+            return response()->json(['code' => 'catalogue_url_rejected', 'message' => $why], 422);
+        }
+
+        /** @var Admin $actor */
+        $actor = $request->user();
+        $this->service->addCataloguePage($data, $actor);
+
+        return $this->index($request);
+    }
+
+    /** Edit title / url / topics, or enable / soft-disable, a catalogue page (never a hard delete). */
+    public function updateCataloguePage(int $id, Request $request): JsonResponse
+    {
+        $row = GuardrailCataloguePage::findOrFail($id);
+        $data = $request->validate([
+            'title' => ['sometimes', 'string', 'min:3', 'max:160'],
+            'url' => ['sometimes', 'string', 'max:500'],
+            'topics' => ['sometimes', 'array', 'min:1', 'max:20'],
+            'topics.*' => ['string', 'min:2', 'max:80'],
+            'enabled' => ['sometimes', 'boolean'],
+        ]);
+        if (isset($data['url']) && ($why = GeneralLaneCatalogue::urlViolation($data['url'])) !== null) {
+            return response()->json(['code' => 'catalogue_url_rejected', 'message' => $why], 422);
+        }
+
+        /** @var Admin $actor */
+        $actor = $request->user();
+        $this->service->updateCataloguePage($row, $data, $actor);
+
+        return $this->index($request);
+    }
+
+    /** DELETE = soft-disable (the row and its history stay). */
+    public function disableCataloguePage(int $id, Request $request): JsonResponse
+    {
+        $row = GuardrailCataloguePage::findOrFail($id);
+
+        /** @var Admin $actor */
+        $actor = $request->user();
+        $this->service->disableCataloguePage($row, $actor);
+
+        return $this->index($request);
+    }
+
+    /** @return array<string,mixed> */
+    private function cataloguePageView(GuardrailCataloguePage $p): array
+    {
+        return [
+            'id' => $p->id,
+            'slug' => $p->slug,
+            'title' => $p->title,
+            'url' => $p->url,
+            'topics' => $p->topics ?? [],
+            'enabled' => $p->enabled,
+            'baseline' => $p->baseline,
+            'updated_at' => $p->updated_at?->toIso8601String(),
+        ];
     }
 
     /**

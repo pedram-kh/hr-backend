@@ -90,6 +90,7 @@ class EscalationExplainerTest extends TestCase
             'general_lane_blocked.question_prescreen' => ['general_lane_blocked', ['agent' => ['general_lane_blocked' => ['sub' => 'question_prescreen']]], 'question_prescreen'],
             'general_lane_blocked.figure' => ['general_lane_blocked', ['agent' => ['general_lane_blocked' => ['sub' => 'figure']]], 'figure'],
             'general_lane_blocked.entitlement_language' => ['general_lane_blocked', ['agent' => ['general_lane_blocked' => ['sub' => 'entitlement_language']]], 'entitlement_language'],
+            'general_lane_blocked.shape' => ['general_lane_blocked', ['agent' => ['general_lane_blocked' => ['sub' => 'shape']]], 'shape'],
             'general_lane_blocked.ungrounded' => ['general_lane_blocked', ['agent' => ['general_lane_blocked' => ['sub' => 'ungrounded']]], 'ungrounded'],
             'profile_incomplete.professional_group' => ['profile_incomplete', ['profile' => ['employee_uuid' => 'emp-uuid-13'], 'agent' => ['profile_incomplete' => ['field' => 'professional_group']]], 'professional_group'],
             'profile_incomplete.job_category' => ['profile_incomplete', ['profile' => ['employee_uuid' => 'emp-uuid-13'], 'agent' => ['profile_incomplete' => ['field' => 'job_category']]], 'job_category'],

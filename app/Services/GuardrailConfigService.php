@@ -4,9 +4,11 @@ namespace App\Services;
 
 use App\Models\Admin;
 use App\Models\GuardrailBlockedTopic;
+use App\Models\GuardrailCataloguePage;
 use App\Models\GuardrailConfig;
 use App\Models\GuardrailConfigEvent;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 /**
  * The Sprint-6 guardrail-config WRITE surface (ADR-0019). hr-backend owns all
@@ -121,7 +123,7 @@ class GuardrailConfigService
         return DB::transaction(function () use ($data, $actor) {
             $config = GuardrailConfig::current();
 
-            $fields = ['retrieval_score_floor', 'answer_confidence_floor', 'router_confidence_floor', 'off_domain_message', 'tone_constraints', 'convert_allowed_reasons', 'general_lane_enabled'];
+            $fields = ['retrieval_score_floor', 'answer_confidence_floor', 'router_confidence_floor', 'off_domain_message', 'tone_constraints', 'convert_allowed_reasons', 'general_lane_enabled', 'general_lane_model_knowledge_enabled'];
             foreach ($fields as $field) {
                 if (! array_key_exists($field, $data)) {
                     continue;
@@ -171,6 +173,87 @@ class GuardrailConfigService
 
             return $row->fresh();
         });
+    }
+
+    /**
+     * Slice 13c (plan.md §6) — add an official page to the lane catalogue + audit + flush. The caller has already run
+     * {@see GeneralLaneCatalogue::urlViolation()} (422 on a non-allowlisted host); this re-checks so no caller can skip it.
+     *
+     * @param  array{title:string,url:string,topics:list<mixed>}  $data
+     */
+    public function addCataloguePage(array $data, Admin $actor): GuardrailCataloguePage
+    {
+        if (($why = GeneralLaneCatalogue::urlViolation($data['url'])) !== null) {
+            throw new \InvalidArgumentException($why);
+        }
+
+        return DB::transaction(function () use ($data, $actor) {
+            $slug = $this->uniqueCatalogueSlug($data['title']);
+            $row = GuardrailCataloguePage::create([
+                'slug' => $slug,
+                'title' => trim($data['title']),
+                'url' => trim($data['url']),
+                'topics' => GeneralLaneCatalogue::cleanTopics($data['topics']),
+                'enabled' => true,
+                'baseline' => false,
+                'created_by' => $actor->id,
+                'updated_by' => $actor->id,
+            ]);
+            $this->audit('catalogue_page_added', null, $slug.': '.$row->url, $actor, null);
+            GuardrailPolicy::flush();
+
+            return $row;
+        });
+    }
+
+    /**
+     * Edit title / url / topics / enabled of a catalogue page; each real change is audited (old → new).
+     *
+     * @param  array<string,mixed>  $data
+     */
+    public function updateCataloguePage(GuardrailCataloguePage $row, array $data, Admin $actor): GuardrailCataloguePage
+    {
+        if (array_key_exists('url', $data) && ($why = GeneralLaneCatalogue::urlViolation((string) $data['url'])) !== null) {
+            throw new \InvalidArgumentException($why);
+        }
+
+        return DB::transaction(function () use ($row, $data, $actor) {
+            foreach (['title', 'url', 'topics', 'enabled'] as $field) {
+                if (! array_key_exists($field, $data)) {
+                    continue;
+                }
+                $new = $field === 'topics' ? GeneralLaneCatalogue::cleanTopics((array) $data[$field]) : ($field === 'enabled' ? (bool) $data[$field] : trim((string) $data[$field]));
+                $old = $row->{$field};
+                if ($this->normalizeForCompare($old) === $this->normalizeForCompare($new)) {
+                    continue;
+                }
+                $row->{$field} = $new;
+                $this->audit('catalogue_page_'.($field === 'enabled' ? ($new ? 'enabled' : 'disabled') : 'edited'), $field === 'enabled' ? null : $this->stringify($old), $this->stringify($new), $actor, $row->slug.($field === 'enabled' ? '' : ' · '.$field));
+            }
+            $row->updated_by = $actor->id;
+            $row->save();
+            GuardrailPolicy::flush();
+
+            return $row->fresh();
+        });
+    }
+
+    /** Soft-disable (never a hard delete) + audit + flush. */
+    public function disableCataloguePage(GuardrailCataloguePage $row, Admin $actor): GuardrailCataloguePage
+    {
+        return $this->updateCataloguePage($row, ['enabled' => false], $actor);
+    }
+
+    private function uniqueCatalogueSlug(string $title): string
+    {
+        $base = Str::slug($title) ?: 'pagina';
+        $slug = $base;
+        $i = 2;
+        while (GuardrailCataloguePage::query()->where('slug', $slug)->exists()) {
+            $slug = $base.'-'.$i++;
+        }
+
+        return $slug;
     }
 
     private function audit(string $field, mixed $old, mixed $new, Admin $actor, ?string $note): void

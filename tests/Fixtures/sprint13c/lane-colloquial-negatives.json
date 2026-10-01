@@ -1,0 +1,203 @@
+{
+ "_description": "Slice 13c plan.md App. C. 18 colloquial, second-person entitlement questions (13b style: no `cuanto`, no anchor word). Every one clears the pre-corpus gates (verified offline) so it would reach the corpus end to end; 17/18 are missed by the v1 pre-screen. Forced-lane negatives and pre-screen adversarial half.",
+ "cases": [
+  {
+   "id": "NEG-01",
+   "class": "lane_negative_colloquial",
+   "email": "test-gipuzkoa@example.com",
+   "question": "¿Me dan un día libre si me mudo de casa?",
+   "expect": {
+    "forbid_paths": [
+     "general_knowledge"
+    ]
+   }
+  },
+  {
+   "id": "NEG-02",
+   "class": "lane_negative_colloquial",
+   "email": "test-gipuzkoa@example.com",
+   "question": "Si me caso, ¿me tocan días de vacaciones extra?",
+   "expect": {
+    "forbid_paths": [
+     "general_knowledge"
+    ]
+   }
+  },
+  {
+   "id": "NEG-03",
+   "class": "lane_negative_colloquial",
+   "email": "test-gipuzkoa@example.com",
+   "question": "¿La empresa me tiene que pagar los días que esté de baja?",
+   "expect": {
+    "forbid_paths": [
+     "general_knowledge"
+    ]
+   }
+  },
+  {
+   "id": "NEG-04",
+   "class": "lane_negative_colloquial",
+   "email": "test-gipuzkoa@example.com",
+   "question": "¿Me descuentan dinero si falto un día al trabajo?",
+   "expect": {
+    "forbid_paths": [
+     "general_knowledge"
+    ]
+   }
+  },
+  {
+   "id": "NEG-05",
+   "class": "lane_negative_colloquial",
+   "email": "test-gipuzkoa@example.com",
+   "question": "¿Puedo cogerme los asuntos propios cuando me dé la gana?",
+   "expect": {
+    "forbid_paths": [
+     "general_knowledge"
+    ]
+   }
+  },
+  {
+   "id": "NEG-06",
+   "class": "lane_negative_colloquial",
+   "email": "test-gipuzkoa@example.com",
+   "question": "¿Me obligan a currar el día de un festivo?",
+   "expect": {
+    "forbid_paths": [
+     "general_knowledge"
+    ]
+   }
+  },
+  {
+   "id": "NEG-07",
+   "class": "lane_negative_colloquial",
+   "email": "test-gipuzkoa@example.com",
+   "question": "¿Me toca descanso si hago una jornada muy larga?",
+   "expect": {
+    "forbid_paths": [
+     "general_knowledge"
+    ]
+   }
+  },
+  {
+   "id": "NEG-08",
+   "class": "lane_negative_colloquial",
+   "email": "test-gipuzkoa@example.com",
+   "question": "¿Me pueden mandar a hacer horas extra sin avisar?",
+   "expect": {
+    "forbid_paths": [
+     "general_knowledge"
+    ]
+   }
+  },
+  {
+   "id": "NEG-09",
+   "class": "lane_negative_colloquial",
+   "email": "test-gipuzkoa@example.com",
+   "question": "¿Si me echan me dan algo?",
+   "expect": {
+    "forbid_paths": [
+     "general_knowledge"
+    ]
+   }
+  },
+  {
+   "id": "NEG-10",
+   "class": "lane_negative_colloquial",
+   "email": "test-gipuzkoa@example.com",
+   "question": "¿Tengo que avisar con tiempo si quiero dejar el trabajo?",
+   "expect": {
+    "forbid_paths": [
+     "general_knowledge"
+    ]
+   }
+  },
+  {
+   "id": "NEG-11",
+   "class": "lane_negative_colloquial",
+   "email": "test-gipuzkoa@example.com",
+   "question": "¿Me dejan irme antes si tengo médico?",
+   "expect": {
+    "forbid_paths": [
+     "general_knowledge"
+    ]
+   }
+  },
+  {
+   "id": "NEG-12",
+   "class": "lane_negative_colloquial",
+   "email": "test-gipuzkoa@example.com",
+   "question": "¿Me lo tienen que pagar si me cambian el turno a última hora?",
+   "expect": {
+    "forbid_paths": [
+     "general_knowledge"
+    ]
+   }
+  },
+  {
+   "id": "NEG-13",
+   "class": "lane_negative_colloquial",
+   "email": "test-gipuzkoa@example.com",
+   "question": "¿Mi empresa está obligada a darme un día por el cumple de mi hijo?",
+   "expect": {
+    "forbid_paths": [
+     "general_knowledge"
+    ]
+   }
+  },
+  {
+   "id": "NEG-14",
+   "class": "lane_negative_colloquial",
+   "email": "test-gipuzkoa@example.com",
+   "question": "¿Me tocan días por la muerte de mi abuelo?",
+   "expect": {
+    "forbid_paths": [
+     "general_knowledge"
+    ]
+   }
+  },
+  {
+   "id": "NEG-15",
+   "class": "lane_negative_colloquial",
+   "email": "test-gipuzkoa@example.com",
+   "question": "¿Puedo pedir un año sin trabajar y luego volver?",
+   "expect": {
+    "forbid_paths": [
+     "general_knowledge"
+    ]
+   }
+  },
+  {
+   "id": "NEG-16",
+   "class": "lane_negative_colloquial",
+   "email": "test-gipuzkoa@example.com",
+   "question": "¿Me guardan el puesto si me pillo una excedencia?",
+   "expect": {
+    "forbid_paths": [
+     "general_knowledge"
+    ]
+   }
+  },
+  {
+   "id": "NEG-17",
+   "class": "lane_negative_colloquial",
+   "email": "test-gipuzkoa@example.com",
+   "question": "¿Hasta qué edad me pueden hacer contratos temporales?",
+   "expect": {
+    "forbid_paths": [
+     "general_knowledge"
+    ]
+   }
+  },
+  {
+   "id": "NEG-18",
+   "class": "lane_negative_colloquial",
+   "email": "test-gipuzkoa@example.com",
+   "question": "¿Me pueden cambiar de puesto sin preguntarme?",
+   "expect": {
+    "forbid_paths": [
+     "general_knowledge"
+    ]
+   }
+  }
+ ]
+}

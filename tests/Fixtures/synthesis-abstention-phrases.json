@@ -1,0 +1,14 @@
+{
+  "_description": "Slice 13c: answers whose OPENING sentence is a synthesis abstention (phrase=true) versus answers that are not (phrase=false). Shared by hr-ai scripts/synthesis_abstention_test.py (detect_abstention_phrase) and hr-backend SynthesisAbstention (PHP). The first two are the real S3c drafts LP-14 and LP-45.",
+  "cases": [
+    {"id": "lp14", "phrase": true, "text": "No dispongo de información suficiente en las fuentes proporcionadas para definir qué es la Inspección de Trabajo. Las fuentes solo mencionan a la Inspección de Trabajo y Seguridad Social en relación con su acceso a datos de expedientes de regulación temporal de empleo [Fuente 1], pero no contienen una definición ni descripción de sus funciones u organización."},
+    {"id": "lp45", "phrase": true, "text": "Ninguna de las fuentes proporcionadas menciona el SMAC (Servicio de Mediación, Arbitraje y Conciliación). El convenio aplicable regula los procedimientos de resolución de conflictos a través del Preco II [Fuente 1]. No dispongo de información suficiente en las fuentes facilitadas para explicar qué es el SMAC específicamente."},
+    {"id": "sin-tilde", "phrase": true, "text": "  no dispongo de informacion suficiente para responder."},
+    {"id": "las-fuentes-no", "phrase": true, "text": "Las fuentes proporcionadas no contienen una definición de ese concepto."},
+    {"id": "ninguna-define", "phrase": true, "text": "Ninguna de las fuentes define qué es la mutua."},
+    {"id": "lp48-partial", "phrase": false, "text": "Los acuerdos alcanzados entre la empresa y los delegados/as de prevención se publican en los tablones de anuncios [Fuente 1]. Las fuentes disponibles no contienen una definición literal ni la composición o funciones específicas del comité, por lo que no puedo detallar esos aspectos."},
+    {"id": "real-answer", "phrase": false, "text": "Con una antigüedad en la empresa de un año, la persona trabajadora tiene derecho a que se le reconozca la posibilidad de situarse en excedencia voluntaria [Fuente 1]."},
+    {"id": "ends-with-abstention", "phrase": false, "text": "La jornada semanal es la fijada en el convenio [Fuente 1]. No dispongo de información suficiente sobre el cómputo anual."},
+    {"id": "empty", "phrase": false, "text": ""}
+  ]
+}

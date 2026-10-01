@@ -237,6 +237,11 @@ class ExtractionClient
      */
     public function synthesise(string $question, array $chunks, string $decryptedKey, array $providerConfig): array
     {
+        // Slice 13c: `report_abstention` rides in $providerConfig (so the method signature, and every test double, is
+        // unchanged) and goes out as a TOP-LEVEL body key — only when set; absent = the request is byte-identical to before.
+        $reportAbstention = (bool) ($providerConfig['report_abstention'] ?? false);
+        unset($providerConfig['report_abstention']);
+
         $response = Http::withHeaders(['X-Internal-Token' => $this->token()])
             ->timeout(120)
             ->acceptJson()
@@ -247,7 +252,7 @@ class ExtractionClient
                 // the body, never logged, never bound beyond the call stack.
                 'provider_api_key' => $decryptedKey,
                 'provider_config' => $providerConfig,
-            ]);
+            ] + ($reportAbstention ? ['report_abstention' => true] : []));
 
         if (! $response->successful()) {
             // A non-2xx is an hr-ai/transport failure (not a provider error, which
@@ -313,9 +318,12 @@ class ExtractionClient
      * @param  list<array{id:string,url:string,title:string,topics:list<string>}>  $catalogue
      * @param  list<string>  $allowedDomains
      * @param  array{provider:string,model:string,endpoint:?string}  $providerConfig
+     * @param  bool  $modelKnowledge  Slice 13c: ask hr-ai for the dedicated model-knowledge prompt when nothing is fetched.
+     *                                The key is sent ONLY when true, so the sub-flag-off request is byte-identical.
+     * @param  bool  $skipWeb  Slice 13c fallback: no catalogue fetch, model-knowledge prompt. Sent only when true.
      * @return array<string,mixed>
      */
-    public function generalKnowledge(string $questionScrubbed, array $catalogue, array $allowedDomains, string $decryptedKey, array $providerConfig): array
+    public function generalKnowledge(string $questionScrubbed, array $catalogue, array $allowedDomains, string $decryptedKey, array $providerConfig, bool $modelKnowledge = false, bool $skipWeb = false): array
     {
         $response = Http::withHeaders(['X-Internal-Token' => $this->token()])
             ->timeout(60)
@@ -326,7 +334,7 @@ class ExtractionClient
                 'catalogue' => $catalogue,
                 'provider_api_key' => $decryptedKey,
                 'provider_config' => $providerConfig,
-            ]);
+            ] + ($modelKnowledge ? ['model_knowledge' => true] : []) + ($skipWeb ? ['skip_web' => true] : []));
 
         if (! $response->successful()) {
             return ['error' => 'general_knowledge_unavailable', 'detail' => "hr-ai /general-knowledge failed ({$response->status()})"];

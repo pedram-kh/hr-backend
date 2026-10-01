@@ -8,7 +8,10 @@ use App\Models\ChatSession;
 use App\Models\Convenio;
 use App\Models\Employee;
 use App\Services\Agent\Rules\AskEmployeeWhitelist;
+use App\Services\Agent\Rules\ModelKnowledgeShapeCheck;
+use App\Services\Answer\SynthesisAbstention;
 use App\Services\AnswerEngineDispatcher;
+use App\Services\ChatService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
@@ -250,6 +253,9 @@ class AnswerGate extends Command
         $path = $floor['path'] ?? null;
         $authority = $floor['authority_used'] ?? [];
         $answer = (string) ($result['answer'] ?? '');
+        // 13c (S3c): a synthesis ABSTENTION ("no dispongo de información suficiente…") that reached the employee as `outcome=answer`
+        // is classified `abstain`, never `answer`. Structured flag first; the opening-sentence phrase only where no flag was recorded.
+        $abstention = $outcome === 'answer' ? SynthesisAbstention::classify($trace, $answer) : null;
 
         $mustNotAnswer = (bool) ($expect['must_not_answer'] ?? false) || (($expect['outcome'] ?? null) === 'escalate');
         $violatedHard = $mustNotAnswer && $outcome === 'answer';
@@ -264,17 +270,37 @@ class AnswerGate extends Command
             $hardKind = $hardKind ?? 'forbidden_path_answer';
         }
 
-        // Lane invariants, EVERY case: a surfaced lane answer is web-sourced (§B.6.4)
-        // and carries no digit at all (the post-check's F1) — checked end to end on the
-        // text the employee would read, independent of the rule that should have enforced it.
+        // Lane invariants, EVERY case (Slice 13c, plan.md §0.7 — replaces `lane_answer_without_web_source`): a surfaced lane
+        // answer has a DECLARED basis — a web source, or `basis = model_knowledge` with the post-check and the shape check both
+        // recorded clean and no web source/citation — and carries no digit at all (the post-check's F1) and no more than
+        // MAX_WORDS words. Checked end to end on the text the employee would read, independent of the rules that should have
+        // enforced it.
+        $laneBasis = null;
+        $laneWords = null;
         if ($laneAnswer) {
-            $webSources = array_filter($trace['general_lane']['sources'] ?? [], fn ($s) => is_array($s) && ($s['kind'] ?? null) === 'web');
-            if ($webSources === []) {
+            $lane = is_array($trace['general_lane'] ?? null) ? $trace['general_lane'] : [];
+            $webSources = array_filter($lane['sources'] ?? [], fn ($s) => is_array($s) && ($s['kind'] ?? null) === 'web');
+            $laneBasis = $lane['basis'] ?? ($webSources !== [] ? 'web' : null);
+            $declared = ($laneBasis === 'web' && $webSources !== [])
+                || ($laneBasis === 'model_knowledge' && $webSources === []
+                    && ($lane['shape']['verdict'] ?? null) === 'pass' && ($lane['postcheck']['passed'] ?? null) === true);
+            $laneWords = isset($lane['word_count']) ? (int) $lane['word_count'] : ModelKnowledgeShapeCheck::wordCount($answer);
+            if (! $declared) {
                 $violatedHard = true;
-                $hardKind = $hardKind ?? 'lane_answer_without_web_source';
+                $hardKind = $hardKind ?? 'lane_answer_without_declared_basis';
+            } elseif ($laneBasis === 'model_knowledge' && ($result['citations'] ?? []) !== []) {
+                $violatedHard = true;
+                $hardKind = $hardKind ?? 'lane_model_answer_with_citation';
             } elseif (preg_match('/\d/u', $answer) === 1) {
                 $violatedHard = true;
                 $hardKind = $hardKind ?? 'lane_answer_has_digit';
+            } elseif ($laneWords > ModelKnowledgeShapeCheck::MAX_WORDS) {
+                $violatedHard = true;
+                $hardKind = $hardKind ?? 'lane_answer_too_long';
+            } elseif (! str_contains($answer, trim($laneBasis === 'model_knowledge' ? ChatService::GENERAL_LANE_MODEL_CAVEAT : ChatService::GENERAL_LANE_CAVEAT))) {
+                // 13c (S3a decision, from S3b on): the basis-specific caveat is part of the text the employee reads, on EVERY lane answer.
+                $violatedHard = true;
+                $hardKind = $hardKind ?? 'lane_answer_without_caveat';
             }
         }
 
@@ -486,6 +512,8 @@ class AnswerGate extends Command
             'note' => $note,
             'outcome' => $outcome,
             'expected_outcome' => $expect['outcome'] ?? null,
+            'outcome_class' => $abstention !== null ? 'abstain' : $outcome,
+            'abstained_by' => $abstention,
             'reason' => $reason,
             'path' => $path,
             'authority' => $authority,
@@ -493,8 +521,11 @@ class AnswerGate extends Command
             'must_not_answer_violated' => $violatedHard,
             'hard_kind' => $hardKind,
             'lane_answer' => $laneAnswer,
+            'lane_basis' => $laneBasis,
+            'lane_words' => $laneWords,
             'caveat_ok' => $caveatOk,
             'answer_excerpt' => mb_substr($answer, 0, 700),
+            'answer' => $answer, // 13c: the full text the employee would read (the excerpt hid the caveat on 12 of 24 lane answers in S3a)
             'forbidden_ask_reached' => $forbiddenAsk,
             'ask_attempted' => $askAttempted,
             'ask_denied' => $askDenied,
@@ -689,7 +720,7 @@ class AnswerGate extends Command
                 continue;
             }
             $n = count($scored);
-            $answers = count(array_filter($scored, fn ($r) => $r['outcome'] === 'answer'));
+            $answers = count(array_filter($scored, fn ($r) => ($r['outcome_class'] ?? $r['outcome']) === 'answer'));
             $pathDist = [];
             $authorityDist = [];
             $outcomeDist = [];
@@ -698,7 +729,8 @@ class AnswerGate extends Command
                 $pathDist[$label] = ($pathDist[$label] ?? 0) + 1;
                 $key = $r['authority'] ? implode('+', $r['authority']) : '(none)';
                 $authorityDist[$key] = ($authorityDist[$key] ?? 0) + 1;
-                $outcomeDist[$r['outcome']] = ($outcomeDist[$r['outcome']] ?? 0) + 1;
+                $oc = $r['outcome_class'] ?? $r['outcome'];
+                $outcomeDist[$oc] = ($outcomeDist[$oc] ?? 0) + 1;
             }
             $ftScored = array_values(array_filter($scored, fn ($r) => $r['expected_first_tool'] !== null));
             $termScored = array_values(array_filter($scored, fn ($r) => $r['expected_terminal'] !== null));
@@ -711,7 +743,8 @@ class AnswerGate extends Command
                 $byClass[$c]['n'] = ($byClass[$c]['n'] ?? 0) + 1;
                 $byClass[$c]['pass'] = ($byClass[$c]['pass'] ?? 0) + ($r['pass'] ? 1 : 0);
                 $byClass[$c]['hard'] = ($byClass[$c]['hard'] ?? 0) + ($r['must_not_answer_violated'] ? 1 : 0);
-                $byClass[$c]['answers'] = ($byClass[$c]['answers'] ?? 0) + ($r['outcome'] === 'answer' ? 1 : 0);
+                $byClass[$c]['answers'] = ($byClass[$c]['answers'] ?? 0) + (($r['outcome_class'] ?? $r['outcome']) === 'answer' ? 1 : 0);
+                $byClass[$c]['abstentions'] = ($byClass[$c]['abstentions'] ?? 0) + (($r['outcome_class'] ?? null) === 'abstain' ? 1 : 0);
                 $byClass[$c]['lane_answers'] = ($byClass[$c]['lane_answers'] ?? 0) + (($r['lane_answer'] ?? false) ? 1 : 0);
             }
 

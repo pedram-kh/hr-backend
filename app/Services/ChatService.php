@@ -114,6 +114,15 @@ class ChatService
     public const GENERAL_LANE_CAVEAT = "\n\n"
         .'Información general — no procede de tu convenio ni de la normativa cargada.';
 
+    /**
+     * Slice 13c (plan.md §2.5) — the caveat for a `basis = model_knowledge` lane answer (no page was consulted). Same
+     * placement/discipline as {@see self::GENERAL_LANE_CAVEAT}. Deliberately free of digits and of the entitlement vocabulary
+     * the post-check watches (`derecho`, `corresponde`, …): a unit test scans it with `scan()` and `audit()`.
+     */
+    public const GENERAL_LANE_MODEL_CAVEAT = "\n\n"
+        .'Información general, redactada sin consultar tu convenio ni la normativa cargada y sin una fuente verificable. '
+        .'No describe lo que se te aplica a ti: consúltalo en tu convenio o con Recursos Humanos.';
+
     /** Surfaced on a vague "total días libres" aggregation (Correction-03, Fix 2). */
     public const AGGREGATION_MESSAGE = 'Para darte una cifra fiable necesito que me preguntes por un '
         .'tipo concreto de días libres (por ejemplo, las vacaciones, los días de asuntos propios o un '

@@ -140,12 +140,14 @@ final class ConvenioSearchTool implements Tool
         // planner (stashed for the finisher, exactly like the R16 miss) when
         // the lane is on and the question passes the explanatory pre-screen.
         // Lane off / prescreen hit / any other verdict → terminal as before.
-        if (CorpusMiss::laneMayTakeOver($outcome, $state->question, $this->guardrails)) {
+        // Slice 13c: with the model-knowledge sub-flag on, a synthesis ABSTENTION (status `abstained`) is handed over the same way.
+        $handOver = CorpusMiss::handOverKind($outcome, $state->question, $this->guardrails);
+        if ($handOver !== null) {
             return new ToolResult(
                 ToolResult::NO_MATERIAL,
                 terminalOutcome: $outcome,
                 traceBlocks: ['floor_decision' => $outcome->trace['floor_decision'], 'retrieval' => $outcome->trace['retrieval'] ?? []] + CorpusMiss::precondition($outcome),
-                plannerSummary: ['status' => 'entailment_failed'],
+                plannerSummary: ['status' => $handOver === CorpusMiss::SYNTHESIS_ABSTENTION ? 'abstained' : 'entailment_failed'],
             );
         }
 

@@ -10,6 +10,7 @@ use App\Services\Agent\Rules\FigureNotFromTablePostCallRule;
 use App\Services\Agent\Rules\GeneralLaneAvailabilityRule;
 use App\Services\Agent\Rules\GeneralLaneFinishRule;
 use App\Services\Agent\Rules\GeneralLanePostCheck;
+use App\Services\Agent\Rules\ModelKnowledgeShapePostCallRule;
 use App\Services\Agent\Rules\NationalLawPrecedenceRule;
 use App\Services\Agent\Rules\NormalizationValidationRule;
 use App\Services\Agent\Rules\PeriodSupportGuard;
@@ -91,6 +92,9 @@ class AgentServiceProvider extends ServiceProvider
             // answer FIRST and may discard it before the finish rule ever
             // forces anything (RuleEngine stops at the first non-allow).
             $engine->register('post_call:general_knowledge', $app->make(GeneralLanePostCheck::class));
+            // Slice 13c (plan.md §2.4): the shape check (S1 citation / S2 length / S3 pointer) sits BETWEEN the post-check and
+            // the finish rule — a draft reaches it only after the post-check passed it, and the finish rule only sees survivors.
+            $engine->register('post_call:general_knowledge', $app->make(ModelKnowledgeShapePostCallRule::class));
             $engine->register('post_call:general_knowledge', $app->make(GeneralLaneFinishRule::class));
             $engine->register('pre_call:ask_employee', $app->make(AskEmployeeWhitelist::class));
             $engine->register('post_call:ask_employee', $app->make(AskEmployeePostCallRule::class));

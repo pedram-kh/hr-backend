@@ -21,6 +21,12 @@ use App\Services\GuardrailPolicy;
  *    provider error, an unconfigured model, the aggregation guard and the
  *    `estatuto_fallback_gap` all stay terminal escalations.
  *
+ * Slice 13c (plan.md §2.2) adds a THIRD whitelist value, `synthesis_abstention`, honoured ONLY when the model-knowledge
+ * sub-flag is effectively on ({@see GuardrailPolicy::generalLaneModelKnowledgeEnabled()}): the corpus retrieved something
+ * (Check A passed) but synthesis abstained — the model's structured `abstained` flag (recorded at
+ * `floor_decision.synthesis_abstained`; true even when a related source is cited) OR the older contract form (no valid citation
+ * (Check B false) at confidence <= 0.2) — no fallback marker, not a provider error. Sub-flag off = the classifier, the hand-over and every trace byte are exactly what they were.
+ *
  * Deliberately a whitelist: anything not positively identified as one of the
  * two above returns `null`, so a figure-guard failure (Check A + B passed,
  * `figure_grounding.grounded === false`, `/ground` short-circuited) or any
@@ -34,7 +40,13 @@ final class CorpusMiss
 
     public const ENTAILMENT_ONLY = 'entailment_only';
 
-    public static function classify(TurnOutcome $outcome): ?string
+    public const SYNTHESIS_ABSTENTION = 'synthesis_abstention';
+
+    /** Synthesis rule 6 (hr-ai `SYSTEM_PROMPT`): an abstention reports confidence <= 0.2. */
+    public const ABSTENTION_MAX_CONFIDENCE = 0.2;
+
+    /** @param  bool  $allowAbstention  true only when the model-knowledge sub-flag is on (Slice 13c) */
+    public static function classify(TurnOutcome $outcome, bool $allowAbstention = false): ?string
     {
         if ($outcome->outcome !== 'escalate') {
             return null;
@@ -49,7 +61,11 @@ final class CorpusMiss
             return self::CHECK_A_MISS;
         }
 
-        return self::isEntailmentOnly($floor) ? self::ENTAILMENT_ONLY : null;
+        if (self::isEntailmentOnly($floor)) {
+            return self::ENTAILMENT_ONLY;
+        }
+
+        return $allowAbstention && self::isSynthesisAbstention($floor) ? self::SYNTHESIS_ABSTENTION : null;
     }
 
     /**
@@ -62,9 +78,26 @@ final class CorpusMiss
      */
     public static function laneMayTakeOver(TurnOutcome $outcome, string $question, GuardrailPolicy $guardrails): bool
     {
-        return self::classify($outcome) === self::ENTAILMENT_ONLY
-            && $guardrails->generalLaneEnabled()
-            && ! GeneralLanePostCheck::questionPrescreenHit($question);
+        return self::handOverKind($outcome, $question, $guardrails) !== null;
+    }
+
+    /**
+     * Slice 13c — WHICH shape is handed over (`entailment_only` | `synthesis_abstention`) or null. The question gate is the
+     * v1 pre-screen exactly as before, and the fail-closed allow-list (v2) when the sub-flag is on; the abstention shape is
+     * recognised only with the sub-flag on.
+     */
+    public static function handOverKind(TurnOutcome $outcome, string $question, GuardrailPolicy $guardrails): ?string
+    {
+        if (! $guardrails->generalLaneEnabled()) {
+            return null;
+        }
+        $modelKnowledge = $guardrails->generalLaneModelKnowledgeEnabled();
+        $kind = self::classify($outcome, $modelKnowledge);
+        if ($kind !== self::ENTAILMENT_ONLY && $kind !== self::SYNTHESIS_ABSTENTION) {
+            return null;
+        }
+
+        return GeneralLanePostCheck::questionBlocked($question, $modelKnowledge) ? null : $kind;
     }
 
     /**
@@ -77,6 +110,14 @@ final class CorpusMiss
      */
     public static function precondition(TurnOutcome $outcome): array
     {
+        if (self::classify($outcome) === null && self::classify($outcome, true) === self::SYNTHESIS_ABSTENTION) {
+            return ['general_lane_precondition' => [
+                'kind' => self::SYNTHESIS_ABSTENTION,
+                'confidence' => $outcome->trace['floor_decision']['check_c_confidence_tiebreaker']['confidence'] ?? null,
+                'authority_used' => $outcome->trace['floor_decision']['authority_used'] ?? [],
+            ]];
+        }
+
         $grounding = $outcome->trace['floor_decision']['grounding'] ?? [];
 
         return ['general_lane_precondition' => [
@@ -84,6 +125,29 @@ final class CorpusMiss
             'ungrounded_claims' => array_values($grounding['ungrounded'] ?? []),
             'authority_used' => $outcome->trace['floor_decision']['authority_used'] ?? [],
         ]];
+    }
+
+    /** @param  array<string,mixed>  $floor */
+    private static function isSynthesisAbstention(array $floor): bool
+    {
+        // The structured flag (hr-ai `/synthesise` `abstained`): an abstention even when it cites a related source (S3c LP-14/LP-45).
+        if (($floor['synthesis_abstained']['flag'] ?? false) === true) {
+            return ($floor['check_a_retrieval'] ?? null) === true
+                && ($floor['outcome'] ?? null) === 'escalate'
+                && ($floor['escalation_reason'] ?? null) === 'low_confidence'
+                && ! array_key_exists('fallback', $floor);
+        }
+
+        $confidence = $floor['check_c_confidence_tiebreaker']['confidence'] ?? null;
+
+        return ($floor['check_a_retrieval'] ?? null) === true
+            && ($floor['check_b_citations'] ?? null) === false
+            && ($floor['outcome'] ?? null) === 'escalate'
+            && ($floor['escalation_reason'] ?? null) === 'low_confidence'
+            && ! array_key_exists('fallback', $floor)
+            && ($floor['note'] ?? null) === 'no valid citations (Check B failed)'
+            && is_numeric($confidence)
+            && (float) $confidence <= self::ABSTENTION_MAX_CONFIDENCE;
     }
 
     /** @param  array<string,mixed>  $floor */

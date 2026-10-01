@@ -1,0 +1,171 @@
+{
+    "outcome": "escalate",
+    "escalated": true,
+    "escalation_reason": "low_confidence",
+    "answer": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+    "citations": [],
+    "categories": [],
+    "authority_used": [],
+    "trace": {
+        "floor_decision": {
+            "retrieval_score_floor": 0.4,
+            "answer_confidence_floor": 0.65,
+            "check_a_retrieval": true,
+            "check_b_citations": false,
+            "check_c_confidence_tiebreaker": {
+                "confidence": 0.1,
+                "below_floor": true,
+                "used_as_gate": false
+            },
+            "figure_grounding": {
+                "checked": true,
+                "figures": [],
+                "grounded": true,
+                "ungrounded": []
+            },
+            "grounding": {
+                "checked": false,
+                "reason": "short-circuited before /ground"
+            },
+            "authority_used": [],
+            "outcome": "escalate",
+            "escalation_reason": "low_confidence",
+            "note": "no valid citations (Check B failed)"
+        },
+        "retrieval": [],
+        "engine": "agent",
+        "agent": {
+            "planner": null,
+            "budget": {
+                "max_rounds": 4,
+                "max_tool_calls": 6,
+                "asks_used_before_turn": 0
+            },
+            "window": {
+                "message_ids": []
+            },
+            "steps": [
+                {
+                    "i": 0,
+                    "type": "planner_round",
+                    "round": 1,
+                    "calls": [
+                        {
+                            "id": "t-convenio_search",
+                            "tool": "convenio_search",
+                            "input": []
+                        }
+                    ],
+                    "stop_reason": "tool_use",
+                    "tokens": [],
+                    "request_id": null,
+                    "model": null,
+                    "prompt_version": null
+                },
+                {
+                    "i": 1,
+                    "type": "normalization",
+                    "verdict": "absent",
+                    "topic": null,
+                    "confidence": null,
+                    "rejected_by": null
+                },
+                {
+                    "i": 2,
+                    "type": "tool_call",
+                    "call_id": "t-convenio_search",
+                    "tool": "convenio_search",
+                    "status": "no_material",
+                    "planner_summary": {
+                        "status": "abstained"
+                    }
+                },
+                {
+                    "i": 3,
+                    "type": "planner_round",
+                    "round": 2,
+                    "calls": [
+                        {
+                            "id": "t-general_knowledge",
+                            "tool": "general_knowledge",
+                            "input": []
+                        }
+                    ],
+                    "stop_reason": "tool_use",
+                    "tokens": [],
+                    "request_id": null,
+                    "model": null,
+                    "prompt_version": null
+                },
+                {
+                    "i": 4,
+                    "type": "rule_verdict",
+                    "rule": "general_lane_availability",
+                    "verdict": "deny"
+                },
+                {
+                    "i": 5,
+                    "type": "tool_denied",
+                    "call_id": "t-general_knowledge",
+                    "tool": "general_knowledge",
+                    "reason": "general_lane_availability"
+                },
+                {
+                    "i": 6,
+                    "type": "planner_round",
+                    "round": 3,
+                    "calls": [
+                        {
+                            "id": "t-finalize",
+                            "tool": "finalize",
+                            "input": {
+                                "use": []
+                            }
+                        }
+                    ],
+                    "stop_reason": "tool_use",
+                    "tokens": [],
+                    "request_id": null,
+                    "model": null,
+                    "prompt_version": null
+                },
+                {
+                    "i": 7,
+                    "type": "finalize",
+                    "use": []
+                }
+            ],
+            "termination": "finalize",
+            "planner_escalation": null,
+            "normalization": {
+                "requested": true,
+                "literal": "¿Cuántos días de excedencia me corresponden?",
+                "proposed": null,
+                "verdict": "absent",
+                "rejections": [],
+                "used": null,
+                "topic_dropped": false,
+                "consumers": [],
+                "round1a": null,
+                "validator_version": "nd-1",
+                "planner_prompt_version": null
+            }
+        }
+    },
+    "escalation_card_facts": {
+        "reason": "low_confidence",
+        "explanation_facts": {
+            "asked": "Una pregunta de convenio/RR.HH. para la que sí había contenido relacionado disponible.",
+            "found": "El sistema no pudo respaldar ninguna parte de la respuesta con el contenido disponible (o no llegó a generar una respuesta).",
+            "reason": "low_confidence",
+            "fix_link": "#view=review&tab=tagging",
+            "fix_action": "Puede ser un fallo puntual; si se repite con la misma pregunta, avisar al equipo técnico.",
+            "fix_surface": "AI tagging (revisión)",
+            "sub_outcome": "citations_failed",
+            "employee_told": "Un/a compañero/a de Recursos Humanos revisará tu consulta y te responderá.",
+            "stopped_reason": "Una respuesta que no se puede respaldar con el contenido disponible nunca se muestra a la persona empleada."
+        },
+        "fix_action": "Puede ser un fallo puntual; si se repite con la misma pregunta, avisar al equipo técnico.",
+        "fix_surface": "AI tagging (revisión)"
+    }
+}

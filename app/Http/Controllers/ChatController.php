@@ -63,7 +63,7 @@ class ChatController extends Controller
         // employee's session-hydration endpoint uses (ConversationPresenter),
         // so "one source line, one place it's computed" holds for both.
         $sourceLabels = ConversationPresenter::sourceLabels($result['citations'] ?? []);
-        $generalLane = ['sources' => ConversationPresenter::generalLaneSources($result['trace'] ?? [])];
+        $generalLane = ConversationPresenter::generalLanePayload($result['trace'] ?? []);
         unset($result['trace']);
         $result['citations'] = [];
         $result['source_labels'] = $sourceLabels;

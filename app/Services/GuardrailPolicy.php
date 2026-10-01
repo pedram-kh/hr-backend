@@ -154,6 +154,23 @@ class GuardrailPolicy
         return $baseline && ($admin ?? true);
     }
 
+    /**
+     * Slice 13c (plan.md §2.6) — model knowledge as a lane source. effective = the lane is effectively enabled AND
+     * env baseline (`config('hr.general_lane.model_knowledge')`) AND (admin ?? true). RESTRICT-only, like
+     * {@see self::generalLaneEnabled()}: the admin value can only narrow the baseline. A stale cached snapshot (from
+     * before the column existed) reads as "no admin override".
+     */
+    public function generalLaneModelKnowledgeEnabled(): bool
+    {
+        if (! $this->generalLaneEnabled()) {
+            return false;
+        }
+        $baseline = (bool) config('hr.general_lane.model_knowledge', false);
+        $admin = $this->snapshot()['general_lane_model_knowledge_enabled'] ?? null;
+
+        return $baseline && ($admin ?? true);
+    }
+
     /** Drop the cached snapshot so the next read reflects a write. */
     public static function flush(): void
     {
@@ -180,7 +197,7 @@ class GuardrailPolicy
      *   retrieval_score_floor:?float, answer_confidence_floor:?float,
      *   router_confidence_floor:?float, off_domain_message:?string,
      *   tone_constraints:?string, convert_allowed_reasons:?list<string>,
-     *   general_lane_enabled:?bool,
+     *   general_lane_enabled:?bool, general_lane_model_knowledge_enabled?:?bool,
      *   blocked:list<array{pattern:string, kind:string}>
      * }
      */
@@ -202,6 +219,7 @@ class GuardrailPolicy
                 'tone_constraints' => $config->tone_constraints,
                 'convert_allowed_reasons' => $config->convert_allowed_reasons,
                 'general_lane_enabled' => $config->general_lane_enabled,
+                'general_lane_model_knowledge_enabled' => $config->general_lane_model_knowledge_enabled ?? null,
                 'blocked' => $blocked,
             ];
         });

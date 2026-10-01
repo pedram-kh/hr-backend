@@ -56,7 +56,10 @@ final class GeneralLaneAvailabilityRule implements Rule
         // the figure-guard but failed ONLY the per-claim entailment gate —
         // never after a figure-guard / Check-B / truncation / other verdict.
         // The lane is last by rule, never first by prompt.
-        $miss = $this->priorCorpusMiss($state);
+        // Slice 13c: with the model-knowledge sub-flag on, the question gate is the fail-closed v2 allow-list and a synthesis
+        // abstention also opens the lane. Sub-flag off: v1 pre-screen and the two Sprint-13 shapes, byte for byte.
+        $modelKnowledge = $this->guardrails->generalLaneModelKnowledgeEnabled();
+        $miss = $this->priorCorpusMiss($state, $modelKnowledge);
         if ($miss === null) {
             return Verdict::deny('intenta convenio_search (o national_law) primero', $this->id());
         }
@@ -65,14 +68,14 @@ final class GeneralLaneAvailabilityRule implements Rule
         // pre-screen; a hit there is a DENY (the corpus escalation stands), not
         // the `general_lane_blocked` force below, which is reserved for the
         // original (a) path.
-        if ($miss === CorpusMiss::ENTAILMENT_ONLY && GeneralLanePostCheck::questionPrescreenHit($state->question)) {
+        if (($miss === CorpusMiss::ENTAILMENT_ONLY || $miss === CorpusMiss::SYNTHESIS_ABSTENTION) && GeneralLanePostCheck::questionBlocked($state->question, $modelKnowledge)) {
             return Verdict::deny('la pregunta pide una cantidad o un derecho concreto; no aplica información general', $this->id());
         }
 
         // Condition 4: the question pre-screen (figures/entitlement/timing
         // phrasing) — a hit here means the employee is asking for THEIR OWN
         // concrete figure, never answerable by a general-concept lane.
-        if (GeneralLanePostCheck::questionPrescreenHit($state->question)) {
+        if (GeneralLanePostCheck::questionBlocked($state->question, $modelKnowledge)) {
             $trace = $state->trace;
             $trace['floor_decision'] = [
                 'path' => 'general_knowledge',
@@ -81,10 +84,13 @@ final class GeneralLaneAvailabilityRule implements Rule
                 'authority_used' => [],
                 'note' => 'general lane blocked by the question pre-screen',
             ];
-            $trace['general_lane']['postcheck'] = [
-                'passed' => false,
-                'hits' => [['pattern_id' => 'question_prescreen', 'matched_span' => $state->question]],
-            ];
+            $hits = [['pattern_id' => 'question_prescreen', 'matched_span' => $state->question]];
+            if ($modelKnowledge) {
+                // which v2 rule refused (prescreen_v1 | figure_concept | first_person | obligation | shape)
+                $hits[] = ['pattern_id' => 'question_gate_v2', 'matched_span' => (string) GeneralLanePostCheck::questionRefusal($state->question)];
+            }
+            $trace['general_lane']['postcheck'] = ['passed' => false, 'hits' => $hits];
+            $trace['agent']['general_lane_blocked'] = ['sub' => 'question_prescreen'];
             $outcome = new TurnOutcome('escalate', ChatService::EMPLOYEE_ESCALATION_MESSAGE, [], $trace, 'general_lane_blocked');
 
             return Verdict::forceEscalate($outcome, $this->id());
@@ -94,13 +100,13 @@ final class GeneralLaneAvailabilityRule implements Rule
     }
 
     /**
-     * `CorpusMiss::CHECK_A_MISS` | `CorpusMiss::ENTAILMENT_ONLY` | null.
+     * `CorpusMiss::CHECK_A_MISS` | `CorpusMiss::ENTAILMENT_ONLY` | (sub-flag on) `CorpusMiss::SYNTHESIS_ABSTENTION` | null.
      * A NO_MATERIAL carrying a stashed outcome is RE-classified here (the
      * tools decided once; the rule does not trust the label) — a stashed
      * outcome that is neither shape denies. A NO_MATERIAL with no stashed
      * outcome keeps its pre-amendment meaning (a Check-A miss).
      */
-    private function priorCorpusMiss(TurnState $state): ?string
+    private function priorCorpusMiss(TurnState $state, bool $allowAbstention): ?string
     {
         foreach (['convenio_search', 'national_law'] as $tool) {
             $material = $state->material[$tool] ?? null;
@@ -111,7 +117,7 @@ final class GeneralLaneAvailabilityRule implements Rule
                 return CorpusMiss::CHECK_A_MISS;
             }
 
-            $kind = CorpusMiss::classify($material->terminalOutcome);
+            $kind = CorpusMiss::classify($material->terminalOutcome, $allowAbstention);
             if ($kind !== null) {
                 return $kind;
             }

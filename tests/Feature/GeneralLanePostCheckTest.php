@@ -292,6 +292,78 @@ class GeneralLanePostCheckTest extends TestCase
         $this->assertNull(GeneralLanePostCheck::scan('Conviene revisar el convenio colectivo correspondiente y los documentos correspondientes al contrato.'));
     }
 
+    // ---- Slice 13c (S2): E2's third-person general-entitlement shape ------
+
+    /** @return array<string,array{0:string}> */
+    public static function thirdPersonEntitlementProvider(): array
+    {
+        return [
+            'es un derecho' => ['El permiso de lactancia es un derecho laboral que permite ausentarse del trabajo durante un tiempo.'],
+            'es derecho (no article)' => ['La formación continua es derecho de la plantilla según el marco general.'],
+            'tiene derecho' => ['La persona trabajadora tiene derecho a ausentarse en ciertos supuestos generales.'],
+            'tienen derecho' => ['Las personas trabajadoras tienen derecho a disfrutar de ese descanso en general.'],
+            'están obligados a' => ['Las empresas están obligadas a registrar ese dato según el marco general.'],
+            'está obligado a' => ['El empleador está obligado a comunicar el cambio según el marco general.'],
+            'uppercase' => ['ES UN DERECHO LABORAL RECONOCIDO EN EL MARCO GENERAL.'],
+            'accented está' => ['La persona contratada está obligada a comunicar la baja según el marco general.'],
+            'derecho preferente de reingreso (NEG-16)' => ['Puede variar entre mantener el mismo puesto, uno similar o solo un derecho preferente de reingreso.'],
+            'derecho preferente (no article)' => ['Conserva derecho preferente de reingreso en las vacantes que se produzcan.'],
+            'derechos preferentes plural' => ['Se mantienen derechos preferentes de reingreso durante un tiempo.'],
+            'un derecho <adjetivo>' => ['Esta situación suele reconocer un derecho condicionado a la existencia de vacantes.'],
+            'un derecho <adjetivo> accent/uppercase' => ['RECONOCE UN DERECHO LIMITADO EN ESTE SUPUESTO.'],
+        ];
+    }
+
+    #[DataProvider('thirdPersonEntitlementProvider')]
+    public function test_the_third_person_general_entitlement_shape_is_blocked_by_e2(string $text): void
+    {
+        $hit = GeneralLanePostCheck::scan($text);
+        $this->assertNotNull($hit, 'must block: '.$text);
+        $this->assertSame('E2', $hit['pattern_id']);
+    }
+
+    /** @return array<string,array{0:string}> */
+    public static function thirdPersonNeutralProvider(): array
+    {
+        return [
+            'derecho laboral as a field' => ['El derecho laboral regula las relaciones entre empresa y persona trabajadora.'],
+            'el derecho del trabajo' => ['Esta materia pertenece al derecho del trabajo y a la Seguridad Social en términos generales.'],
+            'obligatorio stays scan-clean' => ['Suele ser un trámite previo obligatorio antes de acudir a la vía judicial. Consulta tu convenio o a Recursos Humanos.'],
+            'obligación as a noun' => ['Cada parte cumple sus obligaciones recíprocas en una relación laboral.'],
+            'derechos as a noun plural' => ['Comienza a generar derechos asociados a las cotizaciones que se realizan.'],
+            'derecho laboral, no article' => ['Se estudia dentro del derecho laboral y del derecho administrativo.'],
+            'derecho del trabajo, with "el"' => ['Es una figura propia del derecho del trabajo.'],
+            'preferente without derecho' => ['Se da un trato preferente a quien haya cotizado antes.'],
+            'derecho civil' => ['Las reglas generales proceden del derecho civil y mercantil.'],
+        ];
+    }
+
+    #[DataProvider('thirdPersonNeutralProvider')]
+    public function test_neutral_uses_of_derecho_and_obligatorio_still_pass_the_post_check(string $text): void
+    {
+        $this->assertNull(GeneralLanePostCheck::scan($text), 'must pass: '.$text);
+    }
+
+    public function test_bare_obligatorio_is_neither_scanned_nor_audited_but_entitlement_shapes_are_audited(): void
+    {
+        foreach ([
+            'Suele ser un trámite previo obligatorio antes de acudir a la vía judicial.',
+            'Puede variar según tengan carácter voluntario u obligatorio el tipo de circunstancia.',
+            'Sin que exista una única fórmula obligatoria para todos los casos.',
+        ] as $text) {
+            $this->assertNull(GeneralLanePostCheck::scan($text));
+            $this->assertNotContains('entitlement_word', GeneralLanePostCheck::audit($text), $text);
+        }
+        foreach ([
+            'Es obligatorio que se comunique por escrito.',
+            'Resulta obligatorio que la empresa lo registre.',
+            'Las empresas están obligadas a registrar ese dato.',
+            'La persona contratada está obligada a comunicar el cambio.',
+        ] as $text) {
+            $this->assertContains('entitlement_word', GeneralLanePostCheck::audit($text), $text);
+        }
+    }
+
     // ---- The harness audit is built from F2's vocabulary (CP-2) ----------
 
     public function test_audit_does_not_flag_the_articles_una_and_uno(): void
