@@ -141,19 +141,21 @@ final class ConvenioSearchTool implements Tool
         // the lane is on and the question passes the explanatory pre-screen.
         // Lane off / prescreen hit / any other verdict → terminal as before.
         // Slice 13c: with the model-knowledge sub-flag on, a synthesis ABSTENTION (status `abstained`) is handed over the same way.
+        // Correction-13c-01: so is an `estatuto_fallback_gap` (expired / under review / no text / not yet embedded) — the account's
+        // state is not a condition; only the question and the corpus not having answered are.
         $handOver = CorpusMiss::handOverKind($outcome, $state->question, $this->guardrails);
         if ($handOver !== null) {
             return new ToolResult(
                 ToolResult::NO_MATERIAL,
                 terminalOutcome: $outcome,
                 traceBlocks: ['floor_decision' => $outcome->trace['floor_decision'], 'retrieval' => $outcome->trace['retrieval'] ?? []] + CorpusMiss::precondition($outcome),
-                plannerSummary: ['status' => $handOver === CorpusMiss::SYNTHESIS_ABSTENTION ? 'abstained' : 'entailment_failed'],
+                plannerSummary: CorpusMiss::plannerSummary($handOver, $outcome),
             );
         }
 
-        // Aggregation guard, estatuto_fallback_gap, or a post-Check-A
-        // low_confidence (Check B / figure-guard / grounding) — every one of
-        // these already spent whatever it was going to spend; terminal.
+        // Aggregation guard, or a post-Check-A low_confidence (Check B / figure-guard / grounding / provider error), or — lane
+        // off / a question the pre-screen blocks — any of the above: every one of these already spent whatever it was going to
+        // spend; terminal. (Correction-13c-01: `estatuto_fallback_gap` is now handed over above for an explanatory question.)
         return new ToolResult(ToolResult::TERMINAL, terminalOutcome: $outcome, plannerSummary: [
             'status' => 'escalate',
             'escalation_reason' => $outcome->escalationReason,

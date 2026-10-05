@@ -99,7 +99,6 @@ class Sprint13cLaneOpeningTest extends TestCase
         return [
             'confident answer with invalid citations (hallucinated chunk ids)' => [['check_c_confidence_tiebreaker' => ['confidence' => 0.9]]],
             'confidence just above the abstention ceiling' => [['check_c_confidence_tiebreaker' => ['confidence' => 0.21]]],
-            'estatuto fallback fired' => [['fallback' => ['fired' => true]]],
             'provider error' => [['note' => 'provider error']],
             'check B passed (a different failure)' => [['check_b_citations' => true, 'note' => 'answer figure not grounded in cited chunk (figure-guard pre-check)']],
             'other escalation reason' => [['escalation_reason' => 'estatuto_fallback_gap']],

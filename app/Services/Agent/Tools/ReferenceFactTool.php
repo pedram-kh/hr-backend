@@ -2,11 +2,14 @@
 
 namespace App\Services\Agent\Tools;
 
+use App\Services\Agent\Rules\CorpusMiss;
 use App\Services\Agent\Tool;
 use App\Services\Agent\ToolResult;
 use App\Services\Agent\TurnState;
 use App\Services\Answer\ReferenceFactPath;
+use App\Services\GuardrailPolicy;
 use App\Services\ReferenceFactRouter;
+use App\Support\EscalationExplainer;
 
 /**
  * Sprint 13, build step 5 (plan.md §B.3.2) — thin wrapper over
@@ -27,6 +30,7 @@ final class ReferenceFactTool implements Tool
     public function __construct(
         private readonly ReferenceFactRouter $referenceFactRouter,
         private readonly ReferenceFactPath $referenceFactPath,
+        private readonly GuardrailPolicy $guardrails,
     ) {}
 
     public function name(): string
@@ -96,6 +100,37 @@ final class ReferenceFactTool implements Tool
                 // an ANSWER reached only because the planner's validated topic found a fact the literal lexicon could not
                 'rescued_answer' => $lexicon === null && $outcome->outcome === 'answer',
             ]);
+        }
+
+        // Correction-13c-01 (ADR-0038 amendment): a coverage GAP (no group, group not approved, no sub-area, no convenio, no
+        // verified data) is the corpus not having answered — an explanatory question is handed back to the planner (status
+        // `no_fact`, which the planner already continues from with `convenio_search`), the escalation stashed so a `finalize` with
+        // nothing else re-surfaces exactly what is escalated today. Lane off / a question the pre-screen blocks / a fact conflict
+        // → terminal, byte for byte as before.
+        // A composition that did not answer (verified fact + governing prose, `low_confidence`) is handed back the same way.
+        if (CorpusMiss::referenceFactMayHandOver($outcome, $state->question, $this->guardrails)) {
+            $isGap = CorpusMiss::referenceFactGapMayHandOver($outcome, $state->question, $this->guardrails);
+
+            return new ToolResult(
+                ToolResult::NO_MATERIAL,
+                terminalOutcome: $outcome,
+                traceBlocks: [
+                    'reference_fact' => $outcome->trace['reference_fact'] ?? [],
+                    'general_lane_precondition' => $isGap
+                        ? [
+                            'kind' => 'reference_fact_gap',
+                            'sub_outcome' => EscalationExplainer::subOutcomeOf(CorpusMiss::REFERENCE_FACT_GAP_REASON, $outcome->trace),
+                            'topic' => $detection['topic_name'],
+                        ]
+                        : [
+                            'kind' => 'reference_fact_composition',
+                            'check_b_citations' => $outcome->trace['floor_decision']['check_b_citations'] ?? null,
+                            'grounded' => $outcome->trace['floor_decision']['grounding']['grounded'] ?? null,
+                            'topic' => $detection['topic_name'],
+                        ],
+                ],
+                plannerSummary: ['status' => 'no_fact'],
+            );
         }
 
         // planner_summary (§C.10): status + topic name only — never the value.

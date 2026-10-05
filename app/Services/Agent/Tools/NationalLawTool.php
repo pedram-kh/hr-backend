@@ -99,7 +99,7 @@ final class NationalLawTool implements Tool
                 ToolResult::NO_MATERIAL,
                 terminalOutcome: $outcome,
                 traceBlocks: ['floor_decision' => $outcome->trace['floor_decision'], 'retrieval' => $outcome->trace['retrieval'] ?? []] + CorpusMiss::precondition($outcome),
-                plannerSummary: ['status' => $handOver === CorpusMiss::SYNTHESIS_ABSTENTION ? 'abstained' : 'entailment_failed'],
+                plannerSummary: CorpusMiss::plannerSummary($handOver, $outcome),
             );
         }
 
