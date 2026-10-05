@@ -115,7 +115,6 @@ class Sprint13GeneralLanePreconditionTest extends TestCase
             'grounding truncated' => [['grounding' => ['ungrounded' => ['<grounding check truncated>'], 'trace_fragment' => ['grounding_truncated' => true]]]],
             'grounding unparseable' => [['grounding' => ['ungrounded' => ['<grounding check unparseable>'], 'trace_fragment' => ['parse_error' => true]]]],
             'grounding provider error' => [['grounding' => ['error' => 'boom']]],
-            'estatuto fallback fired' => [['fallback' => ['fired' => true]]],
             'different escalation reason' => [['escalation_reason' => 'estatuto_fallback_gap']],
         ];
     }

@@ -5,6 +5,7 @@ namespace App\Services\Agent;
 use App\Models\ChatMessage;
 use App\Models\ChatSession;
 use App\Models\Employee;
+use App\Services\Agent\Rules\CorpusMiss;
 use App\Services\Answer\PreModelGuards;
 use App\Services\Answer\ReferenceFactPath;
 use App\Services\Answer\SalaryPath;
@@ -13,6 +14,7 @@ use App\Services\Answer\TurnOutcome;
 use App\Services\Answer\TurnPersister;
 use App\Services\ChatService;
 use App\Services\Decline\DeclineFactsCollector;
+use App\Services\GuardrailPolicy;
 use App\Services\ReferenceFactRouter;
 use App\Services\RouterService;
 use Illuminate\Support\Carbon;
@@ -54,6 +56,7 @@ class AgentChatService
         private readonly ScopeSummaryBuilder $scopeSummaryBuilder,
         private readonly WindowBuilder $windowBuilder,
         private readonly DeclineFactsCollector $declineFacts,
+        private readonly GuardrailPolicy $guardrails,
     ) {}
 
     /** @return array<string,mixed> the response payload — same shape as `ChatService::handleMessage()`. */
@@ -236,6 +239,21 @@ class AgentChatService
             $refDetection = $this->referenceFactRouter->detectTopic($employee, $question, $asOfDate);
             if ($refDetection !== null) {
                 $outcome = $this->referenceFactPath->handle($employee, $question, $refDetection, $asOfDate, $state->trace);
+
+                // Correction-13c-01 (ADR-0038 amendment): a coverage GAP on an explanatory question does not settle the turn —
+                // the corpus has not answered, so the planner continues (`reference_fact` → `convenio_search` → the lane).
+                // Nothing of the gap outcome is written to the turn's trace here; the tool re-runs the (LLM-free) lookup and
+                // stashes it. Lane off / a blocked question / a fact conflict: unchanged, the gap escalation settles below.
+                // Same for a composition that did not answer (verified fact + prose, synthesis abstained / uncited / not entailed).
+                if (CorpusMiss::referenceFactMayHandOver($outcome, $question, $this->guardrails)) {
+                    $state->recordStep(['type' => 'round0', 'seeded' => [], 'deferred' => [
+                        CorpusMiss::referenceFactGapMayHandOver($outcome, $question, $this->guardrails)
+                            ? 'reference_fact_coverage_gap' : 'reference_fact_composition_low_confidence',
+                    ]]);
+
+                    return null;
+                }
+
                 $state->trace = $outcome->trace;
                 $state->recordStep(['type' => 'round0', 'seeded' => ['reference_fact']]);
 

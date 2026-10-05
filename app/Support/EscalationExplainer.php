@@ -185,6 +185,12 @@ final class EscalationExplainer
     // Sub-outcome detection (reason + trace -> the specific rule that fired)
     // -------------------------------------------------------------------------
 
+    /** Public read of the sub-outcome detection (Correction-13c-01: the lane hand-over must tell a coverage absence from a fact conflict). */
+    public static function subOutcomeOf(string $reason, array $trace): string
+    {
+        return self::detectSubOutcome($reason, $trace);
+    }
+
     private static function detectSubOutcome(string $reason, array $trace): string
     {
         return match ($reason) {

@@ -127,13 +127,14 @@ class Sprint13cSynthesisAbstentionTest extends TestCase
         $this->assertNull(CorpusMiss::classify($outcome, false), 'sub-flag off never hands an abstention over');
     }
 
-    public function test_the_abstention_hand_over_still_respects_the_fallback_exclusion_and_the_escalate_requirement(): void
+    public function test_the_abstention_hand_over_ignores_the_fallback_marker_and_still_requires_an_escalate(): void
     {
         $base = ['check_a_retrieval' => true, 'outcome' => 'escalate', 'escalation_reason' => 'low_confidence', 'synthesis_abstained' => ['flag' => true, 'by' => 'model_flag']];
         $mk = fn (array $floor, string $o = 'escalate') => new TurnOutcome($o, '', [], ['floor_decision' => $floor], $o === 'escalate' ? 'low_confidence' : null);
 
         $this->assertSame(CorpusMiss::SYNTHESIS_ABSTENTION, CorpusMiss::classify($mk($base), true));
-        $this->assertNull(CorpusMiss::classify($mk($base + ['fallback' => ['x' => 1]]), true));
+        // Correction-13c-01: the account's Estatuto-fallback marker no longer excludes an abstention (ADR-0038 amendment).
+        $this->assertSame(CorpusMiss::SYNTHESIS_ABSTENTION, CorpusMiss::classify($mk($base + ['fallback' => 'estatuto_gap']), true));
         $this->assertNull(CorpusMiss::classify($mk(['synthesis_abstained' => ['flag' => false]] + $base), true));
         $this->assertNull(CorpusMiss::classify($mk($base, 'answer'), true));
     }

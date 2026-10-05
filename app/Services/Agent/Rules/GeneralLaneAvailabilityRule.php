@@ -68,7 +68,8 @@ final class GeneralLaneAvailabilityRule implements Rule
         // pre-screen; a hit there is a DENY (the corpus escalation stands), not
         // the `general_lane_blocked` force below, which is reserved for the
         // original (a) path.
-        if (($miss === CorpusMiss::ENTAILMENT_ONLY || $miss === CorpusMiss::SYNTHESIS_ABSTENTION) && GeneralLanePostCheck::questionBlocked($state->question, $modelKnowledge)) {
+        // (Correction-13c-01: `fallback_gap` is a (b)-kind too — handed over only for explanatory questions.)
+        if ($miss !== CorpusMiss::CHECK_A_MISS && GeneralLanePostCheck::questionBlocked($state->question, $modelKnowledge)) {
             return Verdict::deny('la pregunta pide una cantidad o un derecho concreto; no aplica información general', $this->id());
         }
 
@@ -100,7 +101,7 @@ final class GeneralLaneAvailabilityRule implements Rule
     }
 
     /**
-     * `CorpusMiss::CHECK_A_MISS` | `CorpusMiss::ENTAILMENT_ONLY` | (sub-flag on) `CorpusMiss::SYNTHESIS_ABSTENTION` | null.
+     * `CorpusMiss::CHECK_A_MISS` | `CorpusMiss::ENTAILMENT_ONLY` | `CorpusMiss::FALLBACK_GAP` | (sub-flag on) `CorpusMiss::SYNTHESIS_ABSTENTION` | null.
      * A NO_MATERIAL carrying a stashed outcome is RE-classified here (the
      * tools decided once; the rule does not trust the label) — a stashed
      * outcome that is neither shape denies. A NO_MATERIAL with no stashed
