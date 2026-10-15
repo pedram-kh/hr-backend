@@ -16,6 +16,7 @@ class Document extends Model
         'retrieval_status', 'authority_level', 'predecessor_document_id',
         'derived_from_document_id',
         'language', 'tagging_status', 'tagging_confidence',
+        'embed_state', 'embed_error_code', 'embed_state_at',
         'ingested_at', 'ingested_by',
     ];
 
@@ -23,6 +24,7 @@ class Document extends Model
         'validity_start' => 'date',
         'validity_end' => 'date',
         'tagging_confidence' => 'float',
+        'embed_state_at' => 'datetime',
         'ingested_at' => 'datetime',
     ];
 

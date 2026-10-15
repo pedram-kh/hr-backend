@@ -13,6 +13,8 @@ use App\Models\EscalationResolution;
 use App\Models\TagEvent;
 use App\Models\Topic;
 use App\Services\DocumentIngestor;
+use App\Services\EmbedQueue;
+use App\Support\EmbedEligibility;
 use App\Support\KnowledgeMap;
 use App\Support\VocabularyResolver;
 use Illuminate\Http\JsonResponse;
@@ -99,6 +101,8 @@ class DocumentController extends Controller
             ->orderBy('id')
             ->get(['facet', 'old_value', 'new_value', 'source', 'actor_id', 'confidence', 'note', 'created_at']);
 
+        $chunkHealth = KnowledgeMap::chunkHealth($document->id);
+
         return response()->json([
             'uuid' => $document->uuid,
             'title' => $document->title,
@@ -128,7 +132,11 @@ class DocumentController extends Controller
                 'predecessor' => $document->predecessor ? $this->lineageRef($document->predecessor) : null,
                 'successors' => $document->successors->map(fn ($d) => $this->lineageRef($d))->values(),
             ],
-            'chunk_health' => KnowledgeMap::chunkHealth($document->id),
+            'chunk_health' => $chunkHealth,
+            // Slice 12c. Computed from the embed columns plus the live chunk
+            // count. A pending row older than 20 minutes reads as not_finished
+            // without a write. No embed row but chunks > 0 reads as searchable.
+            'embed' => $this->embedPayload($document, $chunkHealth['chunk_count']),
             // Scope-rides-on-convenio limitation (data-model): a non-national doc
             // with no convenio cannot carry scope — flagged, never silently mis-scoped.
             'is_unscoped' => $document->convenio_id === null && $document->authority_level !== 'national_law',
@@ -293,35 +301,50 @@ class DocumentController extends Controller
         return response()->json(['results' => $results]);
     }
 
-    /** Confirm tags: set verified, write provenance, resolve open review tasks. */
-    public function confirm(Request $request, string $uuid): JsonResponse
+    /**
+     * Confirm tags: set verified, write provenance, resolve open review tasks.
+     * A retry on an already-verified document only queues the embed. It does
+     * not write another "tags confirmed" row and does not touch review tasks.
+     */
+    public function confirm(Request $request, string $uuid, EmbedQueue $embeds): JsonResponse
     {
         $document = Document::where('uuid', $uuid)->firstOrFail();
         $adminId = $request->user()->id;
+        $alreadyVerified = $document->tagging_status === 'verified';
 
-        DB::transaction(function () use ($document, $adminId) {
-            $document->update(['tagging_status' => 'verified']);
+        if (! $alreadyVerified) {
+            DB::transaction(function () use ($document, $adminId) {
+                $document->update(['tagging_status' => 'verified']);
 
-            TagEvent::create([
-                'entity_type' => 'document',
-                'entity_id' => $document->id,
-                'facet' => 'document',
-                'old_value' => null,
-                'new_value' => 'verified',
-                'source' => 'admin_manual',
-                'actor_id' => $adminId,
-                'confidence' => null,
-                'note' => 'tags confirmed',
-            ]);
+                TagEvent::create([
+                    'entity_type' => 'document',
+                    'entity_id' => $document->id,
+                    'facet' => 'document',
+                    'old_value' => null,
+                    'new_value' => 'verified',
+                    'source' => 'admin_manual',
+                    'actor_id' => $adminId,
+                    'confidence' => null,
+                    'note' => 'tags confirmed',
+                ]);
 
-            $document->reviewTasks()->where('status', 'open')->update([
-                'status' => 'resolved',
-                'resolved_by' => $adminId,
-                'resolved_at' => now(),
-            ]);
-        });
+                $document->reviewTasks()->where('status', 'open')->update([
+                    'status' => 'resolved',
+                    'resolved_by' => $adminId,
+                    'resolved_at' => now(),
+                ]);
+            });
 
-        return response()->json(['status' => 'ok', 'tagging_status' => 'verified']);
+            $document->refresh();
+        }
+
+        $queued = $embeds->queueIfEligible($document);
+
+        return response()->json([
+            'status' => 'ok',
+            'tagging_status' => $document->tagging_status,
+            'embed_queued' => $queued,
+        ]);
     }
 
     /**
@@ -451,7 +474,7 @@ class DocumentController extends Controller
      * validity edit — both move the eligibility window) requires
      * `confirm_scope_change=true`, else 409.
      */
-    public function updateLifecycle(Request $request, string $uuid): JsonResponse
+    public function updateLifecycle(Request $request, string $uuid, EmbedEligibility $eligibility, EmbedQueue $embeds): JsonResponse
     {
         $data = $request->validate([
             'validity_start' => ['sometimes', 'nullable', 'date'],
@@ -463,6 +486,7 @@ class DocumentController extends Controller
 
         $document = Document::where('uuid', $uuid)->firstOrFail();
         $adminId = $request->user()->id;
+        $wasEligible = $eligibility->eligible($document);
 
         // Determine the changed fields (only those actually present and different).
         $changes = []; // facet => [old, new, column]
@@ -537,7 +561,39 @@ class DocumentController extends Controller
             RecheckRulingsForConvenio::dispatch($document->id);
         }
 
-        return response()->json(['status' => 'ok']);
+        // Slice 12c D2. A flip that makes an already-verified prose document
+        // eligible (historical or draft → active, or tagging → verified on an
+        // active prose doc) queues the same single-document embed. An edit
+        // that leaves eligibility unchanged does not.
+        $document->refresh();
+        $queued = ! $wasEligible && $embeds->queueIfEligible($document);
+
+        return response()->json(['status' => 'ok', 'embed_queued' => $queued]);
+    }
+
+    /**
+     * @return array{state: ?string, chunk_count: int, error_code: ?string}
+     */
+    private function embedPayload(Document $document, int $chunkCount): array
+    {
+        $state = $document->embed_state;
+        $error = $document->embed_error_code;
+
+        if ($state === 'pending' && $document->embed_state_at !== null
+            && $document->embed_state_at->lte(now()->subMinutes(20))) {
+            $state = 'failed';
+            $error = 'not_finished';
+        }
+
+        if ($state === null && $chunkCount > 0) {
+            $state = 'searchable';
+        }
+
+        return [
+            'state' => $state,
+            'chunk_count' => $chunkCount,
+            'error_code' => $state === 'failed' ? $error : null,
+        ];
     }
 
     /**
