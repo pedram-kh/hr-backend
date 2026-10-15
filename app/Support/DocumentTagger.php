@@ -19,6 +19,15 @@ use Illuminate\Support\Carbon;
  */
 class DocumentTagger
 {
+    /**
+     * Slice 12c option B. Parsed sector names that are abbreviations of a
+     * registry sector. Rule 3 is skipped for these when the convenio was
+     * matched by numero. Any other disagreeing sector still conflicts.
+     *
+     * @var list<string>
+     */
+    public const SECTOR_CONFLICT_ALIASES = ['COEAS', 'DEPORTE', 'HOSTELERIA'];
+
     public function __construct(private VocabularyResolver $vocab) {}
 
     /**
@@ -89,7 +98,12 @@ class DocumentTagger
         }
 
         // Rule 3 — sector disagreement: a resolved parsed sector contradicts the registry's.
-        if ($parsedSector !== null && $convenio !== null && $parsedSector->id !== $convenio->sector_id) {
+        // Slice 12c option B: a reviewed abbreviation (COEAS, DEPORTE, HOSTELERIA)
+        // is not a conflict when the convenio was already matched by numero.
+        // The convenio lookup above is numero-only, so `$convenio !== null` is
+        // that match. Any other disagreeing sector still blocks.
+        if ($parsedSector !== null && $convenio !== null && $parsedSector->id !== $convenio->sector_id
+            && ! $this->isReviewedSectorAlias($parsedSector->name, $sectorPhrase)) {
             $conflictFacets[] = ['facet' => 'sector', 'note' => "parsed sector {$parsedSector->name} disagrees with registry"];
         }
 
@@ -178,5 +192,17 @@ class DocumentTagger
             'facets' => $facets,
             'review' => $review,
         ];
+    }
+
+    private function isReviewedSectorAlias(string $sectorName, string $sectorPhrase): bool
+    {
+        $keys = [TextNormalizer::key($sectorName), TextNormalizer::key($sectorPhrase)];
+        foreach (self::SECTOR_CONFLICT_ALIASES as $alias) {
+            if (in_array(TextNormalizer::key($alias), $keys, true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

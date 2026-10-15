@@ -3,7 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\Document;
-use App\Services\ExtractionClient;
+use App\Services\DocumentEmbedder;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 
@@ -33,7 +33,7 @@ class ChunksEmbed extends Command
     // be active + tagging_status ≠ under_review to be selected.
     private const IN_SCOPE_TYPES = ['convenio_text', 'national_law', 'partial_agreement', 'internal_hr_ruling'];
 
-    public function handle(ExtractionClient $client): int
+    public function handle(DocumentEmbedder $embedder): int
     {
         $query = Document::query()
             ->with(['documentType', 'convenio'])
@@ -60,9 +60,13 @@ class ChunksEmbed extends Command
         $failed = 0;
         $suspicious = [];
         foreach ($documents as $d) {
-            $scope = $this->resolveScope($d);
             try {
-                $result = $client->embed($d->id, $d->uuid, $d->storage_path, $scope);
+                $result = $embedder->embed($d);
+                if ($result === null) {
+                    $this->line("  [{$d->id}] {$d->source_filename}: skipped (under review)");
+
+                    continue;
+                }
                 $written = (int) ($result['chunks_written'] ?? 0);
                 $totalChunks += $written;
                 $streams = $result['language_streams'] ?? ['es' => 0, 'eu' => 0];
@@ -132,25 +136,5 @@ class ChunksEmbed extends Command
         }
 
         return null;
-    }
-
-    /**
-     * Resolve the denormalized scope for a document (ADR-0007). Territory/sector
-     * ride the convenio (Sprint-1 decision); national-law docs are universal
-     * (convenio/territory/sector NULL, authority_level = national_law).
-     *
-     * @return array<string,mixed>
-     */
-    private function resolveScope(Document $d): array
-    {
-        return [
-            'convenio_id' => $d->convenio_id,
-            'territory_id' => $d->convenio?->territory_id,
-            'sector_id' => $d->convenio?->sector_id,
-            'validity_start' => $d->validity_start?->toDateString(),
-            'validity_end' => $d->validity_end?->toDateString(),
-            'retrieval_status' => $d->retrieval_status,
-            'authority_level' => $d->authority_level,
-        ];
     }
 }
